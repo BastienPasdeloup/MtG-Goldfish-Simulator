@@ -59,7 +59,14 @@ class Card:
 
     @property
     def enters_tapped(self) -> bool:
-        return "enters the battlefield tapped" in self.data.oracle_text.lower()
+        text = self.data.oracle_text.lower()
+        if "enters tapped" not in text and "enters the battlefield tapped" not in text:
+            return False
+        # Shock/pain/fast lands can choose to enter untapped — assume they do
+        # (optimistic for mana-availability analysis).
+        if any(k in text for k in ("unless", "you may pay", "pay 2 life", "pay 3 life")):
+            return False
+        return True
 
     # ---- behaviour hooks (override as needed) ------------------------------
     def mana_abilities(self, state: "GameState") -> list[ManaAbility]:

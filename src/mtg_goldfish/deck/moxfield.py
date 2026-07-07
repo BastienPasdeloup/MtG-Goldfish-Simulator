@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from .models import CardData, Deck, DeckBoard, DeckEntry
-from .scryfall import ScryfallClient
+from .scryfall import ScryfallClient, ScryfallError
 
 _MOXFIELD_API = "https://api2.moxfield.com/v3/decks/all/{public_id}"
 _BROWSER_UA = (
@@ -103,7 +103,16 @@ def import_moxfield_deck(
     unique_names = sorted({n for _, n, _ in board_cards})
     card_index: dict[str, CardData] = scryfall.get_collection(unique_names)
 
+    # The bulk endpoint can't resolve some names (notably "Front // Back"
+    # double-faced cards); retry those one at a time via the named endpoint.
     warnings: list[str] = []
+    for name in unique_names:
+        if name not in card_index:
+            try:
+                card_index[name] = scryfall.get_named(name)
+            except ScryfallError:
+                pass
+
     entries: list[DeckEntry] = []
     for board, card_name, qty in board_cards:
         card = card_index.get(card_name)

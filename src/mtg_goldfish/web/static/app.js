@@ -40,10 +40,7 @@ async function init() {
   const fs = $("format-select");
   fs.replaceChildren(...state.meta.formats.map((f) => el("option", { value: f.id, textContent: f.name })));
 
-  $("api-doc").textContent = state.meta.property_api_doc;
-
   $("home-btn").onclick = showHome;
-  $("preview-btn").onclick = doPreview;
   $("create-btn").onclick = doCreate;
   $("add-prop").onclick = () => { addProperty(); renderProps(); };
   $("save-props").onclick = saveProps;
@@ -87,24 +84,6 @@ function homeStatus(msg, isErr) {
   s.className = isErr ? "err" : "muted";
 }
 
-async function doPreview() {
-  const body = JSON.stringify({ url: $("deck-url").value, name: $("deck-name").value, format_id: $("format-select").value });
-  homeStatus("Importing…");
-  try {
-    const r = await api("/api/deck/preview", { method: "POST", body });
-    homeStatus(`Imported: ${r.deck.total_cards} cards. Commanders: ${r.deck.commanders.join(", ") || "none"}.`);
-    $("preview-warnings").textContent = (r.warnings || []).join("  •  ");
-    $("preview-problems").textContent = (r.problems || []).join("  •  ");
-    $("preview-cards").replaceChildren(renderCardSummary(r.cards));
-  } catch (e) { homeStatus(e.message, true); }
-}
-
-function renderCardSummary(cards) {
-  const impl = cards.filter((c) => c.implemented).length;
-  return el("div", { className: "muted", style: "margin-top:.5rem;font-size:12px" },
-    `${cards.length} distinct cards · ${impl} implemented, ${cards.length - impl} unimplemented (shown in red).`);
-}
-
 async function doCreate() {
   const body = JSON.stringify({ url: $("deck-url").value, name: $("deck-name").value, format_id: $("format-select").value });
   homeStatus("Creating session…");
@@ -140,28 +119,54 @@ function enterSession(payload) {
 }
 
 // ---- decklist
-const BOARD_ORDER = { commander: 0, companion: 1, mainboard: 2, sideboard: 3 };
+const GROUP_ORDER = ["Commander", "Companion", "Creature", "Planeswalker", "Battle",
+  "Instant", "Sorcery", "Artifact", "Enchantment", "Land", "Other", "Sideboard"];
+
+function primaryType(typeLine) {
+  const t = (typeLine || "").toLowerCase();
+  if (t.includes("creature")) return "Creature";
+  if (t.includes("planeswalker")) return "Planeswalker";
+  if (t.includes("battle")) return "Battle";
+  if (t.includes("instant")) return "Instant";
+  if (t.includes("sorcery")) return "Sorcery";
+  if (t.includes("artifact")) return "Artifact";
+  if (t.includes("enchantment")) return "Enchantment";
+  if (t.includes("land")) return "Land";
+  return "Other";
+}
+
+function groupLabel(c) {
+  if (c.board === "commander") return "Commander";
+  if (c.board === "companion") return "Companion";
+  if (c.board === "sideboard") return "Sideboard";
+  return primaryType(c.type_line); // mainboard grouped by type
+}
+
 function renderDeck() {
   const sort = $("sort-select").value;
-  const cards = [...state.cards];
   const cmp = {
     name: (a, b) => a.name.localeCompare(b.name),
     cmc: (a, b) => a.cmc - b.cmc || a.name.localeCompare(b.name),
-    type: (a, b) => (a.type_line || "").localeCompare(b.type_line || "") || a.name.localeCompare(b.name),
     color: (a, b) => (a.colors.join("") || "Z").localeCompare(b.colors.join("") || "Z") || a.name.localeCompare(b.name),
   }[sort];
 
   const groups = {};
-  for (const c of cards) (groups[c.board] ||= []).push(c);
+  for (const c of state.cards) (groups[groupLabel(c)] ||= []).push(c);
+
   const container = $("deck-cards");
   container.replaceChildren();
   const total = state.cards.reduce((n, c) => n + c.quantity, 0);
   const impl = state.cards.filter((c) => c.implemented).length;
   $("deck-summary").textContent = `${total} cards · ${impl}/${state.cards.length} distinct implemented`;
 
-  Object.keys(groups).sort((a, b) => (BOARD_ORDER[a] ?? 9) - (BOARD_ORDER[b] ?? 9)).forEach((board) => {
-    container.append(el("div", { className: "card-group-title", textContent: board }));
-    groups[board].sort(cmp).forEach((c) => container.append(cardRow(c)));
+  const order = Object.keys(groups).sort((a, b) => {
+    const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+  order.forEach((label) => {
+    const n = groups[label].reduce((s, c) => s + c.quantity, 0);
+    container.append(el("div", { className: "card-group-title", textContent: `${label} (${n})` }));
+    groups[label].sort(cmp).forEach((c) => container.append(cardRow(c)));
   });
 }
 

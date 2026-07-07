@@ -6,7 +6,6 @@ name so repeated deck imports (and hover-image lookups) hit the network once.
 """
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -111,8 +110,13 @@ class ScryfallClient:
             return cached
         with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=20) as client:
             resp = client.get(f"{SCRYFALL_API}/cards/named", params={"exact": name})
-            if resp.status_code == 404:
+            if resp.status_code != 200:
                 resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": name})
+            if resp.status_code != 200 and "//" in name:
+                # Double-faced cards: exact/fuzzy on the full "Front // Back"
+                # name often fails; the front face resolves.
+                front = name.split("//")[0].strip()
+                resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": front})
             if resp.status_code != 200:
                 raise ScryfallError(f"Scryfall lookup failed for {name!r}: {resp.status_code}")
             card = card_data_from_scryfall(resp.json())

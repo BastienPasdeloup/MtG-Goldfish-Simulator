@@ -56,8 +56,12 @@ Implemented and exercised:
 - Exhaustive line-of-play + mulligan search with property checking, timeouts,
   live stats over WebSocket, session/result persistence.
 - English→code property compilation (Anthropic when keyed; a regex stub offline).
-- Example cards: 5 basics, Sol Ring, Arcane Signet, Command Tower, Llanowar
-  Elves, Lightning Bolt.
+- Card implementations: the 5 basics + staples, plus every card of the sample
+  cEDH deck (generated from Scryfall data). Lands/rocks get real mana abilities;
+  fetchlands are approximated as tapping for the colours of the land types they
+  fetch; the rest are best-effort vanilla (they cast/enter and count toward
+  board/spell tallies). `enters_tapped` distinguishes true tap-lands from
+  shock/fast/pain lands (assumed to enter untapped).
 
 Deliberately approximate / not yet modelled (extension points, not blockers):
 - **Unimplemented cards play as vanilla**: permanents enter and count toward

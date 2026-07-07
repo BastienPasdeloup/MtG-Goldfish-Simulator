@@ -36,13 +36,9 @@
           </div>
         </div>
         <div class="row" style="margin-top:.6rem">
-          <button id="preview-btn">Preview</button>
           <button id="create-btn" class="primary">Create session</button>
           <span id="home-status" class="muted"></span>
         </div>
-        <div id="preview-warnings" class="warnings"></div>
-        <div id="preview-problems" class="problems"></div>
-        <div id="preview-cards"></div>
       </div>
 
       <div class="card-box">
@@ -74,7 +70,6 @@
               <label>Sort</label>
               <select id="sort-select">
                 <option value="name">Name</option>
-                <option value="type">Type</option>
                 <option value="cmc">CMC</option>
                 <option value="color">Color</option>
               </select>
@@ -94,16 +89,10 @@
             </div>
             <div id="prop-list"></div>
             <div class="row" style="margin-top:.5rem">
-              <label>Mulligans (Y)</label>
-              <input id="mulligans" type="number" min="0" max="7" value="0" style="width:4rem" />
               <span class="spacer"></span>
               <button id="save-props">Save</button>
               <button id="compile-props" class="primary">Compile → review code</button>
             </div>
-            <details style="margin-top:.6rem">
-              <summary class="muted">Available <code>state</code> API</summary>
-              <pre id="api-doc" class="prop" style="white-space:pre-wrap"></pre>
-            </details>
           </div>
 
           <div class="card-box">
@@ -111,6 +100,7 @@
             <div class="row">
               <div><label>Games (X)</label><br /><input id="num-games" type="number" value="100" style="width:6rem" /></div>
               <div><label>Timeout / game (s)</label><br /><input id="timeout" type="number" value="5" step="0.5" style="width:6rem" /></div>
+              <div><label>Mulligans (Y)</label><br /><input id="mulligans" type="number" min="0" max="7" value="0" style="width:5rem" /></div>
               <span class="spacer"></span>
               <button id="run-btn" class="primary">Run</button>
               <button id="stop-btn" class="danger" disabled>Stop</button>
