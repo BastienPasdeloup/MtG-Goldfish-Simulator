@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# uv / venv
+.venv/
+uv.lock.bak
+
+# Environment
+.env
+
+# Application data (saved sessions, simulation results, scryfall cache)
+data/
+!data/.gitkeep
+
+# OS
+.DS_Store

@@ -1,0 +1,14 @@
+"""Swamp — basic land, taps for {B}."""
+from __future__ import annotations
+
+from ..engine.mana import ManaAbility
+from .base import Card
+from .registry import register
+
+
+@register
+class Swamp(Card):
+    card_name = "Swamp"
+
+    def mana_abilities(self, state) -> list[ManaAbility]:
+        return [ManaAbility(amount=1, choices=("B",))]
