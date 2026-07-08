@@ -1,15 +1,4 @@
-"""Temple Garden — Land — Forest Plains. Taps for {W/G}.
-"""
-from __future__ import annotations
+"""Temple Garden — shockland: pay 2 life to enter untapped, else tapped (branch)."""
+from ._common import shock_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class TempleGarden(Card):
-    card_name = 'Temple Garden'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'G'))]
+shock_land('Temple Garden', ('G', 'W'))

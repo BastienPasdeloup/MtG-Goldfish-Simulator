@@ -1,16 +1,20 @@
 """Player actions and the mana-payment planner.
 
 The simulator asks `legal_actions(state)` for every branch to explore in a main
-phase, clones the state, and calls `action.apply(clone)`. Mana is *not* a branch
-point: tapping lands for mana is solved deterministically by `plan_payment`,
-which keeps the decision tree focused on genuinely meaningful choices (which
-spell/land to play, and in what order).
+phase, clones the state, and calls `action.apply(clone)`. `apply` mutates in
+place, or returns a list of branch states for in-resolution choices.
+
+Mana is *not* a branch point: tapping sources for mana is solved
+deterministically by `plan_payment`, which keeps the decision tree focused on
+genuinely meaningful choices (which spell/land to play, targets, modes).
+Card-specific choices are enumerated by the card implementations themselves via
+`CardAction` (see `cards.base`).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .game_state import GameState, Permanent, make_permanent
+from .game_state import GameState, Permanent
 from .mana import ManaAbility, ManaCost, ManaPool
 
 
@@ -18,19 +22,18 @@ from .mana import ManaAbility, ManaCost, ManaPool
 # Mana
 # --------------------------------------------------------------------------
 def available_mana_sources(state: GameState) -> list[tuple[Permanent, ManaAbility]]:
-    """Untapped permanents that can currently produce mana.
-
-    Creatures with summoning sickness cannot tap for mana (unless they have
-    haste, which the slice does not yet model)."""
+    """(permanent, ability) pairs currently usable. A permanent may contribute
+    several entries (alternative abilities); the planner uses at most one."""
     sources: list[tuple[Permanent, ManaAbility]] = []
     for perm in state.battlefield:
         if perm.tapped:
             continue
-        if perm.card.is_creature and perm.summoning_sick:
+        if perm.is_creature_now and perm.summoning_sick and not state.has_keyword(perm, "Haste"):
             continue
-        abilities = perm.impl.mana_abilities(state)
-        if abilities:
-            sources.append((perm, abilities[0]))
+        for ability in perm.impl.mana_abilities_perm(state, perm):
+            if ability.life_cost and state.life <= ability.life_cost:
+                continue
+            sources.append((perm, ability))
     return sources
 
 
@@ -42,40 +45,41 @@ def plan_payment(
     """Decide which sources to tap (and for which colour) to pay `cost`.
 
     Returns a list of (source_index, colour) or None if unaffordable. Greedy:
-    cover coloured pips with the least-flexible sources first, then top up
-    generic with whatever is left (colourless first).
-    """
+    cover coloured pips with the least-flexible, lowest-life-cost sources
+    first, then top up generic. At most one ability per permanent."""
     pool = base_pool.copy()
-    used = [False] * len(sources)
+    used_perms: set[int] = set()
     plan: list[tuple[int, str]] = []
+
+    def candidates(pred) -> list[int]:
+        return [
+            i for i, (perm, ab) in enumerate(sources)
+            if perm.uid not in used_perms and pred(ab)
+        ]
 
     for color, need in cost.pip_map.items():
         while pool.amounts.get(color, 0) < need:
-            candidates = [
-                i
-                for i, (_, ab) in enumerate(sources)
-                if not used[i] and color in ab.choices
-            ]
-            if not candidates:
+            cands = candidates(lambda ab: color in ab.choices)
+            if not cands:
                 return None
-            candidates.sort(key=lambda i: len(sources[i][1].choices))
-            i = candidates[0]
-            used[i] = True
+            cands.sort(key=lambda i: (sources[i][1].life_cost, len(sources[i][1].choices)))
+            i = cands[0]
+            used_perms.add(sources[i][0].uid)
             pool.add(color, sources[i][1].amount)
             plan.append((i, color))
 
     while not pool.can_pay(cost):
-        candidates = [i for i in range(len(sources)) if not used[i]]
-        if not candidates:
+        cands = candidates(lambda ab: True)
+        if not cands:
             return None
 
-        def generic_key(i: int) -> tuple[int, int]:
-            choices = sources[i][1].choices
-            return (0 if choices == ("C",) else 1, len(choices))
+        def generic_key(i: int) -> tuple[int, int, int]:
+            ab = sources[i][1]
+            return (ab.life_cost, 0 if ab.choices == ("C",) else 1, len(ab.choices))
 
-        candidates.sort(key=generic_key)
-        i = candidates[0]
-        used[i] = True
+        cands.sort(key=generic_key)
+        i = cands[0]
+        used_perms.add(sources[i][0].uid)
         ability = sources[i][1]
         color = "C" if "C" in ability.choices else ability.choices[0]
         pool.add(color, ability.amount)
@@ -84,32 +88,102 @@ def plan_payment(
     return plan
 
 
-def _pay(state: GameState, cost: ManaCost) -> bool:
-    """Tap sources and spend `cost` from the pool. Returns False if unaffordable."""
+def _pool_str(pool: ManaPool) -> str:
+    parts = [f"{n}{c}" for c, n in pool.amounts.items() if n]
+    return "{" + " ".join(parts) + "}" if parts else "{empty}"
+
+
+def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0) -> bool:
+    """Tap sources and spend `cost` (plus optional life). False if unaffordable."""
+    if extra_life and state.life <= extra_life:
+        return False
     sources = available_mana_sources(state)
     plan = plan_payment(cost, sources, state.mana_pool)
     if plan is None:
         return False
+    taps: list[str] = []
     for idx, color in plan:
-        perm, _ = sources[idx]
+        perm, ability = sources[idx]
         perm.tapped = True
-        state.mana_pool.add(color, sources[idx][1].amount)
-    return state.mana_pool.pay(cost)
+        state.mana_pool.add(color, ability.amount)
+        if ability.life_cost:
+            state.life -= ability.life_cost
+        perm.impl.on_tap_for_mana(state, perm, color)  # e.g. pain-land damage
+        taps.append(f"{perm.name}→{color}")
+    if taps:
+        state.emit(f"tap for mana: {', '.join(taps)}  pool={_pool_str(state.mana_pool)}")
+    ok = state.mana_pool.pay(cost)
+    if extra_life:
+        state.life -= extra_life
+    return ok
 
 
-def can_afford(state: GameState, cost: ManaCost) -> bool:
+def can_afford(state: GameState, cost: ManaCost, extra_life: int = 0) -> bool:
+    if extra_life and state.life <= extra_life:
+        return False
     return plan_payment(cost, available_mana_sources(state), state.mana_pool) is not None
 
 
 # --------------------------------------------------------------------------
-# Actions
+# Casting helpers (used by generic actions AND by card implementations)
+# --------------------------------------------------------------------------
+def begin_cast(
+    state: GameState, card, cost: ManaCost, *,
+    zone: list | None = None, extra_life: int = 0, tag: str = "",
+) -> bool:
+    """Pay the cost, move the card from `zone` (default: hand) to the stack,
+    bump the cast counters, and fire cast triggers. Returns False if unpaid."""
+    zone = state.hand if zone is None else zone
+    if not pay_cost(state, cost, extra_life=extra_life):
+        return False
+    zone.remove(card)
+    state.stack.append(card)
+    state.spells_cast_this_turn += 1
+    state.storm_count += 1
+    if card.is_creature:
+        state.creature_spells_cast_this_turn += 1
+    else:
+        state.noncreature_spells_cast_this_turn += 1
+    state.emit(f"cast {card.name}{f' ({tag})' if tag else ''} (on the stack)")
+    for perm in list(state.battlefield):
+        perm.impl.on_cast_other(state, perm, card)
+    return True
+
+
+def resolve_to_battlefield(
+    state: GameState, card, *, is_commander: bool = False, marks: dict | None = None,
+):
+    """Move a spell from the stack onto the battlefield. Returns the ETB
+    branches (list of states) or None. `marks` pre-sets counters on the
+    permanent before ETB triggers fire (e.g. {'escaped': 1})."""
+    if card in state.stack:
+        state.stack.remove(card)
+    perm = state.put_on_battlefield(card, is_commander=is_commander, fire_etb=False)
+    if marks:
+        perm.counters.update(marks)
+    state.emit(f"{card.name} resolves — enters the battlefield")
+    branches = perm.impl.on_etb(state, perm)
+    state.check_deaths()
+    return branches
+
+
+def resolve_to_graveyard(state: GameState, card) -> None:
+    if card in state.stack:
+        state.stack.remove(card)
+    state.to_graveyard(card)
+    state.emit(f"{card.name} resolves")
+
+
+# --------------------------------------------------------------------------
+# Generic actions
 # --------------------------------------------------------------------------
 class Action:
-    """A single legal decision. `apply` mutates the (already cloned) state."""
+    """A single legal decision. `apply` mutates the (already cloned) state in
+    place, or returns a list of branch states."""
 
     label: str = "action"
 
-    def apply(self, state: GameState) -> None:  # pragma: no cover - interface
+    def apply(self, state: GameState):  # pragma: no cover - interface
         raise NotImplementedError
 
 
@@ -121,125 +195,259 @@ class PassPhase(Action):
         state.emit("pass")
 
 
-@dataclass
 class PlayLand(Action):
-    card_name: str
+    def __init__(self, card_name: str, mode: dict | None = None) -> None:
+        self.card_name = card_name
+        self.mode = mode
+        suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
+        self.label = f"play land {card_name}{suffix}"
 
-    @property
-    def label(self) -> str:
-        return f"play land {self.card_name}"
-
-    def apply(self, state: GameState) -> None:
-        card = _pop_from_hand(state, self.card_name)
-        perm = make_permanent(state, card)
-        state.battlefield.append(perm)
+    def apply(self, state: GameState):
+        card = _find_in_zone(state.hand, self.card_name)
+        state.hand.remove(card)
         state.lands_played_this_turn += 1
-        perm.impl.on_etb(state, perm)
-        state.emit(f"play land {card.name}")
+        perm = state.put_on_battlefield(card, fire_etb=False)
+        _apply_etb_mode(state, perm, self.mode)
+        state.emit(self.label)
+        branches = perm.impl.on_etb(state, perm)
+        state.check_deaths()
+        return branches
 
 
-def _resolve_spell(state: GameState, card, perm_is_commander: bool = False) -> None:
-    state.spells_cast_this_turn += 1
-    state.storm_count += 1
-    if card.is_creature:
-        state.creature_spells_cast_this_turn += 1
-    else:
-        state.noncreature_spells_cast_this_turn += 1
-
-    if card.is_permanent:
-        perm = make_permanent(state, card, is_commander=perm_is_commander)
-        state.battlefield.append(perm)
-        perm.impl.on_etb(state, perm)
-    else:
-        perm = make_permanent(state, card)  # for its impl only
-        perm.impl.on_resolve(state)
-        state.graveyard.append(card)
+def _apply_etb_mode(state: GameState, perm, mode: dict | None) -> None:
+    if mode is None:
+        return
+    if mode.get("life"):
+        state.life -= mode["life"]
+    perm.tapped = bool(mode.get("tapped", perm.tapped))
+    if mode.get("choice") is not None:
+        perm.chosen = mode["choice"]
 
 
-@dataclass
-class CastFromHand(Action):
-    card_name: str
+class CastDefault(Action):
+    """Engine-default cast: pay, stack, resolve (permanent enters / spell to
+    graveyard after `on_resolve`)."""
 
-    @property
-    def label(self) -> str:
-        return f"cast {self.card_name}"
+    def __init__(self, card_name: str) -> None:
+        self.card_name = card_name
+        self.label = f"cast {card_name}"
 
-    def apply(self, state: GameState) -> None:
-        card = _pop_from_hand(state, self.card_name)
-        cost = ManaCost.parse(card.mana_cost)
-        if not _pay(state, cost):
-            # Should not happen: legality is checked before enumeration.
-            state.hand.append(card)
-            return
-        state.emit(f"cast {card.name}")
-        _resolve_spell(state, card)
+    def apply(self, state: GameState):
+        card = _find_in_zone(state.hand, self.card_name)
+        impl = _impl(card)
+        if not begin_cast(state, card, impl.cast_cost(state)):
+            return None
+        if card.is_permanent:
+            return resolve_to_battlefield(state, card) or None
+        # Move to the graveyard first so branch clones made inside on_resolve
+        # already have the spell there.
+        resolve_to_graveyard(state, card)
+        return impl.on_resolve(state) or None
 
 
-@dataclass
 class CastCommander(Action):
-    card_name: str
-
-    @property
-    def label(self) -> str:
-        return f"cast commander {self.card_name}"
+    def __init__(self, card_name: str) -> None:
+        self.card_name = card_name
+        self.label = f"cast commander {card_name}"
 
     def apply(self, state: GameState) -> None:
-        card = _pop_from_zone(state.command_zone, self.card_name)
+        card = _find_in_zone(state.command_zone, self.card_name)
+        impl = _impl(card)
         tax = 2 * state.commander_cast_count.get(card.name, 0)
-        cost = ManaCost.parse(card.mana_cost)
-        cost = ManaCost(generic=cost.generic + tax, pips=cost.pips)
-        if not _pay(state, cost):
-            state.command_zone.append(card)
+        base = impl.cast_cost(state)
+        cost = ManaCost(generic=base.generic + tax, pips=base.pips)
+        if not begin_cast(state, card, cost, zone=state.command_zone,
+                          tag=f"commander, tax {tax}"):
             return
         state.commander_cast_count[card.name] = state.commander_cast_count.get(card.name, 0) + 1
-        state.emit(f"cast commander {card.name} (tax {tax})")
-        _resolve_spell(state, card, perm_is_commander=True)
+        resolve_to_battlefield(state, card, is_commander=True)
 
 
 # --------------------------------------------------------------------------
-# Legal-action enumeration
+# Legal-action enumeration (main phases)
 # --------------------------------------------------------------------------
 def legal_actions(state: GameState) -> list[Action]:
-    """All meaningful actions in the current (main) phase, plus passing.
-
-    Choices are de-duplicated by card name so that holding two copies of a card
-    (or many basics) does not multiply the branching factor."""
+    """All meaningful actions in the current main phase, plus passing.
+    Choices are de-duplicated by card name so duplicates don't multiply the
+    branching factor."""
     actions: list[Action] = []
-    seen_hand: set[str] = set()
+    seen: set[str] = set()
 
-    for card in state.hand:
-        if card.name in seen_hand:
+    # --- from hand ---
+    for card in list(state.hand):
+        if card.name in seen:
             continue
-        seen_hand.add(card.name)
-        if card.is_land and state.lands_played_this_turn < 1:
-            actions.append(PlayLand(card.name))
-        elif not card.is_land and can_afford(state, ManaCost.parse(card.mana_cost)):
-            actions.append(CastFromHand(card.name))
+        seen.add(card.name)
+        impl = _impl(card)
 
+        if impl.is_land and state.lands_played_this_turn < 1:
+            modes = impl.etb_modes(state)
+            if modes:
+                actions.extend(PlayLand(card.name, mode=m) for m in modes)
+            else:
+                actions.append(PlayLand(card.name))
+        elif not impl.is_land:
+            custom = impl.cast_actions(state)
+            if custom is not None:
+                actions.extend(custom)
+            elif impl.is_castable(state) and can_afford(state, impl.cast_cost(state)):
+                actions.append(CastDefault(card.name))
+        actions.extend(impl.hand_actions(state))
+
+    # --- commander(s) from the command zone ---
     seen_cmd: set[str] = set()
     for card in state.command_zone:
         if card.name in seen_cmd:
             continue
         seen_cmd.add(card.name)
+        impl = _impl(card)
         tax = 2 * state.commander_cast_count.get(card.name, 0)
-        base = ManaCost.parse(card.mana_cost)
+        base = impl.cast_cost(state)
         cost = ManaCost(generic=base.generic + tax, pips=base.pips)
         if can_afford(state, cost):
             actions.append(CastCommander(card.name))
+
+    # --- from the graveyard (escape, bestow, ...) ---
+    seen_gy: set[str] = set()
+    for card in state.graveyard:
+        if card.name in seen_gy:
+            continue
+        seen_gy.add(card.name)
+        actions.extend(_impl(card).graveyard_actions(state))
+
+    # --- exile "you may play it" cards (Gwen Stacy) ---
+    seen_ex: set[str] = set()
+    for source_uid, card in list(state.exile_playable):
+        if state.find_permanent(source_uid) is None:
+            continue  # source left; no longer playable
+        if card.name in seen_ex:
+            continue
+        seen_ex.add(card.name)
+        actions.extend(_exile_play_actions(state, source_uid, card))
+
+    # --- activated abilities on the battlefield (impls check tapped/sick) ---
+    for perm in list(state.battlefield):
+        actions.extend(perm.impl.battlefield_actions(state, perm))
 
     actions.append(PassPhase())
     return actions
 
 
+def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]:
+    from ..cards.base import CardAction
+
+    impl = _impl(card)
+    out: list[Action] = []
+
+    def make_play(c):
+        def fn(st: GameState):
+            entry = next((e for e in st.exile_playable if e[0] == source_uid and e[1].name == c.name), None)
+            if entry is None:
+                return None
+            if _impl(c).is_land:
+                if st.lands_played_this_turn >= 1:
+                    return None
+                st.exile_playable.remove(entry)
+                if c in st.exile:
+                    st.exile.remove(c)
+                st.lands_played_this_turn += 1
+                st.put_on_battlefield(c)
+                st.emit(f"play {c.name} from exile")
+                return None
+            if not begin_cast(st, c, _impl(c).cast_cost(st), zone=_ExileZone(st, entry), tag="from exile"):
+                return None
+            if c.is_permanent:
+                return resolve_to_battlefield(st, c) or None
+            resolve_to_graveyard(st, c)
+            return _impl(c).on_resolve(st) or None
+        return fn
+
+    if impl.is_land:
+        if state.lands_played_this_turn < 1:
+            out.append(CardAction(f"play {card.name} from exile", make_play(card)))
+    elif impl.is_castable(state) and can_afford(state, impl.cast_cost(state)):
+        out.append(CardAction(f"cast {card.name} from exile", make_play(card)))
+    return out
+
+
+class _ExileZone:
+    """Adapter so begin_cast can 'remove' a card from the exile-playable list."""
+
+    def __init__(self, state: GameState, entry) -> None:
+        self.state, self.entry = state, entry
+
+    def remove(self, card) -> None:
+        self.state.exile_playable.remove(self.entry)
+        if card in self.state.exile:
+            self.state.exile.remove(card)
+
+
+# --------------------------------------------------------------------------
+# Combat (goldfish-lite: attack a phantom opponent; no blockers)
+# --------------------------------------------------------------------------
+class DeclareAttackers(Action):
+    """Attack with every creature able to attack. Subset attacks are not
+    enumerated (all-or-nothing) to keep the search tractable."""
+
+    label = "attack with all able creatures"
+
+    def apply(self, state: GameState) -> None:
+        for perm in state.battlefield:
+            if not perm.is_creature_now or perm.tapped:
+                continue
+            if perm.summoning_sick and not state.has_keyword(perm, "Haste"):
+                continue
+            state.attackers.append(perm.uid)
+            if not state.has_keyword(perm, "Vigilance"):
+                perm.tapped = True
+            perm.impl.on_attack(state, perm)
+        if state.attackers:
+            names = [p.name for p in state.battlefield if p.uid in state.attackers]
+            state.emit(f"attack with {', '.join(names)}")
+
+
+def combat_actions(state: GameState) -> list[Action]:
+    """Actions at declare-attackers: attack all, or don't."""
+    able = [
+        p for p in state.battlefield
+        if p.is_creature_now and not p.tapped
+        and (not p.summoning_sick or state.has_keyword(p, "Haste"))
+    ]
+    if not able:
+        return []
+    return [DeclareAttackers(), PassPhase()]
+
+
+def deal_combat_damage(state: GameState) -> None:
+    """At the combat-damage step: attackers hit the phantom opponent."""
+    total = 0
+    for uid in list(state.attackers):
+        perm = state.find_permanent(uid)
+        if perm is None:
+            continue
+        dmg = max(0, state.effective_power(perm))
+        if dmg == 0:
+            continue
+        total += dmg
+        state.opponent_life -= dmg
+        if state.has_keyword(perm, "Lifelink"):
+            state.life += dmg
+        perm.impl.on_combat_damage(state, perm, dmg)
+    if total:
+        state.emit(f"combat: {total} damage to opponent (opponent at {state.opponent_life})")
+
+
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
-def _pop_from_hand(state: GameState, name: str):
-    return _pop_from_zone(state.hand, name)
+def _impl(card):
+    from ..cards import build_card
+
+    return build_card(card)
 
 
-def _pop_from_zone(zone: list, name: str):
-    for i, card in enumerate(zone):
+def _find_in_zone(zone: list, name: str):
+    for card in zone:
         if card.name == name:
-            return zone.pop(i)
+            return card
     raise ValueError(f"{name!r} not found in zone")

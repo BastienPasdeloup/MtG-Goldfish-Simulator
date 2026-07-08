@@ -1,16 +1,37 @@
 """Base class for runtime card behaviour.
 
 A `Card` binds a `CardData` (static facts) to *behaviour* the engine can invoke.
-The default implementation gives you a fully functional vanilla card: lands and
-mana rocks work by declaring `mana_abilities`, and permanents/spells hook their
-effects via `on_etb` / `on_resolve`. Override only what a card actually does.
-
 Card implementations live one-per-file in this package and register themselves
-with `@register` (see `registry.py`).
+with `@register` (see `registry.py`). Instances are cheap and hold no per-game
+mutable state — that lives on the engine's `Permanent` objects.
+
+The engine drives cards through hooks:
+
+Casting / playing
+  cast_cost(state)          -> ManaCost   (dynamic costs, e.g. domain reduction)
+  is_castable(state)        -> bool       (target availability etc.)
+  cast_actions(state)       -> [Action]   (override for targets / X / choices)
+  hand_actions(state)       -> [Action]   (cycling, channel, MDFC land face...)
+  graveyard_actions(state)  -> [Action]   (escape, bestow from graveyard...)
+  etb_modes(state)          -> [dict]     (shocklands: pay-2/tapped choices)
+  etb_tapped(state)         -> bool       (fastlands & friends)
+
+On the battlefield
+  mana_abilities(state) / mana_abilities_perm(state, perm)
+  on_tap_for_mana(state, perm, color)     (pain lands)
+  battlefield_actions(state, perm) -> [Action]   (fetches, equip, draw engines)
+  on_etb / on_leave / on_phase / on_attack / on_combat_damage
+  on_draw_card(state, perm, nth)          ("when you draw your Nth card...")
+  on_cast_other(state, perm, card)        (cast triggers, e.g. Basim)
+  on_equipped_died(state, perm)           (Skullclamp)
+  dynamic_power/toughness, equip_mod      (characteristic-defining, equipment)
+
+Hooks that make choices should NOT choose inside `apply`; instead enumerate one
+`CardAction` per choice so the exhaustive search explores them all.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Callable, ClassVar
 
 from ..deck.models import CardData
 from ..engine.mana import ManaAbility, ManaCost
@@ -19,14 +40,23 @@ if TYPE_CHECKING:  # avoid import cycles; these are engine runtime types
     from ..engine.game_state import GameState, Permanent
 
 
+class CardAction:
+    """A concrete choice offered to the search. `fn(state)` mutates the state
+    in place, or returns a list of branch states for further sub-choices."""
+
+    def __init__(self, label: str, fn: Callable, *, sorcery_speed: bool = True) -> None:
+        self.label = label
+        self._fn = fn
+        self.sorcery_speed = sorcery_speed
+
+    def apply(self, state: "GameState"):
+        return self._fn(state)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<CardAction {self.label!r}>"
+
+
 class Card:
-    """Runtime behaviour for a single card.
-
-    Subclasses set `card_name` and are registered via `@register`. Instances
-    are cheap and hold no per-game mutable state — that lives on the engine's
-    `Permanent` / stack objects.
-    """
-
     #: Exact Scryfall card name this implementation handles.
     card_name: ClassVar[str] = ""
     #: Whether this card's rules are actually modelled. `False` for the
@@ -57,27 +87,107 @@ class Card:
     def is_creature(self) -> bool:
         return self.data.is_creature
 
-    @property
-    def enters_tapped(self) -> bool:
+    # ---- casting / playing ---------------------------------------------------
+    def cast_cost(self, state: "GameState") -> ManaCost:
+        return self.mana_cost
+
+    def is_castable(self, state: "GameState") -> bool:
+        """Whether this spell can legally be cast right now (beyond mana).
+
+        Default heuristic: a spell that counters another spell has no legal
+        target in a solitaire game (spells resolve atomically), so it is never
+        cast. Override for card-specific targeting rules."""
         text = self.data.oracle_text.lower()
-        if "enters tapped" not in text and "enters the battlefield tapped" not in text:
-            return False
-        # Shock/pain/fast lands can choose to enter untapped — assume they do
-        # (optimistic for mana-availability analysis).
-        if any(k in text for k in ("unless", "you may pay", "pay 2 life", "pay 3 life")):
+        if "counter target" in text:
             return False
         return True
 
-    # ---- behaviour hooks (override as needed) ------------------------------
+    def cast_actions(self, state: "GameState") -> list["CardAction"] | None:
+        """Return the cast choices for this card from hand. `None` means "use
+        the engine's default single cast" (pay cost, resolve, permanents enter,
+        others go to the graveyard). Override to enumerate targets/X/modes."""
+        return None
+
+    def hand_actions(self, state: "GameState") -> list["CardAction"]:
+        """Extra non-cast plays from hand (cycling, channel, MDFC back face)."""
+        return []
+
+    def graveyard_actions(self, state: "GameState") -> list["CardAction"]:
+        """Plays from the graveyard (escape, bestow from graveyard, ...)."""
+        return []
+
+    def etb_modes(self, state: "GameState") -> list[dict] | None:
+        """Choice of how a land/permanent enters. Each mode is a dict:
+        {"label": str, "tapped": bool, "life": int, "choice": any}.
+        `None` = single default mode (etb_tapped decides tapped)."""
+        return None
+
+    def etb_tapped(self, state: "GameState") -> bool:
+        text = self.data.oracle_text.lower()
+        if "enters tapped" not in text and "enters the battlefield tapped" not in text:
+            return False
+        # "unless"-style lands handle their condition via etb_modes/overrides.
+        if any(k in text for k in ("unless", "you may pay")):
+            return False
+        return True
+
+    # ---- battlefield ----------------------------------------------------------
     def mana_abilities(self, state: "GameState") -> list[ManaAbility]:
         """Mana this card can produce while on the battlefield (untapped)."""
         return []
 
+    def mana_abilities_perm(self, state: "GameState", perm: "Permanent") -> list[ManaAbility]:
+        """Per-permanent variant (chosen-type lands etc.). Defaults to the
+        permanent-agnostic list."""
+        return self.mana_abilities(state)
+
+    def on_tap_for_mana(self, state: "GameState", permanent: "Permanent", color: str) -> None:
+        """Called when this permanent is tapped for mana (e.g. pain lands)."""
+
+    def battlefield_actions(self, state: "GameState", perm: "Permanent") -> list["CardAction"]:
+        """Non-mana activated abilities (fetch, equip, draw engines, ...)."""
+        return []
+
+    # ---- triggers -------------------------------------------------------------
     def on_etb(self, state: "GameState", permanent: "Permanent") -> None:
         """Called when this card enters the battlefield."""
 
+    def on_leave(self, state: "GameState", permanent: "Permanent") -> None:
+        """Called when this permanent leaves the battlefield."""
+
     def on_resolve(self, state: "GameState") -> None:
         """Called when a non-permanent spell (instant/sorcery) resolves."""
+
+    def on_phase(self, state: "GameState", perm: "Permanent", phase) -> None:
+        """Called at the beginning of each phase while on the battlefield
+        (upkeep triggers, fading, ...)."""
+
+    def on_attack(self, state: "GameState", perm: "Permanent") -> None:
+        """Called when this permanent is declared as an attacker."""
+
+    def on_combat_damage(self, state: "GameState", perm: "Permanent", damage: int) -> None:
+        """Called when this permanent deals combat damage to the opponent."""
+
+    def on_draw_card(self, state: "GameState", perm: "Permanent", nth_this_turn: int) -> None:
+        """Called (while on the battlefield) after the player draws a card."""
+
+    def on_cast_other(self, state: "GameState", perm: "Permanent", card: CardData) -> None:
+        """Called (while on the battlefield) when the player casts any spell."""
+
+    def on_equipped_died(self, state: "GameState", perm: "Permanent") -> None:
+        """Called when the creature this equipment was attached to dies."""
+
+    # ---- characteristics --------------------------------------------------------
+    def dynamic_power(self, state: "GameState", perm: "Permanent") -> int | None:
+        """Characteristic-defining power (Barrowgoyf); None = printed value."""
+        return None
+
+    def dynamic_toughness(self, state: "GameState", perm: "Permanent") -> int | None:
+        return None
+
+    def equip_mod(self, state: "GameState", perm: "Permanent") -> tuple[int, int]:
+        """(power, toughness) bonus granted to the equipped creature."""
+        return (0, 0)
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<{type(self).__name__} {self.name!r}>"
@@ -101,10 +211,6 @@ class UnimplementedCard(Card):
         if not self.is_land:
             return []
         identity = tuple(getattr(state, "commander_color_identity", ())) or (
-            "W",
-            "U",
-            "B",
-            "R",
-            "G",
+            "W", "U", "B", "R", "G",
         )
         return [ManaAbility(amount=1, choices=identity)]

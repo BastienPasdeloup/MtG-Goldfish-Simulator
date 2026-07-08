@@ -1,15 +1,4 @@
-"""Windswept Heath — Land. Fetch land; approximated as tapping for {W/G} (the colours of the land types it can fetch).
-"""
-from __future__ import annotations
+"""Windswept Heath — exact fetchland implementation (see cards._common.fetch_land)."""
+from ._common import fetch_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class WindsweptHeath(Card):
-    card_name = 'Windswept Heath'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'G'))]
+fetch_land('Windswept Heath', ('Forest', 'Plains'))

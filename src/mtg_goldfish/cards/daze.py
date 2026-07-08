@@ -1,15 +1,4 @@
-"""Daze — Instant.
+"""Daze — exact within solitaire: never castable (counters target spell; no opponent spells exist (and it cannot respond to your own — spells resolve atomically))."""
+from ._common import uncastable_spell
 
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
-from __future__ import annotations
-
-from .base import Card
-from .registry import register
-
-
-@register
-class Daze(Card):
-    card_name = 'Daze'
+uncastable_spell('Daze', 'counters target spell; no opponent spells exist (and it cannot respond to your own — spells resolve atomically)')

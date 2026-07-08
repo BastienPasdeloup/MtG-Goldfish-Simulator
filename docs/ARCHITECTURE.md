@@ -46,31 +46,39 @@ domain logic have no web dependency and can be driven from a script or tests.
 - Bounded by a per-game wall-clock **timeout** and a node cap; the search stops
   as soon as all properties are met.
 
-## What is real vs. approximate (v0.1)
+## What is real vs. approximate
 
-Implemented and exercised:
+Engine mechanics (exercised by the sample cEDH deck, all 100 cards exact or
+documented per-card):
 - Moxfield import + Scryfall enrichment + role validation.
-- Turn structure, land drops, casting from hand + command zone (with commander
-  tax), mana solving across colours/identity sources, summoning sickness for
-  mana dorks.
+- Turn structure with phase-entry triggers (upkeep, fading, ...), land drops
+  with **enter modes** (shocklands pay-2/tapped, Multiversal Passage type
+  choice), casting from hand/command zone (commander tax), **activated
+  abilities** (fetchlands, equip, draw engines, channel, planeswalker
+  loyalty), **alternative costs** (evoke, escape, cycling, Phyrexian mana),
+  dynamic costs (domain), library search with deterministic seeded shuffles,
+  tokens, equipment with death triggers (Skullclamp), transform DFCs,
+  MDFC land faces, draw/cast triggers, exile-play (impulse), and
+  **goldfish combat** (attack a phantom opponent, damage/lifelink,
+  attack & combat-damage triggers).
+- Choices are **branches** of the exhaustive search: fetch targets, tutor
+  targets, Brainstorm put-backs, surveil, discards, ETB targets, X values,
+  payment variants. Mana payment itself stays deterministic.
 - Exhaustive line-of-play + mulligan search with property checking, timeouts,
   live stats over WebSocket, session/result persistence.
 - English→code property compilation (Anthropic when keyed; a regex stub offline).
-- Card implementations: the 5 basics + staples, plus every card of the sample
-  cEDH deck (generated from Scryfall data). Lands/rocks get real mana abilities;
-  fetchlands are approximated as tapping for the colours of the land types they
-  fetch; the rest are best-effort vanilla (they cast/enter and count toward
-  board/spell tallies). `enters_tapped` distinguishes true tap-lands from
-  shock/fast/pain lands (assumed to enter untapped).
 
-Deliberately approximate / not yet modelled (extension points, not blockers):
-- **Unimplemented cards play as vanilla**: permanents enter and count toward
-  board/spell tallies but their text does nothing; unimplemented lands tap for
-  one mana of any commander-identity colour. Results involving them are
-  approximate — the UI flags them red.
-- No combat/opponent, no triggered/activated abilities beyond mana, no ETB
-  effects, no stack interaction, no cleanup discard, no companion mechanic,
-  no `{X}`/hybrid nuance in payment.
+Documented approximations (each card file's docstring states its own):
+- Opponent-facing text does nothing (no opponent): counterspells are never
+  castable; "opponents can't..." statics are no-ops; targeted removal can only
+  hit your own permanents (or the phantom opponent's face for damage).
+- Combat is all-or-nothing (no attack subsets), no blockers, vehicles never
+  crew/attack; combat-damage loot discards are deterministic (no branching
+  inside triggers).
+- A few deterministic choices where enumeration would explode: escape/evidence
+  exile picks, March's white-card exiles, Nick Fury's bottom-order shuffle.
+- **Unimplemented cards** (not in this deck) still play as vanilla
+  approximations and are flagged red in the UI.
 - The property sandbox restricts builtins but is not a security boundary
   (single-user local tool).
 

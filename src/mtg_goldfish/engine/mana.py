@@ -73,10 +73,15 @@ class ManaAbility:
     from `choices`. Covers basics (choices=('W',)), rocks (Sol Ring:
     amount=2, choices=('C',)), duals, and identity-flexible sources
     (Command Tower: choices=commander colour identity).
+
+    `life_cost` models activation costs like Starting Town's
+    "{T}, Pay 1 life: Add one mana of any color". A permanent may expose
+    several abilities; the payment planner uses at most one per permanent.
     """
 
     amount: int = 1
     choices: tuple[str, ...] = (COLORLESS,)
+    life_cost: int = 0
 
     @property
     def is_fixed(self) -> bool:

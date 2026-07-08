@@ -1,15 +1,4 @@
-"""Inspiring Vantage — Land. Taps for {W/R}.
-"""
-from __future__ import annotations
+"""Inspiring Vantage — fastland: enters tapped unless you control two or fewer other lands."""
+from ._common import fast_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class InspiringVantage(Card):
-    card_name = 'Inspiring Vantage'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'R'))]
+fast_land('Inspiring Vantage', ('R', 'W'))

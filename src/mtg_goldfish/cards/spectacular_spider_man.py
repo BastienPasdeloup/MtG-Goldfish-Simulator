@@ -1,9 +1,8 @@
-"""Spectacular Spider-Man — Legendary Creature — Spider Human Hero.
-
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
+"""Spectacular Spider-Man — {1}{W} Legendary 3/2, flash.
+"{1}: gains flying" and "{1}, Sacrifice: creatures gain hexproof and
+indestructible" have no observable effect in a solitaire game (no blockers, no
+opposing removal) — deliberately not offered as actions to keep the search
+tractable. The body and flash are exact."""
 from __future__ import annotations
 
 from .base import Card
@@ -12,4 +11,4 @@ from .registry import register
 
 @register
 class SpectacularSpiderMan(Card):
-    card_name = 'Spectacular Spider-Man'
+    card_name = "Spectacular Spider-Man"

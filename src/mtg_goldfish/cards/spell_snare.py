@@ -1,15 +1,4 @@
-"""Spell Snare — Instant.
+"""Spell Snare — exact within solitaire: never castable (counters target spell with mana value 2; no opponent spells exist)."""
+from ._common import uncastable_spell
 
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
-from __future__ import annotations
-
-from .base import Card
-from .registry import register
-
-
-@register
-class SpellSnare(Card):
-    card_name = 'Spell Snare'
+uncastable_spell('Spell Snare', 'counters target spell with mana value 2; no opponent spells exist')

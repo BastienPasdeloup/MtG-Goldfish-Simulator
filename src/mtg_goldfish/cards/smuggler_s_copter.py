@@ -1,9 +1,7 @@
-"""Smuggler's Copter — Artifact — Vehicle.
-
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
+"""Smuggler's Copter — {2} Artifact — Vehicle 3/3, flying, crew 1.
+A Vehicle is not a creature until crewed; crewing (and therefore its
+attack/block loot trigger) is not modelled in this goldfish — the permanent
+enters and counts as an artifact exactly."""
 from __future__ import annotations
 
 from .base import Card
@@ -11,5 +9,5 @@ from .registry import register
 
 
 @register
-class SmugglerSCopter(Card):
+class SmugglersCopter(Card):
     card_name = "Smuggler's Copter"

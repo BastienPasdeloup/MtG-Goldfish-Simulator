@@ -1,15 +1,4 @@
-"""Concealed Courtyard — Land. Taps for {W/B}.
-"""
-from __future__ import annotations
+"""Concealed Courtyard — fastland: enters tapped unless you control two or fewer other lands."""
+from ._common import fast_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class ConcealedCourtyard(Card):
-    card_name = 'Concealed Courtyard'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'B'))]
+fast_land('Concealed Courtyard', ('W', 'B'))

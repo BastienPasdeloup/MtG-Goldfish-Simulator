@@ -1,15 +1,44 @@
-"""Skullclamp — Artifact — Equipment.
-
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
+"""Skullclamp — {1} Artifact — Equipment. Equipped creature gets +1/-1;
+whenever equipped creature dies, draw two cards. Equip {1}."""
 from __future__ import annotations
 
-from .base import Card
+from ..engine.mana import ManaCost
+from .base import Card, CardAction
 from .registry import register
 
 
 @register
 class Skullclamp(Card):
-    card_name = 'Skullclamp'
+    card_name = "Skullclamp"
+
+    def equip_mod(self, state, perm):
+        return (1, -1)
+
+    def on_equipped_died(self, state, perm):
+        state.emit("Skullclamp: equipped creature died — draw two cards")
+        state.draw(2)
+
+    def battlefield_actions(self, state, perm):
+        from ..engine.actions import can_afford, pay_cost
+
+        cost = ManaCost(generic=1)
+        if not can_afford(state, cost):
+            return []
+        targets = [
+            p for p in state.battlefield
+            if p.is_creature_now and p.uid != perm.attached_to and p.uid != perm.uid
+        ]
+
+        def make(uid: int):
+            def fn(st):
+                clamp = st.find_permanent(perm.uid)
+                target = st.find_permanent(uid)
+                if clamp is None or target is None or not pay_cost(st, cost):
+                    return None
+                clamp.attached_to = target.uid
+                st.emit(f"equip Skullclamp to {target.name} (+1/-1)")
+                st.check_deaths()  # 1-toughness creatures die -> draw 2
+                return None
+            return fn
+
+        return [CardAction(f"equip Skullclamp → {t.name}", make(t.uid)) for t in targets]

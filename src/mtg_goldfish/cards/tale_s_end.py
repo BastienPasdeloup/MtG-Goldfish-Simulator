@@ -1,15 +1,4 @@
-"""Tale's End — Instant.
+"""Tale's End — exact within solitaire: never castable (counters target ability or legendary spell; nothing can be responded to in a solitaire game)."""
+from ._common import uncastable_spell
 
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
-from __future__ import annotations
-
-from .base import Card
-from .registry import register
-
-
-@register
-class TaleSEnd(Card):
-    card_name = "Tale's End"
+uncastable_spell("Tale's End", 'counters target ability or legendary spell; nothing can be responded to in a solitaire game')

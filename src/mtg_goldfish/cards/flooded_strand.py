@@ -1,15 +1,4 @@
-"""Flooded Strand — Land. Fetch land; approximated as tapping for {W/U} (the colours of the land types it can fetch).
-"""
-from __future__ import annotations
+"""Flooded Strand — exact fetchland implementation (see cards._common.fetch_land)."""
+from ._common import fetch_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class FloodedStrand(Card):
-    card_name = 'Flooded Strand'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'U'))]
+fetch_land('Flooded Strand', ('Plains', 'Island'))

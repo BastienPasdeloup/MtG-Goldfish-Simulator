@@ -55,6 +55,7 @@
           <span id="s-commanders" class="pill"></span>
           <span id="s-format" class="pill"></span>
           <span class="spacer"></span>
+          <button id="load-run-btn">Load previous run</button>
           <button id="delete-session" class="danger">Delete</button>
         </div>
         <div id="s-warnings" class="warnings"></div>
@@ -90,23 +91,26 @@
             <div id="prop-list"></div>
             <div class="row" style="margin-top:.5rem">
               <span class="spacer"></span>
-              <button id="save-props">Save</button>
               <button id="compile-props" class="primary">Compile → review code</button>
             </div>
           </div>
 
           <div class="card-box">
             <h3>Simulation</h3>
-            <div class="row">
-              <div><label>Games (X)</label><br /><input id="num-games" type="number" value="100" style="width:6rem" /></div>
+            <div class="row" style="align-items:flex-end">
+              <div><label>Games</label><br /><input id="num-games" type="number" value="100" style="width:6rem" /></div>
               <div><label>Timeout / game (s)</label><br /><input id="timeout" type="number" value="5" step="0.5" style="width:6rem" /></div>
-              <div><label>Mulligans (Y)</label><br /><input id="mulligans" type="number" min="0" max="7" value="0" style="width:5rem" /></div>
+              <div><label>Mulligans</label><br /><input id="mulligans" type="number" min="0" max="7" value="0" style="width:5rem" /></div>
+              <div><label>Seed (optional)</label><br /><input id="seed" type="number" placeholder="random" style="width:8rem" /></div>
+              <div><label>Start</label><br /><button id="play-draw-toggle" data-play="1">On the play</button></div>
               <span class="spacer"></span>
               <button id="run-btn" class="primary">Run</button>
               <button id="stop-btn" class="danger" disabled>Stop</button>
             </div>
-            <div id="sim-stats" style="margin-top:.8rem"></div>
+            <div id="sim-seed" class="muted" style="font-size:12px;margin-top:.4rem"></div>
+            <div id="sim-stats" style="margin-top:.4rem"></div>
           </div>
+
 
           <div class="card-box hidden" id="viz-box">
             <h3>Successful games</h3>
@@ -120,6 +124,18 @@
   </main>
 
   <div id="hover-img"><img alt="" /></div>
+
+  <div id="run-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <b>Previous runs</b>
+        <span class="spacer"></span>
+        <button id="run-modal-close">✕</button>
+      </div>
+      <div id="run-modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

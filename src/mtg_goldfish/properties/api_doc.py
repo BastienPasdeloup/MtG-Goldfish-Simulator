@@ -12,24 +12,36 @@ Counts / booleans:
   state.commander_in_play() -> bool          # a commander is on the battlefield
   state.lands_in_play() -> int
   state.creatures_in_play() -> int
+  state.permanents_in_play() -> int
   state.cards_in_hand() -> int
+  state.cards_in_graveyard() -> int
   state.has_permanent_named(name: str) -> bool   # case-insensitive
   state.count_on_battlefield(pred) -> int         # pred: fn(card_data) -> bool
+
+Creature stats (on the battlefield):
+  state.total_power() -> int
+  state.total_toughness() -> int
+  state.max_power() -> int
+  state.max_toughness() -> int
+  state.creatures_with_power_at_least(n: int) -> int
 
 Per-turn tallies (reset each turn):
   state.spells_cast_this_turn -> int
   state.creature_spells_cast_this_turn -> int
   state.noncreature_spells_cast_this_turn -> int
   state.lands_played_this_turn -> int
+  state.cards_drawn_this_turn -> int
   state.storm_count -> int
+
+Game-long:
+  state.cards_drawn -> int          # total cards drawn this game
+  state.life -> int
+  state.turn -> int
 
 Zones (lists of names):
   state.hand_names() -> list[str]
   state.battlefield_names() -> list[str]
-
-Other:
-  state.life -> int
-  state.turn -> int
+  state.graveyard_names() -> list[str]
 
 Each card exposed to count_on_battlefield's predicate has: .name, .cmc,
 .type_line, .is_land, .is_creature, .colors (list like ["R"]).

@@ -41,7 +41,7 @@ def load_all_cards() -> None:
         return
     package = importlib.import_module(__package__)
     for mod in pkgutil.iter_modules(package.__path__):
-        if mod.name in {"base", "registry", "__init__"}:
+        if mod.name in {"base", "registry", "__init__"} or mod.name.startswith("_"):
             continue
         importlib.import_module(f"{__package__}.{mod.name}")
     _LOADED = True

@@ -1,5 +1,4 @@
-"""City of Brass — Land. Taps for {W/U/B/R/G}.
-"""
+"""City of Brass — Land. Taps for any colour; deals 1 damage to you when tapped."""
 from __future__ import annotations
 
 from ..engine.mana import ManaAbility
@@ -13,3 +12,7 @@ class CityOfBrass(Card):
 
     def mana_abilities(self, state) -> list[ManaAbility]:
         return [ManaAbility(amount=1, choices=('W', 'U', 'B', 'R', 'G'))]
+
+    def on_tap_for_mana(self, state, permanent, color) -> None:
+        # "Whenever City of Brass becomes tapped, it deals 1 damage to you."
+        state.life -= 1

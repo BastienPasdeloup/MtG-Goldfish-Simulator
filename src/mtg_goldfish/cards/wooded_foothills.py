@@ -1,15 +1,4 @@
-"""Wooded Foothills — Land. Fetch land; approximated as tapping for {R/G} (the colours of the land types it can fetch).
-"""
-from __future__ import annotations
+"""Wooded Foothills — exact fetchland implementation (see cards._common.fetch_land)."""
+from ._common import fetch_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class WoodedFoothills(Card):
-    card_name = 'Wooded Foothills'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('R', 'G'))]
+fetch_land('Wooded Foothills', ('Mountain', 'Forest'))

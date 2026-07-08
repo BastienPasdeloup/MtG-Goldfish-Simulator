@@ -33,39 +33,79 @@ def _clauses(text: str) -> list[str]:
     return [c.strip() for c in re.split(r"\band\b|,|;", text) if c.strip()]
 
 
+# Comparator phrases, checked in order; default is ">=".
+_COMPARATORS = [
+    (r"at least|no fewer than|no less than|or more|minimum of|>=", ">="),
+    (r"at most|no more than|or fewer|or less|maximum of|<=", "<="),
+    (r"more than|greater than|over|>", ">"),
+    (r"fewer than|less than|under|<", "<"),
+    (r"exactly|equal to|==|=", "=="),
+]
+
+
+def _find_num(c: str) -> int | None:
+    # Prefer an explicit digit (e.g. "power 5") over an article like "a"/"an".
+    m = re.search(r"-?\d+", c)
+    if m:
+        return int(m.group())
+    for token in re.findall(r"\b[a-z]+\b", c):
+        n = _num(token)
+        if n is not None:
+            return n
+    return None
+
+
+def _comparator(c: str) -> str:
+    for pat, op in _COMPARATORS:
+        if re.search(pat, c):
+            return op
+    return ">="
+
+
+# Ordered (regex over the clause) -> int-valued state expression. First match wins.
+_INT_METRICS: list[tuple[str, str]] = [
+    (r"non-?creature spells?", "state.noncreature_spells_cast_this_turn"),
+    (r"creature spells?", "state.creature_spells_cast_this_turn"),
+    (r"spells? (?:have been )?cast|spells? cast", "state.spells_cast_this_turn"),
+    (r"storm( count)?", "state.storm_count"),
+    (r"cards? in (?:your |the )?graveyard|graveyard", "state.cards_in_graveyard()"),
+    (r"drawn", "__DRAWN__"),
+    (r"cards? in (?:your |the )?hand|hand size", "state.cards_in_hand()"),
+    (r"lands? played", "state.lands_played_this_turn"),
+    (r"lands?", "state.lands_in_play()"),
+    (r"total toughness|combined toughness", "state.total_toughness()"),
+    (r"total power|combined power", "state.total_power()"),
+    (r"toughness", "state.total_toughness()"),
+    (r"permanents?", "state.permanents_in_play()"),
+    (r"creatures?", "state.creatures_in_play()"),
+    (r"life( total)?", "state.life"),
+]
+
+
 def _compile_clause(clause: str) -> str | None:
     c = clause.lower().strip().rstrip(".")
 
+    # ---- boolean clauses -------------------------------------------------
     if "commander" in c and ("play" in c or "battlefield" in c):
         return "state.commander_in_play()"
 
-    m = re.search(r"(\d+|\w+)\s+non-?creature spells?", c)
-    if m and _num(m.group(1)) is not None:
-        return f"state.noncreature_spells_cast_this_turn >= {_num(m.group(1))}"
-
-    m = re.search(r"(\d+|\w+)\s+creature spells?", c)
-    if m and _num(m.group(1)) is not None:
-        return f"state.creature_spells_cast_this_turn >= {_num(m.group(1))}"
-
-    m = re.search(r"(\d+|\w+)\s+spells? (?:have been )?cast", c)
-    if m and _num(m.group(1)) is not None:
-        return f"state.spells_cast_this_turn >= {_num(m.group(1))}"
-
-    m = re.search(r"(\d+|\w+)\s+lands?\b", c)
-    if m and _num(m.group(1)) is not None and "play" in c:
-        return f"state.lands_in_play() >= {_num(m.group(1))}"
-
-    m = re.search(r"(\d+|\w+)\s+creatures?\b", c)
-    if m and _num(m.group(1)) is not None and "play" in c:
-        return f"state.creatures_in_play() >= {_num(m.group(1))}"
-
-    m = re.search(r"(\d+|\w+)\s+cards? in (?:your )?hand", c)
-    if m and _num(m.group(1)) is not None:
-        return f"state.cards_in_hand() >= {_num(m.group(1))}"
-
-    m = re.search(r'"([^"]+)"\s+is in play', clause)
+    m = re.search(r'"([^"]+)"\s+is in (?:play|the battlefield)', clause)
     if m:
         return f"state.has_permanent_named({m.group(1)!r})"
+
+    op, n = _comparator(c), _find_num(c)
+
+    # ---- "a creature with power N" (compares power, not a count) ----------
+    if "creature" in c and "power" in c and "total" not in c and "combined" not in c and n is not None:
+        return f"state.creatures_with_power_at_least({n}) >= 1"
+
+    # ---- generic <metric> <comparator> <number> --------------------------
+    if n is not None:
+        for pat, expr in _INT_METRICS:
+            if re.search(pat, c):
+                if expr == "__DRAWN__":
+                    expr = "state.cards_drawn_this_turn" if "this turn" in c else "state.cards_drawn"
+                return f"{expr} {op} {n}"
 
     return None
 

@@ -1,15 +1,4 @@
-"""Mana Tithe — Instant.
+"""Mana Tithe — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
+from ._common import uncastable_spell
 
-Best-effort implementation: the engine models this card being cast/entering and
-counting toward board state and spell tallies, but its special rules text is not
-simulated yet.
-"""
-from __future__ import annotations
-
-from .base import Card
-from .registry import register
-
-
-@register
-class ManaTithe(Card):
-    card_name = 'Mana Tithe'
+uncastable_spell('Mana Tithe', 'counters target spell; no opponent spells exist')

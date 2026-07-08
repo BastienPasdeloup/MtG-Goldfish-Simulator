@@ -1,19 +1,27 @@
-"""Multiversal Passage — Land.
-
-Land with no fixed colours resolved from Scryfall; approximated as tapping for
-one mana of any colour in the commander's colour identity.
-"""
+"""Multiversal Passage — Land. As it enters, choose a basic land type; then you
+may pay 2 life, otherwise it enters tapped. It is the chosen type (branches:
+5 types × {pay 2 life untapped, tapped})."""
 from __future__ import annotations
 
 from ..engine.mana import ManaAbility
+from ._common import BASIC_TYPES, TYPE_COLOR
 from .base import Card
 from .registry import register
 
 
 @register
 class MultiversalPassage(Card):
-    card_name = 'Multiversal Passage'
+    card_name = "Multiversal Passage"
 
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        identity = tuple(state.commander_color_identity) or ("W", "U", "B", "R", "G")
-        return [ManaAbility(amount=1, choices=identity)]
+    def etb_modes(self, state):
+        modes = []
+        for t in BASIC_TYPES:
+            if state.life > 2:
+                modes.append({"label": f"{t}, pay 2 life, untapped",
+                              "tapped": False, "life": 2, "choice": t})
+            modes.append({"label": f"{t}, tapped", "tapped": True, "life": 0, "choice": t})
+        return modes
+
+    def mana_abilities_perm(self, state, perm):
+        color = TYPE_COLOR.get(perm.chosen or "", "C")
+        return [ManaAbility(amount=1, choices=(color,))]

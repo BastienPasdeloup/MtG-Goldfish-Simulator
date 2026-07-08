@@ -11,15 +11,20 @@ class SimConfig(BaseModel):
     num_games: int = 100
     timeout_per_game_s: float = 5.0
     mulligans: int = 0
+    on_the_play: bool = True
+    base_seed: int = 12345
 
 
 class SimResult(BaseModel):
     id: str
     created_at: str
     config: SimConfig
+    # Snapshot of the properties checked in this run (for later review).
+    properties: list[PropertySpec] = Field(default_factory=list)
     stats: dict = Field(default_factory=dict)
-    # A handful of successful lines of play (each a list of log lines) for review.
-    sample_success_logs: list[list[str]] = Field(default_factory=list)
+    # A handful of successful lines of play (each a list of board-snapshot
+    # frames) for graphical review.
+    sample_success_logs: list[list[dict]] = Field(default_factory=list)
 
 
 class Session(BaseModel):

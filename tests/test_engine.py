@@ -5,18 +5,18 @@ from mtg_goldfish.engine.mana import ManaCost, ManaPool
 from mtg_goldfish.properties import PropertySpec, Timing, compile_all, compile_property
 
 
-def _cd(name, mc="", tl="", ci=None):
-    return CardData(name=name, mana_cost=mc, type_line=tl, cmc=0, color_identity=ci or [])
+def _cd(name, mc="", tl="", ci=None, pt=None):
+    return CardData(
+        name=name, mana_cost=mc, type_line=tl, cmc=0, color_identity=ci or [],
+        power=pt and pt[0], toughness=pt and pt[1],
+    )
 
 
 def _mono_red_deck():
-    cmd = _cd("Test Commander", "{2}{R}", "Legendary Creature — Goblin", ci=["R"])
+    cmd = _cd("Test Commander", "{2}{R}", "Legendary Creature — Goblin", ci=["R"], pt=("2", "2"))
     entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=cmd)]
     entries.append(DeckEntry(quantity=40, board=DeckBoard.MAINBOARD, card=_cd("Mountain", "", "Basic Land — Mountain")))
-    entries += [
-        DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=_cd(f"Bolt{i}", "{R}", "Instant"))
-        for i in range(59)
-    ]
+    entries.append(DeckEntry(quantity=59, board=DeckBoard.MAINBOARD, card=_cd("Test Bolt", "{R}", "Instant")))
     return Deck(name="t", entries=entries)
 
 

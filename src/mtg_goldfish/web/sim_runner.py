@@ -82,6 +82,8 @@ class SimulationRunner:
                 num_games=config.num_games,
                 timeout_per_game_s=config.timeout_per_game_s,
                 mulligans=config.mulligans,
+                on_the_play=config.on_the_play,
+                base_seed=config.base_seed,
             )
             stats = run_simulation(
                 session.deck,
@@ -95,6 +97,7 @@ class SimulationRunner:
                 id=result_id,
                 created_at=now_iso(),
                 config=config,
+                properties=[p.model_copy() for p in session.properties if p.enabled],
                 stats=stats.as_dict(),
                 sample_success_logs=sample_logs,
             )

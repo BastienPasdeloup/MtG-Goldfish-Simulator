@@ -1,15 +1,4 @@
-"""Blood Crypt — Land — Swamp Mountain. Taps for {B/R}.
-"""
-from __future__ import annotations
+"""Blood Crypt — shockland: pay 2 life to enter untapped, else tapped (branch)."""
+from ._common import shock_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class BloodCrypt(Card):
-    card_name = 'Blood Crypt'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('B', 'R'))]
+shock_land('Blood Crypt', ('B', 'R'))

@@ -1,15 +1,4 @@
-"""Seachrome Coast — Land. Taps for {W/U}.
-"""
-from __future__ import annotations
+"""Seachrome Coast — fastland: enters tapped unless you control two or fewer other lands."""
+from ._common import fast_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class SeachromeCoast(Card):
-    card_name = 'Seachrome Coast'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'U'))]
+fast_land('Seachrome Coast', ('W', 'U'))

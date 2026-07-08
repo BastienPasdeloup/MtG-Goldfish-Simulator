@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -50,6 +51,8 @@ class SimulateRequest(BaseModel):
     num_games: int = 100
     timeout_per_game_s: float = 5.0
     mulligans: int = 0
+    on_the_play: bool = True
+    base_seed: int | None = None  # random when omitted
 
 
 # --------------------------------------------------------------------------
@@ -66,14 +69,26 @@ def card_view(deck: Deck) -> list[dict]:
             agg[key]["quantity"] += e.quantity
             continue
         c = e.card
+        faces = [
+            {
+                "name": f.name,
+                "image": f.image_normal,
+                "mana_cost": f.mana_cost,
+                "type_line": f.type_line,
+            }
+            for f in c.faces
+        ] if len(c.faces) > 1 else []
         agg[key] = {
             "name": c.name,
             "quantity": e.quantity,
             "board": e.board.value,
             "type_line": c.type_line,
             "cmc": c.cmc,
-            "colors": c.color_identity or c.colors,
+            "mana_cost": c.mana_cost,
+            "colors": c.colors,
+            "color_identity": c.color_identity,
             "image": c.image,
+            "faces": faces,
             "implemented": is_implemented(c.name),
             "is_land": c.is_land,
         }
@@ -220,16 +235,19 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
     session.mulligans = req.mulligans
     store.save(session)
     loop = asyncio.get_running_loop()
+    seed = req.base_seed if req.base_seed is not None else random.randrange(1_000_000_000)
     config = SimConfig(
         num_games=req.num_games,
         timeout_per_game_s=req.timeout_per_game_s,
         mulligans=req.mulligans,
+        on_the_play=req.on_the_play,
+        base_seed=seed,
     )
     try:
         result_id = runner.start(session, config, loop)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "result_id": result_id}
+    return {"ok": True, "result_id": result_id, "seed": seed}
 
 
 @app.post("/api/sessions/{session_id}/simulate/stop")

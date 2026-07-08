@@ -1,15 +1,4 @@
-"""Marsh Flats — Land. Fetch land; approximated as tapping for {W/B} (the colours of the land types it can fetch).
-"""
-from __future__ import annotations
+"""Marsh Flats — exact fetchland implementation (see cards._common.fetch_land)."""
+from ._common import fetch_land
 
-from ..engine.mana import ManaAbility
-from .base import Card
-from .registry import register
-
-
-@register
-class MarshFlats(Card):
-    card_name = 'Marsh Flats'
-
-    def mana_abilities(self, state) -> list[ManaAbility]:
-        return [ManaAbility(amount=1, choices=('W', 'B'))]
+fetch_land('Marsh Flats', ('Plains', 'Swamp'))

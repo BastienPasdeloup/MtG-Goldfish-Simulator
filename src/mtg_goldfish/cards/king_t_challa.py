@@ -1,10 +1,11 @@
-"""King T'Challa // Black Panther, Hope Enduring — Legendary Creature — Human Noble Hero // Legendary Creature — Human Warrior Hero.
-
-Best-effort implementation: modelled as being cast/entering and counting toward
-board state and spell tallies; its special rules text is not simulated yet.
-"""
+"""King T'Challa // Black Panther, Hope Enduring — {1}{W}{U} Legendary 3/2,
+flash. "Whenever a player draws their second card each turn, you draw a card."
+{4}{W}{U}: transform (sorcery). Black Panther's combat-damage draw fires via
+on_combat_damage when transformed."""
 from __future__ import annotations
 
+from ..engine.mana import ManaCost
+from ._common import transform_actions
 from .base import Card
 from .registry import register
 
@@ -12,3 +13,22 @@ from .registry import register
 @register
 class KingTChalla(Card):
     card_name = "King T'Challa // Black Panther, Hope Enduring"
+
+    def on_draw_card(self, state, perm, nth_this_turn):
+        # Fires exactly on the second draw; the bonus draw is the third, so no loop.
+        if nth_this_turn == 2 and not perm.turn_flags.get("tchalla_drew"):
+            perm.turn_flags["tchalla_drew"] = 1
+            state.emit("King T'Challa: second card drawn this turn — draw a card")
+            state.draw(1)
+
+    def on_combat_damage(self, state, perm, damage):
+        if perm.transformed:
+            state.emit("Black Panther: combat damage — draw a card")
+            state.draw(1)
+
+    def battlefield_actions(self, state, perm):
+        return transform_actions(
+            state, perm,
+            ManaCost(generic=4, pips=(("W", 1), ("U", 1))),
+            "Black Panther, Hope Enduring",
+        )
