@@ -28,14 +28,23 @@ class PlanarNexus(Card):
         if perm.tapped or not can_afford(state, ManaCost(generic=1), exclude_uids={perm.uid}):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped or not pay_cost(st, ManaCost(generic=1), exclude_uids={perm.uid}):
-                return None
+                return False
             p.tapped = True
+            return True
+
+        def resolve(st):
             color = any_identity_color(st)[0]
             st.mana_pool.add(color, 1)
             st.emit(f"Planar Nexus: {{1}}, {{T}} — add {{{color}}}")
             return None
 
-        return [CardAction("Planar Nexus: {1}, {T} — any color", fn)]
+        return [CardAction.activated(
+            "Planar Nexus: {1}, {T} — any color",
+            pay,
+            resolve,
+            source_name="Planar Nexus",
+            ability_text="Add one mana of any color",
+        )]

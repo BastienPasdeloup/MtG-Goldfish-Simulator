@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from ..engine.actions import can_afford, pay_cost
 from ..engine.mana import ManaCost
+from ._common import enter_battlefield_sequence
 from .base import Card, CardAction
 from .registry import register
 
@@ -21,16 +22,28 @@ class AftermathAnalyst(Card):
         if not can_afford(state, cost):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or not pay_cost(st, cost):
-                return None
+                return False
             st.leaves_battlefield(p, "graveyard")
+            return True
+
+        def resolve(st):
             lands = [c for c in st.graveyard if c.is_land]
             for card in lands:
                 st.graveyard.remove(card)
-                st.put_on_battlefield(card, tapped=True)
+            enter_battlefield_sequence(
+                st,
+                [(card, True, None) for card in lands],
+            )
             st.emit(f"Aftermath Analyst: sacrifice — return {len(lands)} land(s) tapped")
             return None
 
-        return [CardAction("Aftermath Analyst: {3}{G}, sac — lands from graveyard", fn)]
+        return [CardAction.activated(
+            "Aftermath Analyst: {3}{G}, sac — lands from graveyard",
+            pay,
+            resolve,
+            source_name="Aftermath Analyst",
+            ability_text="Return all land cards from your graveyard to the battlefield tapped",
+        )]

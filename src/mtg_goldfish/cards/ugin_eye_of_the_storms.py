@@ -21,27 +21,45 @@ class UginEyeOfTheStorms(Card):
         if perm.turn_flags.get("loyalty_used"):
             return []
 
-        def plus2(st):
+        def pay_plus2(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.turn_flags.get("loyalty_used"):
-                return None
+                return False
             p.turn_flags["loyalty_used"] = 1
             p.counters["loyalty"] = p.counters.get("loyalty", 0) + 2
+            return True
+
+        def resolve_plus2(st):
             st.life += 3
             st.emit(f"Ugin +2 (loyalty {p.counters['loyalty']}): gain 3 life, draw")
             st.draw(1)
             return None
 
-        def zero(st):
+        def pay_zero(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.turn_flags.get("loyalty_used"):
-                return None
+                return False
             p.turn_flags["loyalty_used"] = 1
+            return True
+
+        def resolve_zero(st):
             st.mana_pool.add("C", 3)
             st.emit("Ugin 0: add {C}{C}{C}")
             return None
 
         return [
-            CardAction("Ugin: +2 gain 3 life, draw", plus2),
-            CardAction("Ugin: 0 add {C}{C}{C}", zero),
+            CardAction.activated(
+                "Ugin: +2 gain 3 life, draw",
+                pay_plus2,
+                resolve_plus2,
+                source_name="Ugin, Eye of the Storms",
+                ability_text="Gain 3 life and draw a card",
+            ),
+            CardAction.activated(
+                "Ugin: 0 add {C}{C}{C}",
+                pay_zero,
+                resolve_zero,
+                source_name="Ugin, Eye of the Storms",
+                ability_text="Add {C}{C}{C}",
+            ),
         ]

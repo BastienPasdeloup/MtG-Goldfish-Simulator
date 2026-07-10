@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from ..engine.actions import can_afford, pay_cost
 from ..engine.mana import ManaCost
+from ._common import enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 
@@ -20,11 +21,14 @@ class InsidiousFungus(Card):
         if not can_afford(state, cost):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or not pay_cost(st, cost):
-                return None
+                return False
             st.leaves_battlefield(p, "graveyard")
+            return True
+
+        def resolve(st):
             st.emit("Insidious Fungus: sacrifice — draw a card")
             st.draw(1)
             lands = sorted({c.name for c in st.hand if c.is_land})
@@ -36,10 +40,20 @@ class InsidiousFungus(Card):
                 if name is not None:
                     card = next(c for c in b.hand if c.name == name)
                     b.hand.remove(card)
-                    b.put_on_battlefield(card, tapped=True)
-                    b.emit(f"Insidious Fungus: put {name} onto the battlefield tapped")
+                    enter_battlefield(
+                        b,
+                        card,
+                        tapped=True,
+                        announce=f"Insidious Fungus: put {name} onto the battlefield tapped",
+                    )
                 b.check_deaths()
                 out.append(b)
             return out
 
-        return [CardAction("Insidious Fungus: {2}, sac — draw, maybe a land", fn)]
+        return [CardAction.activated(
+            "Insidious Fungus: {2}, sac — draw, maybe a land",
+            pay,
+            resolve,
+            source_name="Insidious Fungus",
+            ability_text="Draw a card, then you may put a land card from your hand onto the battlefield tapped",
+        )]

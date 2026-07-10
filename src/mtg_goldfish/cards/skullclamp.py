@@ -30,15 +30,28 @@ class Skullclamp(Card):
         ]
 
         def make(uid: int):
-            def fn(st):
+            def pay(st):
                 clamp = st.find_permanent(perm.uid)
                 target = st.find_permanent(uid)
                 if clamp is None or target is None or not pay_cost(st, cost):
+                    return False
+                return True
+
+            def resolve(st):
+                clamp = st.find_permanent(perm.uid)
+                target = st.find_permanent(uid)
+                if clamp is None or target is None:
                     return None
                 clamp.attached_to = target.uid
                 st.emit(f"equip Skullclamp to {target.name} (+1/-1)")
                 st.check_deaths()  # 1-toughness creatures die -> draw 2
                 return None
-            return fn
+            return CardAction.activated(
+                f"equip Skullclamp → {state.find_permanent(uid).name if state.find_permanent(uid) else uid}",
+                pay,
+                resolve,
+                source_name="Skullclamp",
+                ability_text="Equip",
+            )
 
-        return [CardAction(f"equip Skullclamp → {t.name}", make(t.uid)) for t in targets]
+        return [make(t.uid) for t in targets]

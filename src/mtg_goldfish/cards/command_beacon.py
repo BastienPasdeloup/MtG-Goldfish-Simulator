@@ -19,14 +19,26 @@ class CommandBeacon(Card):
         if perm.tapped or not state.command_zone:
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped or not st.command_zone:
+                return False
+            p.tapped = True
+            st.leaves_battlefield(p, "graveyard")
+            return True
+
+        def resolve(st):
+            if not st.command_zone:
                 return None
             commander = st.command_zone.pop(0)
             st.hand.append(commander)
-            st.leaves_battlefield(p, "graveyard")
             st.emit(f"Command Beacon: sacrifice — {commander.name} to hand")
             return None
 
-        return [CardAction("Command Beacon: commander to hand", fn)]
+        return [CardAction.activated(
+            "Command Beacon: commander to hand",
+            pay,
+            resolve,
+            source_name="Command Beacon",
+            ability_text="Put your commander into your hand",
+        )]

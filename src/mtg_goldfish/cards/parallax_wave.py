@@ -18,6 +18,24 @@ class ParallaxWave(Card):
         permanent.counters["fade"] = 5
         return None
 
+    def phase_stack_items(self, state, perm, phase):
+        if phase != Phase.UPKEEP:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_phase(st, live, Phase.UPKEEP)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label="Parallax Wave: fading",
+            resolve=resolve,
+            trigger_text="Beginning of your upkeep",
+            ability_text="Remove a fade counter; if none remain, sacrifice Parallax Wave",
+        )]
+
     def on_phase(self, state, perm, phase):
         if phase != Phase.UPKEEP:
             return

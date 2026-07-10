@@ -44,13 +44,63 @@ class CardAction:
     """A concrete choice offered to the search. `fn(state)` mutates the state
     in place, or returns a list of branch states for further sub-choices."""
 
-    def __init__(self, label: str, fn: Callable, *, sorcery_speed: bool = True) -> None:
+    def __init__(
+        self,
+        label: str,
+        fn: Callable,
+        *,
+        sorcery_speed: bool = True,
+        pre_fn: Callable | None = None,
+        source_name: str | None = None,
+        ability_text: str | None = None,
+    ) -> None:
         self.label = label
         self._fn = fn
         self.sorcery_speed = sorcery_speed
+        self._pre_fn = pre_fn
+        self._source_name = source_name
+        self._ability_text = ability_text
+
+    @classmethod
+    def activated(
+        cls,
+        label: str,
+        pre_fn: Callable,
+        resolve_fn: Callable,
+        *,
+        sorcery_speed: bool = True,
+        source_name: str | None = None,
+        ability_text: str | None = None,
+    ) -> "CardAction":
+        return cls(
+            label,
+            resolve_fn,
+            sorcery_speed=sorcery_speed,
+            pre_fn=pre_fn,
+            source_name=source_name,
+            ability_text=ability_text,
+        )
 
     def apply(self, state: "GameState"):
-        return self._fn(state)
+        if self.label.startswith(("cast ", "play ", "play land ", "cast commander ")):
+            return state.settle(self._fn(state))
+
+        from ..engine.game_state import StackAbility
+        if self._pre_fn is not None and not self._pre_fn(state):
+            return None
+        source_name = self._source_name or _stack_source_from_label(self.label)
+
+        def resolve(st):
+            return self._fn(st)
+
+        state.push_triggered_abilities([StackAbility(
+            self.label,
+            resolve,
+            source_name=source_name,
+            kind="activated",
+            ability_text=self._ability_text or self.label,
+        )])
+        return state.settle()
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CardAction {self.label!r}>"
@@ -197,11 +247,179 @@ class Card:
     def on_cast_other(self, state: "GameState", perm: "Permanent", card: CardData) -> None:
         """Called (while on the battlefield) when the player casts any spell."""
 
+    def on_other_etb_immediate(self, state: "GameState", perm: "Permanent", entering: "Permanent") -> None:
+        """Immediate non-stack entry effects for static/replacement approximations."""
+
     def on_other_etb(self, state: "GameState", perm: "Permanent", entering: "Permanent") -> None:
         """Called (while on the battlefield) when ANOTHER permanent enters —
         landfall, 'whenever a permanent enters tapped' (Amulet of Vigor),
         artifact triggers (Tezzeret)... Fired after the entering permanent's
         tapped state is settled, before its own on_etb."""
+
+    def stack_ability(
+        self,
+        *,
+        source_name: str,
+        label: str,
+        resolve: Callable,
+        kind: str = "triggered",
+        trigger_text: str | None = None,
+        ability_text: str | None = None,
+    ):
+        from ..engine.game_state import StackAbility
+
+        return StackAbility(
+            label,
+            resolve,
+            source_name=source_name,
+            kind=kind,
+            trigger_text=trigger_text,
+            ability_text=ability_text,
+        )
+
+    def etb_stack_items(self, state: "GameState", permanent: "Permanent") -> list:
+        if type(self).on_etb is Card.on_etb:
+            return []
+
+        def resolve(st, uid=permanent.uid):
+            perm = st.find_permanent(uid)
+            if perm is None:
+                return None
+            return perm.impl.on_etb(st, perm)
+
+        return [self.stack_ability(
+            source_name=permanent.name,
+            label=f"{permanent.name}: ETB",
+            resolve=resolve,
+            trigger_text=f"{permanent.name} entered the battlefield",
+            ability_text="Enter-the-battlefield ability",
+        )]
+
+    def leave_stack_items(self, state: "GameState", permanent: "Permanent") -> list:
+        if type(self).on_leave is Card.on_leave:
+            return []
+
+        snapshot = permanent.clone()
+
+        def resolve(st, snap=snapshot):
+            return snap.impl.on_leave(st, snap)
+
+        return [self.stack_ability(
+            source_name=permanent.name,
+            label=f"{permanent.name}: leaves the battlefield",
+            resolve=resolve,
+            trigger_text=f"{permanent.name} left the battlefield",
+            ability_text="Leaves-the-battlefield ability",
+        )]
+
+    def phase_stack_items(self, state: "GameState", perm: "Permanent", phase) -> list:
+        if type(self).on_phase is Card.on_phase:
+            return []
+
+        def resolve(st, uid=perm.uid, phase_now=phase):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_phase(st, live, phase_now)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: {phase.value} trigger",
+            resolve=resolve,
+            trigger_text=f"Beginning of {phase.value.replace('_', ' ')}",
+            ability_text=f"{phase.value.replace('_', ' ')} triggered ability",
+        )]
+
+    def attack_stack_items(self, state: "GameState", perm: "Permanent") -> list:
+        if type(self).on_attack is Card.on_attack:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_attack(st, live)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: attack trigger",
+            resolve=resolve,
+            trigger_text=f"{perm.name} attacked",
+            ability_text="Attack-triggered ability",
+        )]
+
+    def combat_damage_stack_items(self, state: "GameState", perm: "Permanent", damage: int) -> list:
+        if type(self).on_combat_damage is Card.on_combat_damage:
+            return []
+
+        def resolve(st, uid=perm.uid, dealt=damage):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_combat_damage(st, live, dealt)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: combat damage trigger",
+            resolve=resolve,
+            trigger_text=f"{perm.name} dealt combat damage",
+            ability_text="Combat-damage triggered ability",
+        )]
+
+    def draw_stack_items(self, state: "GameState", perm: "Permanent", nth_this_turn: int) -> list:
+        if type(self).on_draw_card is Card.on_draw_card:
+            return []
+
+        def resolve(st, uid=perm.uid, nth=nth_this_turn):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_draw_card(st, live, nth)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: draw trigger",
+            resolve=resolve,
+            trigger_text=f"A player drew card #{nth_this_turn} this turn",
+            ability_text="Draw-triggered ability",
+        )]
+
+    def cast_other_stack_items(self, state: "GameState", perm: "Permanent", card: CardData) -> list:
+        if type(self).on_cast_other is Card.on_cast_other:
+            return []
+
+        def resolve(st, uid=perm.uid, cast_card=card):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_cast_other(st, live, cast_card)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: cast trigger for {card.name}",
+            resolve=resolve,
+            trigger_text=f"{card.name} was cast",
+            ability_text="Cast-triggered ability",
+        )]
+
+    def other_etb_stack_items(self, state: "GameState", perm: "Permanent", entering: "Permanent") -> list:
+        if type(self).on_other_etb is Card.on_other_etb:
+            return []
+
+        def resolve(st, uid=perm.uid, entering_uid=entering.uid):
+            live = st.find_permanent(uid)
+            new_perm = st.find_permanent(entering_uid)
+            if live is None or new_perm is None:
+                return None
+            return live.impl.on_other_etb(st, live, new_perm)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: {entering.name} trigger",
+            resolve=resolve,
+            trigger_text=f"{entering.name} entered the battlefield",
+            ability_text="Triggered ability",
+        )]
 
     def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
         """Additional land plays per turn granted while on the battlefield
@@ -216,6 +434,24 @@ class Card:
 
     def on_equipped_died(self, state: "GameState", perm: "Permanent") -> None:
         """Called when the creature this equipment was attached to dies."""
+
+    def equipped_died_stack_items(self, state: "GameState", perm: "Permanent") -> list:
+        if type(self).on_equipped_died is Card.on_equipped_died:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_equipped_died(st, live)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: equipped creature died",
+            resolve=resolve,
+            trigger_text="Equipped creature died",
+            ability_text="Equipment death trigger",
+        )]
 
     # ---- characteristics --------------------------------------------------------
     def dynamic_power(self, state: "GameState", perm: "Permanent") -> int | None:
@@ -254,3 +490,14 @@ class UnimplementedCard(Card):
             "W", "U", "B", "R", "G",
         )
         return [ManaAbility(amount=1, choices=identity)]
+
+
+def _stack_source_from_label(label: str) -> str:
+    if ":" in label:
+        return label.split(":", 1)[0].strip()
+    if label.startswith("equip "):
+        return label[len("equip "):].split(" →", 1)[0].strip()
+    if label.startswith("channel "):
+        rest = label[len("channel "):]
+        return rest.split(":", 1)[0].strip()
+    return label

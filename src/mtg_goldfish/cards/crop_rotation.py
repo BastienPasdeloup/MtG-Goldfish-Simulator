@@ -5,6 +5,7 @@ the land sacrificed is chosen deterministically (a tapped land if any, else a
 basic, else the first) so only the search target branches."""
 from __future__ import annotations
 
+from ._common import enter_battlefield
 from ..engine.actions import begin_cast, can_afford, resolve_to_graveyard
 from .base import Card, CardAction
 from .registry import register
@@ -41,8 +42,11 @@ class CropRotation(Card):
                     return None
                 st.take_from_library(land)
                 st.shuffle_library()
-                st.put_on_battlefield(land)
-                st.emit(f"Crop Rotation: {name} onto the battlefield — shuffle")
+                enter_battlefield(
+                    st,
+                    land,
+                    announce=f"Crop Rotation: {name} onto the battlefield — shuffle",
+                )
                 return None
             return fn
 

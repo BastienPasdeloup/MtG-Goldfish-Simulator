@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ..engine.actions import can_afford, pay_cost
 from ..engine.mana import ManaCost
+from ._common import enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 
@@ -38,23 +39,35 @@ class ElvishReclaimer(Card):
             return []
 
         def make(name):
-            def fn(st):
+            def pay(st):
                 p = st.find_permanent(perm.uid)
                 sac = _sac_pick(st)
                 if p is None or p.tapped or sac is None or not pay_cost(st, cost):
-                    return None
+                    return False
                 p.tapped = True
                 st.emit(f"Elvish Reclaimer: sacrifice {sac.name}")
                 st.leaves_battlefield(sac, "graveyard")
+                return True
+
+            def resolve(st):
                 card = next((c for c in st.library if c.name == name), None)
                 if card is None:
                     return None
                 st.take_from_library(card)
                 st.shuffle_library()
-                st.put_on_battlefield(card, tapped=True)
-                st.emit(f"Elvish Reclaimer: fetch {name} tapped — shuffle")
+                enter_battlefield(
+                    st,
+                    card,
+                    tapped=True,
+                    announce=f"Elvish Reclaimer: fetch {name} tapped — shuffle",
+                )
                 return None
-            return fn
+            return CardAction.activated(
+                f"Elvish Reclaimer: fetch {name}",
+                pay,
+                resolve,
+                source_name="Elvish Reclaimer",
+                ability_text=f"Fetch {name}",
+            )
 
-        return [CardAction(f"Elvish Reclaimer: fetch {t.name}", make(t.name))
-                for t in state.search_library(lambda c: c.is_land)]
+        return [make(t.name) for t in state.search_library(lambda c: c.is_land)]

@@ -19,13 +19,22 @@ class CrystalVein(Card):
         if perm.tapped:
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped:
-                return None
+                return False
             st.leaves_battlefield(p, "graveyard")
+            return True
+
+        def resolve(st):
             st.mana_pool.add("C", 2)
             st.emit("Crystal Vein: sacrifice — add {C}{C}")
             return None
 
-        return [CardAction("Crystal Vein: sacrifice for {C}{C}", fn)]
+        return [CardAction.activated(
+            "Crystal Vein: sacrifice for {C}{C}",
+            pay,
+            resolve,
+            source_name="Crystal Vein",
+            ability_text="Add {C}{C}",
+        )]

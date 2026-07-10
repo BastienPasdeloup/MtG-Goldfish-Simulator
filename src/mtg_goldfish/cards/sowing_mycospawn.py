@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from ..engine.actions import begin_cast, can_afford
 from ..engine.mana import ManaCost
+from ._common import enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 from .eye_of_ugin import eldrazi_discount
@@ -37,10 +38,14 @@ class SowingMycospawn(Card):
                 if land is not None:
                     st.take_from_library(land)
                     st.shuffle_library()
-                    st.put_on_battlefield(land)
-                    st.emit(f"Sowing Mycospawn: {name} onto the battlefield — shuffle")
+                    enter_battlefield(
+                        st,
+                        land,
+                        announce=f"Sowing Mycospawn: {name} onto the battlefield — shuffle",
+                    )
                 from ..engine.actions import resolve_to_battlefield
-                return resolve_to_battlefield(st, card) or None
+                resolve_to_battlefield(st, card)
+                return None
             return fn
 
         # Also allow casting with no land left to find.

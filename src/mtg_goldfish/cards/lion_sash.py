@@ -31,21 +31,34 @@ class LionSash(Card):
                 seen.add(card.name)
 
                 def make(name: str):
-                    def fn(st):
+                    def pay(st):
                         p = st.find_permanent(perm.uid)
                         c = next((x for x in st.graveyard if x.name == name), None)
                         if p is None or c is None or not pay_cost(st, cost_w):
-                            return None
+                            return False
                         st.graveyard.remove(c)
                         st.exile.append(c)
+                        return True
+
+                    def resolve(st):
+                        p = st.find_permanent(perm.uid)
+                        c = next((x for x in st.exile if x.name == name), None)
+                        if p is None or c is None:
+                            return None
                         if c.is_permanent:
                             p.counters["+1/+1"] = p.counters.get("+1/+1", 0) + 1
                         st.emit(f"Lion Sash: exile {name} from graveyard"
                                 + (" (+1/+1)" if c.is_permanent else ""))
                         return None
-                    return fn
+                    return CardAction.activated(
+                        f"Lion Sash: exile {name} from GY",
+                        pay,
+                        resolve,
+                        source_name="Lion Sash",
+                        ability_text=f"Exile {name} from a graveyard",
+                    )
 
-                actions.append(CardAction(f"Lion Sash: exile {card.name} from GY", make(card.name)))
+                actions.append(make(card.name))
 
         # Reconfigure {2}: attach to a creature you control (sorcery speed).
         cost_r = ManaCost(generic=2)
@@ -55,16 +68,28 @@ class LionSash(Card):
                     continue
 
                 def make_att(uid: int):
-                    def fn(st):
+                    def pay(st):
                         p = st.find_permanent(perm.uid)
                         t = st.find_permanent(uid)
                         if p is None or t is None or not pay_cost(st, cost_r):
+                            return False
+                        return True
+
+                    def resolve(st):
+                        p = st.find_permanent(perm.uid)
+                        t = st.find_permanent(uid)
+                        if p is None or t is None:
                             return None
                         p.attached_to = t.uid
                         st.emit(f"reconfigure Lion Sash onto {t.name}")
                         return None
-                    return fn
+                    return CardAction.activated(
+                        f"reconfigure Lion Sash → {state.find_permanent(uid).name if state.find_permanent(uid) else uid}",
+                        pay,
+                        resolve,
+                        source_name="Lion Sash",
+                        ability_text="Reconfigure",
+                    )
 
-                actions.append(CardAction(f"reconfigure Lion Sash → {target.name}",
-                                          make_att(target.uid)))
+                actions.append(make_att(target.uid))
         return actions

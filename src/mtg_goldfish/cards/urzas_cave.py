@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from ..engine.actions import can_afford, pay_cost
 from ..engine.mana import ManaAbility, ManaCost
+from ._common import enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 
@@ -23,21 +24,33 @@ class UrzasCave(Card):
             return []
 
         def make(name):
-            def fn(st):
+            def pay(st):
                 p = st.find_permanent(perm.uid)
                 if p is None or p.tapped or not pay_cost(st, cost, exclude_uids={perm.uid}):
-                    return None
+                    return False
                 p.tapped = True
                 st.leaves_battlefield(p, "graveyard")
+                return True
+
+            def resolve(st):
                 card = next((c for c in st.library if c.name == name), None)
                 if card is None:
                     return None
                 st.take_from_library(card)
                 st.shuffle_library()
-                st.put_on_battlefield(card, tapped=True)
-                st.emit(f"Urza's Cave: fetch {name} tapped — shuffle")
+                enter_battlefield(
+                    st,
+                    card,
+                    tapped=True,
+                    announce=f"Urza's Cave: fetch {name} tapped — shuffle",
+                )
                 return None
-            return fn
+            return CardAction.activated(
+                f"Urza's Cave: fetch {name}",
+                pay,
+                resolve,
+                source_name="Urza's Cave",
+                ability_text=f"Fetch {name}",
+            )
 
-        return [CardAction(f"Urza's Cave: fetch {t.name}", make(t.name))
-                for t in state.search_library(lambda c: c.is_land)]
+        return [make(t.name) for t in state.search_library(lambda c: c.is_land)]

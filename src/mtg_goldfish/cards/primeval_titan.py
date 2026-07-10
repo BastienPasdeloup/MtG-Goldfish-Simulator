@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from itertools import combinations
 
-from ._common import branch_over
+from ._common import branch_over, enter_battlefield_sequence
 from .base import Card
 from .registry import register
 
@@ -26,11 +26,13 @@ def _fetch_two(state):
             uniq.append(o)
 
     def fn(st, chosen):
+        entries = []
         for name in chosen:
             card = next((c for c in st.library if c.name == name), None)
             if card is not None:
                 st.take_from_library(card)
-                st.put_on_battlefield(card, tapped=True)
+                entries.append((card, True, None))
+        enter_battlefield_sequence(st, entries)
         if chosen:
             st.shuffle_library()
             st.emit(f"Primeval Titan: fetch {', '.join(chosen)} tapped — shuffle")

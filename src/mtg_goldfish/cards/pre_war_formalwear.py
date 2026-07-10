@@ -5,7 +5,7 @@ attach this to it (branch; fizzles with no target). Equipped creature gets
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
-from ._common import branch_over
+from ._common import branch_over, enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 
@@ -23,13 +23,18 @@ class PreWarFormalwear(Card):
             return None
 
         def apply(st, name: str):
-            me = st.find_permanent(permanent.uid)
             card = next(c for c in st.graveyard if c.name == name)
             st.graveyard.remove(card)
-            newp = st.put_on_battlefield(card)
+            newp = enter_battlefield(
+                st,
+                card,
+                announce=f"Pre-War Formalwear: return {name} to the battlefield",
+            )
+            me = st.find_permanent(permanent.uid)
             if me is not None:
                 me.attached_to = newp.uid
-            st.emit(f"Pre-War Formalwear: return {name}, attached (+2/+2)")
+            st.emit(f"Pre-War Formalwear: attach to {name} (+2/+2)")
+            return None
 
         return branch_over(state, targets, apply)
 

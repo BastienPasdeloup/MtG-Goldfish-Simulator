@@ -57,9 +57,12 @@ def branch_over(state: "GameState", options: list, fn: Callable) -> list:
     out = []
     for opt in options:
         b = state.clone()
-        fn(b, opt)
-        b.check_deaths()
-        out.append(b)
+        branches = fn(b, opt)
+        if branches is None:
+            b.check_deaths()
+            out.append(b)
+        else:
+            out.extend(branches)
     return out
 
 
@@ -68,6 +71,35 @@ def enter_from_stack_marked(state: "GameState", card: CardData, marks: dict):
     from ..engine.actions import resolve_to_battlefield
 
     return resolve_to_battlefield(state, card, marks=marks)
+
+
+def enter_battlefield(
+    state: "GameState",
+    card: CardData,
+    *,
+    tapped: bool | None = None,
+    announce: str | None = None,
+):
+    """Put a card onto the battlefield from a non-stack effect and queue its
+    ETB triggers. The caller settles the resulting stack."""
+    perm = state.put_on_battlefield(card, tapped=tapped, fire_etb=False, announce=announce)
+    state.queue_entry_triggers([perm])
+    return perm
+
+
+def enter_battlefield_sequence(
+    state: "GameState",
+    entries: list[tuple[CardData, bool | None, str | None]],
+):
+    """Put multiple permanents onto the battlefield simultaneously and queue
+    all resulting ETB triggers afterwards."""
+    permanents = []
+    for card, tapped, announce in entries:
+        permanents.append(
+            state.put_on_battlefield(card, tapped=tapped, fire_etb=False, announce=announce)
+        )
+    state.queue_entry_triggers(permanents)
+    return permanents
 
 
 def discard(state: "GameState", card: CardData) -> None:
@@ -125,16 +157,19 @@ def fetch_land(name: str, subtypes: tuple[str, str]) -> type[Card]:
     mode, e.g. a fetched shockland) is a branch."""
 
     def _fetch_fn(uid: int, target_name: str, mode: dict | None):
-        def fn(state: "GameState"):
-            from ..engine.actions import _apply_etb_mode
-
+        def pay(state: "GameState"):
             perm = state.find_permanent(uid)
             if perm is None or perm.tapped or state.life <= 1:
-                return None
+                return False
             perm.tapped = True
             state.life -= 1
             state.emit(f"{perm.name}: tap, pay 1 life, sacrifice")
             state.leaves_battlefield(perm, "graveyard")
+            return True
+
+        def resolve(state: "GameState"):
+            from ..engine.actions import _apply_etb_mode
+
             target = next((c for c in state.library if c.name == target_name), None)
             if target is None:
                 return None
@@ -143,14 +178,12 @@ def fetch_land(name: str, subtypes: tuple[str, str]) -> type[Card]:
             state.take_from_library(target)
             newp = state.put_on_battlefield(target, fire_etb=False)
             _apply_etb_mode(state, newp, mode)
-            state.fire_other_etb(newp)  # landfall / Amulet watchers
             state.shuffle_library()
             suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
             state.emit(f"fetched {target.name}{suffix} — shuffle")
-            branches = newp.impl.on_etb(state, newp)
-            state.check_deaths()
-            return branches
-        return fn
+            state.queue_entry_triggers([newp])
+            return None
+        return pay, resolve
 
     @register
     class _Fetch(Card):
@@ -166,9 +199,13 @@ def fetch_land(name: str, subtypes: tuple[str, str]) -> type[Card]:
                 modes = build_card(target).etb_modes(state) or [None]
                 for mode in modes:
                     suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
+                    pay, resolve = _fetch_fn(perm.uid, target.name, mode)
                     acts.append(CardAction(
                         f"{name}: fetch {target.name}{suffix}",
-                        _fetch_fn(perm.uid, target.name, mode),
+                        resolve,
+                        pre_fn=pay,
+                        source_name=name,
+                        ability_text=f"Fetch {target.name}{suffix}",
                     ))
             return acts
 
@@ -319,15 +356,26 @@ def transform_actions(
     if perm.transformed or not can_afford(state, cost):
         return []
 
-    def fn(st: "GameState"):
+    def pay(st: "GameState"):
         p = st.find_permanent(perm.uid)
         if p is None or p.transformed or not pay_cost(st, cost):
+            return False
+
+    def resolve(st: "GameState"):
+        p = st.find_permanent(perm.uid)
+        if p is None or p.transformed:
             return None
         p.transformed = True
         st.emit(f"transform into {back_name}")
         return None
 
-    return [CardAction(f"transform → {back_name}", fn)]
+    return [CardAction.activated(
+        f"transform → {back_name}",
+        pay,
+        resolve,
+        source_name=perm.name,
+        ability_text=f"Transform into {back_name}",
+    )]
 
 
 # --------------------------------------------------------------------------
@@ -347,8 +395,13 @@ def tutor_to_battlefield_branches(
         card = next(c for c in st.library if c.name == name)
         st.take_from_library(card)
         st.shuffle_library()
-        st.put_on_battlefield(card, tapped=tapped)
-        st.emit(f"search: {card.name} onto battlefield{' tapped' if tapped else ''} — shuffle{note}")
+        enter_battlefield(
+            st,
+            card,
+            tapped=tapped,
+            announce=f"search: {card.name} onto battlefield{' tapped' if tapped else ''} — shuffle{note}",
+        )
+        return None
 
     return branch_over(state, [t.name for t in targets], fn)
 
@@ -497,9 +550,14 @@ def sac_fetch_land(name: str, types: tuple[str, ...]) -> type[Card]:
                 card = next(c for c in st.library if c.name == nm)
                 st.take_from_library(card)
                 st.shuffle_library()
-                st.put_on_battlefield(card, tapped=True)
                 st.life += 1
-                st.emit(f"{name}: fetch {nm} tapped, gain 1 life — shuffle")
+                enter_battlefield(
+                    st,
+                    card,
+                    tapped=True,
+                    announce=f"{name}: fetch {nm} tapped, gain 1 life — shuffle",
+                )
+                return None
 
             return branch_over(state, [t.name for t in targets], fn)
 
@@ -527,16 +585,25 @@ class ClueToken(Card):
         if not can_afford(state, cost):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or not pay_cost(st, cost):
-                return None
+                return False
             st.leaves_battlefield(p, "none")
+            return True
+
+        def resolve(st):
             st.emit("sacrifice Clue — draw a card")
             st.draw(1)
             return None
 
-        return [CardAction("Clue: {2}, sacrifice — draw a card", fn)]
+        return [CardAction.activated(
+            "Clue: {2}, sacrifice — draw a card",
+            pay,
+            resolve,
+            source_name="Clue",
+            ability_text="Draw a card",
+        )]
 
 
 @register
@@ -567,16 +634,25 @@ class FoodToken(Card):
         if perm.tapped or not can_afford(state, cost):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped or not pay_cost(st, cost):
-                return None
+                return False
             st.leaves_battlefield(p, "none")
+            return True
+
+        def resolve(st):
             st.life += 3
             st.emit("sacrifice Food — gain 3 life")
             return None
 
-        return [CardAction("Food: {2}, sacrifice — gain 3 life", fn)]
+        return [CardAction.activated(
+            "Food: {2}, sacrifice — gain 3 life",
+            pay,
+            resolve,
+            source_name="Food",
+            ability_text="Gain 3 life",
+        )]
 
 
 @register
@@ -595,20 +671,33 @@ class LanderToken(Card):
 
         acts = []
         for target in state.search_library(lambda c: c.is_land and "basic" in c.type_line.lower()):
-            def fn(st, name=target.name):
+            def pay(st, name=target.name):
                 p = st.find_permanent(perm.uid)
                 if p is None or p.tapped or not pay_cost(st, cost):
-                    return None
+                    return False
                 st.leaves_battlefield(p, "none")
+                return True
+
+            def resolve(st, name=target.name):
                 card = next((c for c in st.library if c.name == name), None)
                 if card is None:
                     return None
                 st.take_from_library(card)
                 st.shuffle_library()
-                st.put_on_battlefield(card, tapped=True)
-                st.emit(f"Lander: fetch {name} tapped — shuffle")
+                enter_battlefield(
+                    st,
+                    card,
+                    tapped=True,
+                    announce=f"Lander: fetch {name} tapped — shuffle",
+                )
                 return None
-            acts.append(CardAction(f"Lander: fetch {target.name}", fn))
+            acts.append(CardAction.activated(
+                f"Lander: fetch {target.name}",
+                pay,
+                resolve,
+                source_name="Lander",
+                ability_text=f"Fetch {target.name}",
+            ))
         return acts
 
 

@@ -19,11 +19,14 @@ class ExpeditionMap(Card):
             return []
 
         def make(name):
-            def fn(st):
+            def pay(st):
                 p = st.find_permanent(perm.uid)
                 if p is None or p.tapped or not pay_cost(st, cost):
-                    return None
+                    return False
                 st.leaves_battlefield(p, "graveyard")
+                return True
+
+            def resolve(st):
                 card = next((c for c in st.library if c.name == name), None)
                 if card is None:
                     return None
@@ -32,7 +35,12 @@ class ExpeditionMap(Card):
                 st.hand.append(card)
                 st.emit(f"Expedition Map: search {name} to hand — shuffle")
                 return None
-            return fn
+            return CardAction.activated(
+                f"Expedition Map: search {name}",
+                pay,
+                resolve,
+                source_name="Expedition Map",
+                ability_text=f"Search {name} to hand",
+            )
 
-        return [CardAction(f"Expedition Map: search {t.name}", make(t.name))
-                for t in state.search_library(lambda c: c.is_land)]
+        return [make(t.name) for t in state.search_library(lambda c: c.is_land)]

@@ -99,8 +99,10 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .model-head { display: flex; align-items: baseline; gap: .5rem; }
 .model-foot { font-size: 12px; margin-top: .35rem; }
 
-#hover-img { position: fixed; z-index: 50; pointer-events: none; display: none; }
-#hover-img img { width: 244px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+#hover-img { position: fixed; z-index: 50; pointer-events: none; display: none; max-width: 264px; }
+#hover-img img { width: 244px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.6); display: block; }
+#hover-img .hover-meta { margin-top: .45rem; padding: .5rem .6rem; border-radius: 10px; background: rgba(15,17,22,.94); border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,.35); font-size: 12px; color: #e6e8ee; max-width: 244px; white-space: normal; display: none; }
+#hover-img .hover-meta .k { color: #9aa3b2; display: block; margin-bottom: .15rem; }
 
 /* properties */
 #prop-list { margin-top: .7rem; } /* air between "+ Add property" and the first box */

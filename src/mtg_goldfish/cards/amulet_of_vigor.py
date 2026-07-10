@@ -21,3 +21,24 @@ class AmuletOfVigor(Card):
         if entering.tapped:
             entering.tapped = False
             state.emit(f"Amulet of Vigor: untap {entering.name}")
+
+    def other_etb_stack_items(self, state, perm, entering):
+        if not entering.tapped:
+            return []
+
+        def resolve(st, uid=perm.uid, entering_uid=entering.uid, name=entering.name):
+            source = st.find_permanent(uid)
+            target = st.find_permanent(entering_uid)
+            if source is None or target is None or not target.tapped:
+                return None
+            target.tapped = False
+            st.emit(f"Amulet of Vigor: untap {name}")
+            return None
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"Amulet of Vigor: untap {entering.name}",
+            resolve=resolve,
+            trigger_text=f"{entering.name} entered the battlefield tapped",
+            ability_text=f"Untap {entering.name}",
+        )]

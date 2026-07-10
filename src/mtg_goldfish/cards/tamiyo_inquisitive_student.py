@@ -13,6 +13,42 @@ from .registry import register
 class TamiyoInquisitiveStudent(Card):
     card_name = "Tamiyo, Inquisitive Student // Tamiyo, Seasoned Scholar"
 
+    def attack_stack_items(self, state, perm):
+        if perm.transformed:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_attack(st, live)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label="Tamiyo: attack trigger",
+            resolve=resolve,
+            trigger_text=f"{perm.name} attacked",
+            ability_text="Investigate",
+        )]
+
+    def draw_stack_items(self, state, perm, nth_this_turn):
+        if perm.transformed or nth_this_turn != 3:
+            return []
+
+        def resolve(st, uid=perm.uid, nth=nth_this_turn):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_draw_card(st, live, nth)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label="Tamiyo: third-draw trigger",
+            resolve=resolve,
+            trigger_text="You drew your third card this turn",
+            ability_text="Transform Tamiyo into Tamiyo, Seasoned Scholar",
+        )]
+
     def on_attack(self, state, perm):
         if not perm.transformed:
             state.emit("Tamiyo attacks: investigate")
@@ -30,16 +66,28 @@ class TamiyoInquisitiveStudent(Card):
             return []
         actions = []
 
-        def plus2(st):
+        def pay_plus2(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.turn_flags.get("loyalty_used"):
-                return None
+                return False
             p.turn_flags["loyalty_used"] = 1
             p.counters["loyalty"] = p.counters.get("loyalty", 0) + 2
+            return True
+
+        def resolve_plus2(st):
+            p = st.find_permanent(perm.uid)
+            if p is None:
+                return None
             st.emit(f"Tamiyo +2 (loyalty {p.counters['loyalty']}) — defensive, no combat effect")
             return None
 
-        actions.append(CardAction("Tamiyo: +2", plus2))
+        actions.append(CardAction.activated(
+            "Tamiyo: +2",
+            pay_plus2,
+            resolve_plus2,
+            source_name="Tamiyo, Seasoned Scholar",
+            ability_text="Add 2 loyalty",
+        ))
 
         if perm.counters.get("loyalty", 0) >= 3:
             spells = sorted({
@@ -48,13 +96,18 @@ class TamiyoInquisitiveStudent(Card):
             })
 
             def make_minus3(name: str):
-                def fn(st):
+                def pay(st):
                     p = st.find_permanent(perm.uid)
-                    c = next((x for x in st.graveyard if x.name == name), None)
-                    if p is None or c is None or p.turn_flags.get("loyalty_used"):
-                        return None
+                    if p is None or p.turn_flags.get("loyalty_used"):
+                        return False
                     p.turn_flags["loyalty_used"] = 1
                     p.counters["loyalty"] -= 3
+                    return True
+
+                def resolve(st):
+                    c = next((x for x in st.graveyard if x.name == name), None)
+                    if c is None:
+                        return None
                     st.graveyard.remove(c)
                     st.hand.append(c)
                     st.emit(f"Tamiyo −3: return {name} to hand")
@@ -62,21 +115,36 @@ class TamiyoInquisitiveStudent(Card):
                         st.mana_pool.add("G", 1)  # one mana of any colour
                         st.emit("Tamiyo −3: green card — add one mana")
                     return None
-                return fn
+                return CardAction.activated(
+                    f"Tamiyo: −3 return {name}",
+                    pay,
+                    resolve,
+                    source_name="Tamiyo, Seasoned Scholar",
+                    ability_text=f"Return {name} to hand",
+                )
 
-            actions.extend(CardAction(f"Tamiyo: −3 return {n}", make_minus3(n)) for n in spells)
+            actions.extend(make_minus3(n) for n in spells)
 
         if perm.counters.get("loyalty", 0) >= 7:
-            def minus7(st):
+            def pay_minus7(st):
                 p = st.find_permanent(perm.uid)
                 if p is None or p.turn_flags.get("loyalty_used"):
-                    return None
+                    return False
                 p.turn_flags["loyalty_used"] = 1
                 p.counters["loyalty"] -= 7
+                return True
+
+            def resolve_minus7(st):
                 n = (len(st.library) + 1) // 2
                 st.emit(f"Tamiyo −7: draw {n}")
                 st.draw(n)
                 return None
 
-            actions.append(CardAction("Tamiyo: −7 draw half the library", minus7))
+            actions.append(CardAction.activated(
+                "Tamiyo: −7 draw half the library",
+                pay_minus7,
+                resolve_minus7,
+                source_name="Tamiyo, Seasoned Scholar",
+                ability_text="Draw half your library",
+            ))
         return actions

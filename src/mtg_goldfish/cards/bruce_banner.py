@@ -25,17 +25,26 @@ class BruceBanner(Card):
                     break
 
                 def make(xx: int, cst: ManaCost):
-                    def fn(st):
+                    def pay(st):
                         p = st.find_permanent(perm.uid)
                         if p is None or p.tapped or p.transformed or not pay_cost(st, cst):
-                            return None
+                            return False
                         p.tapped = True
+                        return True
+
+                    def resolve(st):
                         st.emit(f"Bruce Banner: {{X={xx}}}{{X}}, {{T}} — draw {xx}")
                         st.draw(xx)
                         return None
-                    return fn
+                    return CardAction.activated(
+                        f"Bruce Banner: draw {xx} (X={xx})",
+                        pay,
+                        resolve,
+                        source_name="Bruce Banner // The Incredible Hulk",
+                        ability_text=f"Draw {xx} cards",
+                    )
 
-                actions.append(CardAction(f"Bruce Banner: draw {x} (X={x})", make(x, cost)))
+                actions.append(make(x, cost))
         actions.extend(transform_actions(
             state, perm,
             ManaCost(generic=2, pips=(("R", 2), ("G", 2))),

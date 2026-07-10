@@ -7,6 +7,7 @@ skipped as documented approximations.)"""
 from __future__ import annotations
 
 from ..engine.actions import begin_cast, can_afford, resolve_to_graveyard
+from ._common import enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 
@@ -33,8 +34,13 @@ class ArchdruidsCharm(Card):
                 st.take_from_library(found)
                 st.shuffle_library()
                 if found.is_land:
-                    st.put_on_battlefield(found, tapped=True)
-                    st.emit(f"Archdruid's Charm: {name} onto the battlefield tapped — shuffle")
+                    enter_battlefield(
+                        st,
+                        found,
+                        tapped=True,
+                        announce=f"Archdruid's Charm: {name} onto the battlefield tapped — shuffle",
+                    )
+                    return None
                 else:
                     st.hand.append(found)
                     st.emit(f"Archdruid's Charm: {name} to hand — shuffle")

@@ -23,30 +23,51 @@ class TalonGatesOfMadara(Card):
         if not can_afford(state, cost):
             return []
 
-        def fn(st):
+        def pay(st):
             card = next((c for c in st.hand if c.name == self.card_name), None)
             if card is None or not pay_cost(st, cost):
+                return False
+            return True
+
+        def resolve(st):
+            card = next((c for c in st.hand if c.name == self.card_name), None)
+            if card is None:
                 return None
             st.hand.remove(card)
             st.put_on_battlefield(card)
             st.emit("Talon Gates of Madara: {4} — onto the battlefield (no land drop)")
             return None
 
-        return [CardAction("Talon Gates of Madara: {4}, put onto battlefield", fn)]
+        return [CardAction.activated(
+            "Talon Gates of Madara: {4}, put onto battlefield",
+            pay,
+            resolve,
+            source_name="Talon Gates of Madara",
+            ability_text="Put Talon Gates of Madara onto the battlefield",
+        )]
 
     def battlefield_actions(self, state, perm):
         # Taps for this ability, so its own {T}:{C} can't help pay the {1}.
         if perm.tapped or not can_afford(state, ManaCost(generic=1), exclude_uids={perm.uid}):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped or not pay_cost(st, ManaCost(generic=1), exclude_uids={perm.uid}):
-                return None
+                return False
             p.tapped = True
+            return True
+
+        def resolve(st):
             color = any_identity_color(st)[0]
             st.mana_pool.add(color, 1)
             st.emit(f"Talon Gates of Madara: {{1}}, {{T}} — add {{{color}}}")
             return None
 
-        return [CardAction("Talon Gates of Madara: {1}, {T} — any color", fn)]
+        return [CardAction.activated(
+            "Talon Gates of Madara: {1}, {T} — any color",
+            pay,
+            resolve,
+            source_name="Talon Gates of Madara",
+            ability_text="Add one mana of any color",
+        )]

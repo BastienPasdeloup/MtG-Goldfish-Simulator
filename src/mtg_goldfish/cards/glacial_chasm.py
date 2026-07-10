@@ -16,6 +16,24 @@ class GlacialChasm(Card):
 
     prevents_attacks = True
 
+    def phase_stack_items(self, state, perm, phase):
+        if phase != Phase.UPKEEP:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_phase(st, live, Phase.UPKEEP)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label="Glacial Chasm: cumulative upkeep",
+            resolve=resolve,
+            trigger_text="Beginning of your upkeep",
+            ability_text="Cumulative upkeep — pay 2 life for each age counter or sacrifice Glacial Chasm",
+        )]
+
     def on_etb(self, state, permanent):
         lands = {}
         for p in state.battlefield:

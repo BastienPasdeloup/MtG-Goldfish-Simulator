@@ -4,6 +4,7 @@ control. ETB: mill four cards, then return all land cards from your graveyard
 to the battlefield tapped."""
 from __future__ import annotations
 
+from ._common import enter_battlefield_sequence
 from .base import Card
 from .registry import register
 
@@ -23,6 +24,10 @@ class LumraBellowOfTheWoods(Card):
         lands = [c for c in state.graveyard if c.is_land]
         for card in lands:
             state.graveyard.remove(card)
-            state.put_on_battlefield(card, tapped=True)
+        enter_battlefield_sequence(
+            state,
+            [(card, True, None) for card in lands],
+        )
         if lands:
             state.emit(f"Lumra: return {len(lands)} land(s) from graveyard tapped")
+        return None

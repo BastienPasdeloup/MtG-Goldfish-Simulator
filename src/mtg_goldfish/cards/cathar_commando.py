@@ -24,16 +24,28 @@ class CatharCommando(Card):
         ]
 
         def make(uid: int):
-            def fn(st):
+            def pay(st):
                 me = st.find_permanent(perm.uid)
                 target = st.find_permanent(uid)
                 if me is None or target is None or not pay_cost(st, cost):
-                    return None
-                st.emit(f"sacrifice Cathar Commando: destroy {target.name}")
+                    return False
+                st.emit("sacrifice Cathar Commando")
                 st.leaves_battlefield(me, "graveyard")
+                return True
+
+            def resolve(st):
+                target = st.find_permanent(uid)
+                if target is None:
+                    return None
+                st.emit(f"Cathar Commando: destroy {target.name}")
                 st.leaves_battlefield(target, "graveyard")
                 return None
-            return fn
+            return CardAction.activated(
+                f"Cathar Commando: sac, destroy {state.find_permanent(uid).name if state.find_permanent(uid) else uid}",
+                pay,
+                resolve,
+                source_name="Cathar Commando",
+                ability_text="Destroy target artifact or enchantment",
+            )
 
-        return [CardAction(f"Cathar Commando: sac, destroy {t.name}", make(t.uid))
-                for t in targets]
+        return [make(t.uid) for t in targets]

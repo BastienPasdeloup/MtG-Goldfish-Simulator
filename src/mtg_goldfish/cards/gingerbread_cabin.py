@@ -19,6 +19,11 @@ class GingerbreadCabin(Card):
     def mana_abilities(self, state):
         return [ManaAbility(amount=1, choices=("G",))]
 
+    def etb_stack_items(self, state, permanent):
+        if permanent.tapped:
+            return []
+        return super().etb_stack_items(state, permanent)
+
     def on_etb(self, state, permanent):
         if not permanent.tapped:
             state.make_token("Food", 0, 0, "Token Artifact — Food")

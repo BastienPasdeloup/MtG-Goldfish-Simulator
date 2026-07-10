@@ -38,11 +38,12 @@ class DiscipleOfFreyalise(Card):
                 st.hand.remove(card)
                 st.lands_played_this_turn += 1
                 perm = st.put_on_battlefield(card, fire_etb=False)
+                perm.turn_flags["played_as_land"] = 1
                 perm.transformed = True  # it is Garden of Freyalise
                 perm.tapped = mode["tapped"]
                 if mode["life"]:
                     st.life -= mode["life"]
-                st.fire_other_etb(perm)
+                st.queue_entry_triggers([perm])
                 st.emit(f"play land Garden of Freyalise ({mode['label']})")
                 return None
             return fn

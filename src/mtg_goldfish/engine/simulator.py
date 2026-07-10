@@ -199,9 +199,8 @@ def _apply_step_entry(state: GameState) -> None:
         state.check_deaths()
 
     # "At the beginning of <phase>" triggers (upkeep, combat, end step...).
-    for perm in list(state.battlefield):
-        perm.impl.on_phase(state, perm, state.phase)
-    state.check_deaths()
+    state.queue_phase_triggers(state.phase)
+    state.settle_nonbranching(f"{state.phase.value} triggers")
 
 
 def _goto_next_phase(state: GameState) -> None:

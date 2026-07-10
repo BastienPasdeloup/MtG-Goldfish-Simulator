@@ -3,7 +3,7 @@ ETB: you may put a land card from your hand onto the battlefield tapped
 (one branch per distinct land, plus declining)."""
 from __future__ import annotations
 
-from ._common import branch_over
+from ._common import branch_over, enter_battlefield
 from .base import Card
 from .registry import register
 
@@ -24,7 +24,8 @@ class ArborealGrazer(Card):
             if card is None:
                 return
             st.hand.remove(card)
-            st.put_on_battlefield(
+            enter_battlefield(
+                st,
                 card, tapped=True,
                 announce=f"Arboreal Grazer: put {name} onto the battlefield tapped",
             )

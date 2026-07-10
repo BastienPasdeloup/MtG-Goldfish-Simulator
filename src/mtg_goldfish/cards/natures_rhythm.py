@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from ..engine.actions import available_mana_sources, begin_cast, resolve_to_graveyard
 from ..engine.mana import ManaCost
+from ._common import enter_battlefield
 from .base import Card, CardAction
 from .registry import register
 
@@ -38,8 +39,11 @@ class NaturesRhythm(Card):
                             return None
                         st.take_from_library(found)
                         st.shuffle_library()
-                        st.put_on_battlefield(found)
-                        st.emit(f"Nature's Rhythm: {name} onto the battlefield — shuffle")
+                        enter_battlefield(
+                            st,
+                            found,
+                            announce=f"Nature's Rhythm: {name} onto the battlefield — shuffle",
+                        )
                         return None
                     return fn
 

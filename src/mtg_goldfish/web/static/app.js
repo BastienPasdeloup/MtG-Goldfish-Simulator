@@ -307,9 +307,9 @@ function renderDeck() {
   });
 }
 
-function hoverable(node, img) {
+function hoverable(node, img, meta = null) {
   if (!img) return node;
-  node.onmouseenter = () => showHover(img);
+  node.onmouseenter = () => showHover(img, meta);
   node.onmousemove = moveHover;
   node.onmouseleave = hideHover;
   return node;
@@ -460,7 +460,21 @@ async function openModelModal() {
 }
 
 const hover = $("hover-img");
-function showHover(src) { hover.querySelector("img").src = src; hover.style.display = "block"; }
+function showHover(src, meta = null) {
+  hover.querySelector("img").src = src;
+  const box = hover.querySelector(".hover-meta");
+  if (meta && (meta.title || meta.trigger || meta.ability)) {
+    box.innerHTML = "";
+    if (meta.title) box.append(el("div", { className: "k", textContent: meta.title }));
+    if (meta.trigger) box.append(el("div", { textContent: `Triggered by: ${meta.trigger}` }));
+    if (meta.ability) box.append(el("div", { textContent: `On stack: ${meta.ability}` }));
+    box.style.display = "block";
+  } else {
+    box.textContent = "";
+    box.style.display = "none";
+  }
+  hover.style.display = "block";
+}
 function moveHover(e) {
   const x = Math.min(e.clientX + 18, window.innerWidth - 260);
   const y = Math.min(e.clientY + 18, window.innerHeight - 360);
@@ -1093,19 +1107,46 @@ function tile(name, opts = {}) {
 // A pile of cards stacked on top of each other, each revealing only the top
 // strip of its image. Cards are added chronologically, so the last (most
 // recent) one paints over the previous. Hover shows the full card.
-function pile(names) {
+function normalizePileItem(raw) {
+  if (typeof raw === "string") {
+    return { name: raw, source_name: raw, kind: "card", trigger: null, ability: raw };
+  }
+  const asName = (v) => {
+    if (typeof v === "string") return v;
+    if (v && typeof v.name === "string") return v.name;
+    if (v && typeof v.label === "string") return v.label;
+    return null;
+  };
+  const name = asName(raw?.name) || asName(raw?.label) || asName(raw?.source_name) || "unknown";
+  const source = asName(raw?.source_name) || name;
+  return {
+    name,
+    source_name: source,
+    kind: typeof raw?.kind === "string" ? raw.kind : "card",
+    trigger: typeof raw?.trigger === "string" ? raw.trigger : null,
+    ability: typeof raw?.ability === "string" ? raw.ability : name,
+  };
+}
+
+function pile(items) {
   const wrap = el("div", { className: "pile" });
-  const list = names || [];
+  const list = items || [];
   if (!list.length) {
     wrap.append(el("div", { className: "pile-empty", textContent: "—" }));
     return wrap;
   }
-  for (const n of list) {
-    const img = state.imageMap[n];
-    const card = el("div", { className: "pile-img", title: n });
-    if (img) card.append(el("img", { src: img, alt: n, loading: "lazy" }));
-    else card.append(el("div", { className: "fallback", textContent: n }));
-    wrap.append(hoverable(card, img));
+  for (const raw of list) {
+    const item = normalizePileItem(raw);
+    const source = item.source_name || item.name;
+    const img = state.imageMap[source] || state.imageMap[item.name];
+    const card = el("div", { className: "pile-img", title: item.name });
+    if (img) card.append(el("img", { src: img, alt: item.name, loading: "lazy" }));
+    else card.append(el("div", { className: "fallback", textContent: item.name }));
+    wrap.append(hoverable(card, img, {
+      title: item.kind === "spell" || item.kind === "card" ? item.name : source,
+      trigger: item.kind === "triggered" ? item.trigger : (item.kind === "activated" ? "Activated ability" : null),
+      ability: item.kind === "spell" || item.kind === "card" ? null : item.ability,
+    }));
   }
   return wrap;
 }

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ..deck.models import CardData, Deck
 from .mana import ManaPool
@@ -99,6 +99,29 @@ class Permanent:
         )
 
 
+@dataclass(frozen=True)
+class StackAbility:
+    label: str
+    resolve: Callable[["GameState"], list["GameState"] | None]
+    source_name: str | None = None
+    kind: str = "triggered"
+    trigger_text: str | None = None
+    ability_text: str | None = None
+
+    @property
+    def name(self) -> str:
+        return self.label
+
+    def public(self) -> dict:
+        return {
+            "name": self.label,
+            "source_name": self.source_name or self.label,
+            "kind": self.kind,
+            "trigger": self.trigger_text,
+            "ability": self.ability_text or self.label,
+        }
+
+
 @dataclass
 class GameState:
     format_id: str = "duel_commander"
@@ -110,7 +133,7 @@ class GameState:
     graveyard: list[CardData] = field(default_factory=list)
     exile: list[CardData] = field(default_factory=list)
     command_zone: list[CardData] = field(default_factory=list)
-    stack: list[CardData] = field(default_factory=list)
+    stack: list[CardData | StackAbility] = field(default_factory=list)
     # Cards exiled "you may play it" (source_uid, card); playable while source lives.
     exile_playable: list[tuple[int, CardData]] = field(default_factory=list)
 
@@ -203,6 +226,59 @@ class GameState:
         frame.update(self.snapshot())
         self.log.append(frame)
 
+    def push_triggered_abilities(self, abilities: list[StackAbility]) -> None:
+        """Push abilities in the order they should resolve."""
+        for ability in reversed(abilities):
+            self.stack.append(ability)
+            self.emit(f"{ability.name} (on the stack)")
+
+    def resolve_triggered_abilities(self) -> list["GameState"] | None:
+        branched = False
+        states = [self]
+        while True:
+            progressed = False
+            next_states: list[GameState] = []
+            for state in states:
+                top = state.stack[-1] if state.stack else None
+                if not isinstance(top, StackAbility):
+                    next_states.append(state)
+                    continue
+                progressed = True
+                ability = state.stack.pop()
+                state.emit(f"{ability.name} resolves")
+                branches = ability.resolve(state)
+                if branches is None:
+                    state.check_deaths()
+                    next_states.append(state)
+                    continue
+                branched = True
+                for branch in branches:
+                    branch.check_deaths()
+                    next_states.append(branch)
+            states = next_states
+            if not progressed:
+                break
+        return states if branched else None
+
+    def settle(self, branches: list["GameState"] | None = None) -> list["GameState"] | None:
+        states = branches or [self]
+        branched = branches is not None
+        out: list[GameState] = []
+        for state in states:
+            resolved = state.resolve_triggered_abilities()
+            if resolved is None:
+                state.check_deaths()
+                out.append(state)
+            else:
+                branched = True
+                out.extend(resolved)
+        return out if branched else None
+
+    def settle_nonbranching(self, context: str) -> None:
+        branches = self.settle()
+        if branches is not None:
+            raise RuntimeError(f"Branching triggered abilities are unsupported during {context}")
+
     def reset_turn_counters(self) -> None:
         self.lands_played_this_turn = 0
         self.bonus_land_drops = 0
@@ -234,12 +310,60 @@ class GameState:
             p.impl.extra_land_drops(self, p) for p in self.battlefield
         )
 
+    def queue_entry_triggers(self, entering: list[Permanent]) -> None:
+        """Apply immediate entry statics, then put all ETB abilities on the stack.
+
+        `entering` may contain multiple permanents that entered simultaneously.
+        """
+        for ent in entering:
+            for perm in list(self.battlefield):
+                if perm is not ent and perm in self.battlefield:
+                    perm.impl.on_other_etb_immediate(self, perm, ent)
+
+        abilities: list[StackAbility] = []
+        for ent in entering:
+            for perm in list(self.battlefield):
+                if perm is not ent and perm in self.battlefield:
+                    abilities.extend(perm.impl.other_etb_stack_items(self, perm, ent))
+        for ent in entering:
+            live = self.find_permanent(ent.uid)
+            if live is not None:
+                abilities.extend(live.impl.etb_stack_items(self, live))
+        self.push_triggered_abilities(abilities)
+
     def fire_other_etb(self, entering: Permanent) -> None:
-        """Notify every OTHER permanent that `entering` just entered
-        (landfall, Amulet of Vigor, Tezzeret...)."""
-        for p in list(self.battlefield):
-            if p is not entering and p in self.battlefield:
-                p.impl.on_other_etb(self, p, entering)
+        """Backward-compatible single-entry wrapper for ETB trigger queuing."""
+        self.queue_entry_triggers([entering])
+
+    def queue_phase_triggers(self, phase) -> None:
+        abilities: list[StackAbility] = []
+        for perm in list(self.battlefield):
+            abilities.extend(perm.impl.phase_stack_items(self, perm, phase))
+        self.push_triggered_abilities(abilities)
+
+    def queue_draw_triggers(self, nth_this_turn: int) -> None:
+        abilities: list[StackAbility] = []
+        for perm in list(self.battlefield):
+            abilities.extend(perm.impl.draw_stack_items(self, perm, nth_this_turn))
+        self.push_triggered_abilities(abilities)
+
+    def queue_cast_triggers(self, card: CardData) -> None:
+        abilities: list[StackAbility] = []
+        for perm in list(self.battlefield):
+            abilities.extend(perm.impl.cast_other_stack_items(self, perm, card))
+        self.push_triggered_abilities(abilities)
+
+    def queue_attack_triggers(self, perm: Permanent) -> None:
+        self.push_triggered_abilities(perm.impl.attack_stack_items(self, perm))
+
+    def queue_combat_damage_triggers(self, perm: Permanent, damage: int) -> None:
+        self.push_triggered_abilities(perm.impl.combat_damage_stack_items(self, perm, damage))
+
+    def queue_leave_triggers(self, perm: Permanent) -> None:
+        self.push_triggered_abilities(perm.impl.leave_stack_items(self, perm))
+
+    def queue_equipped_died_triggers(self, perm: Permanent) -> None:
+        self.push_triggered_abilities(perm.impl.equipped_died_stack_items(self, perm))
 
     def to_graveyard(self, card: CardData) -> None:
         self.graveyard.append(card)
@@ -255,8 +379,7 @@ class GameState:
             self.cards_drawn += 1
             self.cards_drawn_this_turn += 1
             nth = self.cards_drawn_this_turn
-            for perm in list(self.battlefield):
-                perm.impl.on_draw_card(self, perm, nth)
+            self.queue_draw_triggers(nth)
 
     # ---- library search / shuffle -------------------------------------------
     def shuffle_library(self) -> None:
@@ -300,8 +423,8 @@ class GameState:
         if announce:
             self.emit(announce)
         if fire_etb:
-            self.fire_other_etb(perm)  # landfall / enters-tapped watchers first
-            perm.impl.on_etb(self, perm)
+            self.queue_entry_triggers([perm])
+            self.settle_nonbranching(f"direct battlefield entry of {perm.name}")
         return perm
 
     def make_token(self, name: str, power: int, toughness: int, type_line: str) -> Permanent:
@@ -323,7 +446,7 @@ class GameState:
                     self.leaves_battlefield(att, "graveyard")
                 else:
                     att.attached_to = None
-        perm.impl.on_leave(self, perm)
+        self.queue_leave_triggers(perm)
         if perm.is_token:
             return  # tokens cease to exist
         if to == "graveyard":
@@ -357,7 +480,7 @@ class GameState:
                 self.emit(f"{perm.name} dies")
                 self.leaves_battlefield(perm, "graveyard")
                 for eq in holders:
-                    eq.impl.on_equipped_died(self, eq)
+                    self.queue_equipped_died_triggers(eq)
 
     # ---- effective stats (counters, temp mods, equipment, dynamic P/T) ------
     def effective_power(self, perm: Permanent) -> int:
@@ -479,6 +602,17 @@ class GameState:
 
     # ---- snapshot for the board viewer --------------------------------------
     def snapshot(self) -> dict:
+        def stack_item_view(item):
+            if isinstance(item, StackAbility):
+                return item.public()
+            return {
+                "name": item.name,
+                "source_name": item.name,
+                "kind": "spell",
+                "trigger": None,
+                "ability": item.name,
+            }
+
         return {
             "turn": self.turn,
             "phase": self.phase.value,
@@ -489,7 +623,7 @@ class GameState:
             "command_zone": [c.name for c in self.command_zone],
             "graveyard": [c.name for c in self.graveyard],
             "exile": [c.name for c in self.exile],
-            "stack": [c.name for c in self.stack],
+            "stack": [stack_item_view(c) for c in self.stack],
             "mana_pool": {k: v for k, v in self.mana_pool.amounts.items() if v},
             "battlefield": [
                 {

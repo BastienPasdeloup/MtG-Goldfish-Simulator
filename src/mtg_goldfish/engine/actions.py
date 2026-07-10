@@ -167,8 +167,8 @@ def begin_cast(
     else:
         state.noncreature_spells_cast_this_turn += 1
     state.emit(f"cast {card.name}{f' ({tag})' if tag else ''} (on the stack)")
-    for perm in list(state.battlefield):
-        perm.impl.on_cast_other(state, perm, card)
+    state.queue_cast_triggers(card)
+    state.settle_nonbranching(f"cast triggers for {card.name}")
     return True
 
 
@@ -186,10 +186,8 @@ def resolve_to_battlefield(
     # Announce the enter BEFORE ETB triggers fire (Amulet / Tezzeret / landfall)
     # so the replay shows the permanent entering first, effects after.
     state.emit(f"{card.name} resolves — enters the battlefield")
-    state.fire_other_etb(perm)
-    branches = perm.impl.on_etb(state, perm)
-    state.check_deaths()
-    return branches
+    state.queue_entry_triggers([perm])
+    return None
 
 
 def resolve_to_graveyard(state: GameState, card) -> None:
@@ -235,12 +233,11 @@ class PlayLand(Action):
         src.remove(card)
         state.lands_played_this_turn += 1
         perm = state.put_on_battlefield(card, fire_etb=False)
+        perm.turn_flags["played_as_land"] = 1
         _apply_etb_mode(state, perm, self.mode)
         state.emit(self.label)  # announce the land entering BEFORE its triggers
-        state.fire_other_etb(perm)  # landfall / Amulet, after the enter mode
-        branches = perm.impl.on_etb(state, perm)
-        state.check_deaths()
-        return branches
+        state.queue_entry_triggers([perm])  # landfall / Amulet, after the enter mode
+        return state.settle()
 
 
 def _apply_etb_mode(state: GameState, perm, mode: dict | None) -> None:
@@ -267,11 +264,12 @@ class CastDefault(Action):
         if not begin_cast(state, card, impl.cast_cost(state)):
             return None
         if card.is_permanent:
-            return resolve_to_battlefield(state, card) or None
+            result = resolve_to_battlefield(state, card)
+            return state.settle(result)
         # Move to the graveyard first so branch clones made inside on_resolve
         # already have the spell there.
         resolve_to_graveyard(state, card)
-        return impl.on_resolve(state) or None
+        return state.settle(impl.on_resolve(state) or None)
 
 
 class CastCommander(Action):
@@ -290,6 +288,7 @@ class CastCommander(Action):
             return
         state.commander_cast_count[card.name] = state.commander_cast_count.get(card.name, 0) + 1
         resolve_to_battlefield(state, card, is_commander=True)
+        return state.settle()
 
 
 # --------------------------------------------------------------------------
@@ -395,7 +394,9 @@ def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]
                 if c in st.exile:
                     st.exile.remove(c)
                 st.lands_played_this_turn += 1
-                st.put_on_battlefield(c)
+                perm = st.put_on_battlefield(c, fire_etb=False)
+                perm.turn_flags["played_as_land"] = 1
+                st.queue_entry_triggers([perm])
                 st.emit(f"play {c.name} from exile")
                 return None
             if not begin_cast(st, c, _impl(c).cast_cost(st), zone=_ExileZone(st, entry), tag="from exile"):
@@ -444,10 +445,11 @@ class DeclareAttackers(Action):
             state.attackers.append(perm.uid)
             if not state.has_keyword(perm, "Vigilance"):
                 perm.tapped = True
-            perm.impl.on_attack(state, perm)
+            state.queue_attack_triggers(perm)
         if state.attackers:
             names = [p.name for p in state.battlefield if p.uid in state.attackers]
             state.emit(f"attack with {', '.join(names)}")
+        return state.settle()
 
 
 def combat_actions(state: GameState) -> list[Action]:
@@ -478,9 +480,10 @@ def deal_combat_damage(state: GameState) -> None:
         state.opponent_life -= dmg
         if state.has_keyword(perm, "Lifelink"):
             state.life += dmg
-        perm.impl.on_combat_damage(state, perm, dmg)
+        state.queue_combat_damage_triggers(perm, dmg)
     if total:
         state.emit(f"combat: {total} damage to opponent (opponent at {state.opponent_life})")
+    state.settle_nonbranching("combat damage triggers")
 
 
 # --------------------------------------------------------------------------

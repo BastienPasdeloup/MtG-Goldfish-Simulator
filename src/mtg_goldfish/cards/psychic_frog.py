@@ -24,17 +24,30 @@ class PsychicFrog(Card):
             seen.add(card.name)
 
             def make(name: str):
-                def fn(st):
+                def pay(st):
                     p = st.find_permanent(perm.uid)
                     c = next((x for x in st.hand if x.name == name), None)
                     if p is None or c is None:
-                        return None
+                        return False
                     st.hand.remove(c)
                     st.to_graveyard(c)
-                    p.counters["+1/+1"] = p.counters.get("+1/+1", 0) + 1
-                    st.emit(f"Psychic Frog: discard {name} — +1/+1 counter")
-                    return None
-                return fn
+                    st.emit(f"Psychic Frog: discard {name}")
+                    return True
 
-            actions.append(CardAction(f"Psychic Frog: discard {card.name}", make(card.name)))
+                def resolve(st):
+                    p = st.find_permanent(perm.uid)
+                    if p is None:
+                        return None
+                    p.counters["+1/+1"] = p.counters.get("+1/+1", 0) + 1
+                    st.emit("Psychic Frog: +1/+1 counter")
+                    return None
+                return CardAction.activated(
+                    f"Psychic Frog: discard {name}",
+                    pay,
+                    resolve,
+                    source_name="Psychic Frog",
+                    ability_text="Put a +1/+1 counter on Psychic Frog",
+                )
+
+            actions.append(make(card.name))
         return actions

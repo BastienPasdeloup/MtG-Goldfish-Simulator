@@ -27,6 +27,24 @@ class UrzasSaga(Card):
             return [ManaAbility(amount=1, choices=("C",))]
         return []
 
+    def phase_stack_items(self, state, perm, phase):
+        if phase != Phase.DRAW or state.turn == 0 or perm.counters.get("lore", 0) + 1 < 3:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_phase(st, live, Phase.DRAW)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label="Urza's Saga: chapter III",
+            resolve=resolve,
+            trigger_text="Draw step lore counter reached chapter III",
+            ability_text="Search your library for a {0} or {1} artifact, put it onto the battlefield, then sacrifice Urza's Saga",
+        )]
+
     def battlefield_actions(self, state, perm):
         cost = ManaCost(generic=2)
         # Taps for this ability, so it can't help pay its own {2} cost.
@@ -34,16 +52,25 @@ class UrzasSaga(Card):
                 or not can_afford(state, cost, exclude_uids={perm.uid})):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped or not pay_cost(st, cost, exclude_uids={perm.uid}):
-                return None
+                return False
             p.tapped = True
+            return True
+
+        def resolve(st):
             st.make_token("Construct", 0, 0, "Token Artifact Creature — Construct")
             st.emit("Urza's Saga: create a Construct token")
             return None
 
-        return [CardAction("Urza's Saga: {2}, {T} — Construct token", fn)]
+        return [CardAction.activated(
+            "Urza's Saga: {2}, {T} — Construct token",
+            pay,
+            resolve,
+            source_name="Urza's Saga",
+            ability_text="Create a Construct token",
+        )]
 
     def on_phase(self, state, perm, phase):
         if phase != Phase.DRAW or state.turn == 0:

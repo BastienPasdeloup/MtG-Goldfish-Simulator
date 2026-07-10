@@ -4,7 +4,7 @@ battlefield (branch per distinct land, plus declining; a Cave gains 4 life).
 Static: lands you control enter untapped (untap any land that enters tapped)."""
 from __future__ import annotations
 
-from ._common import branch_over
+from ._common import branch_over, enter_battlefield
 from .base import Card
 from .registry import register
 
@@ -13,7 +13,7 @@ from .registry import register
 class Spelunking(Card):
     card_name = "Spelunking"
 
-    def on_other_etb(self, state, perm, entering):
+    def on_other_etb_immediate(self, state, perm, entering):
         if "land" in entering.type_line.lower() and entering.tapped:
             entering.tapped = False
             state.emit(f"Spelunking: {entering.name} enters untapped")
@@ -32,10 +32,13 @@ class Spelunking(Card):
             if card is None:
                 return
             st.hand.remove(card)
-            newp = st.put_on_battlefield(card)  # enters untapped via the static
+            newp = enter_battlefield(
+                st,
+                card,
+                announce=f"Spelunking: put {name} onto the battlefield",
+            )
             if "cave" in newp.type_line.lower():
                 st.life += 4
                 st.emit("Spelunking: Cave entered — gain 4 life")
-            st.emit(f"Spelunking: put {name} onto the battlefield")
 
         return branch_over(state, names + [None], fn)

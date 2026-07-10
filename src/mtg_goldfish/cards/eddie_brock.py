@@ -6,7 +6,7 @@ modelled — documented approximation."""
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
-from ._common import branch_over, transform_actions
+from ._common import branch_over, enter_battlefield, transform_actions
 from .base import Card
 from .registry import register
 
@@ -23,8 +23,12 @@ class EddieBrock(Card):
         def apply(st, name: str):
             card = next(c for c in st.graveyard if c.name == name)
             st.graveyard.remove(card)
-            st.put_on_battlefield(card)
-            st.emit(f"Eddie Brock: return {name} to the battlefield")
+            enter_battlefield(
+                st,
+                card,
+                announce=f"Eddie Brock: return {name} to the battlefield",
+            )
+            return None
 
         return branch_over(state, targets, apply)
 

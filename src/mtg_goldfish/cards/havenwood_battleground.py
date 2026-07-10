@@ -22,13 +22,22 @@ class HavenwoodBattleground(Card):
         if perm.tapped:
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped:
-                return None
+                return False
             st.leaves_battlefield(p, "graveyard")
+            return True
+
+        def resolve(st):
             st.mana_pool.add("G", 2)
             st.emit("Havenwood Battleground: sacrifice — add {G}{G}")
             return None
 
-        return [CardAction("Havenwood Battleground: sacrifice for {G}{G}", fn)]
+        return [CardAction.activated(
+            "Havenwood Battleground: sacrifice for {G}{G}",
+            pay,
+            resolve,
+            source_name="Havenwood Battleground",
+            ability_text="Add {G}{G}",
+        )]

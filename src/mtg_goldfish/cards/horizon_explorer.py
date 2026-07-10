@@ -12,7 +12,7 @@ from .registry import register
 class HorizonExplorer(Card):
     card_name = "Horizon Explorer"
 
-    def on_other_etb(self, state, perm, entering):
+    def on_other_etb_immediate(self, state, perm, entering):
         if "land" in entering.type_line.lower() and entering.tapped:
             entering.tapped = False
             state.emit(f"Horizon Explorer: {entering.name} enters untapped")

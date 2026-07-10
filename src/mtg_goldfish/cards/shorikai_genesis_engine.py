@@ -21,11 +21,14 @@ class Shorikai(Card):
         if perm.tapped or not can_afford(state, cost):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped or not pay_cost(st, cost):
-                return None
+                return False
             p.tapped = True
+            return True
+
+        def resolve(st):
             st.emit("Shorikai: {1}, {T} — draw 2, discard 1, make a Pilot")
             st.draw(2)
             st.make_token("Pilot", 1, 1, "Token Creature — Pilot")
@@ -45,4 +48,10 @@ class Shorikai(Card):
                 branches.append(b)
             return branches
 
-        return [CardAction("Shorikai: draw 2, discard 1, create Pilot", fn)]
+        return [CardAction.activated(
+            "Shorikai: draw 2, discard 1, create Pilot",
+            pay,
+            resolve,
+            source_name="Shorikai, Genesis Engine",
+            ability_text="Draw 2, discard 1, create a Pilot token",
+        )]

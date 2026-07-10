@@ -30,15 +30,24 @@ class CastleGarenbrig(Card):
         if perm.tapped or not can_afford(state, cost, exclude_uids={perm.uid}):
             return []
 
-        def fn(st):
+        def pay(st):
             p = st.find_permanent(perm.uid)
             if p is None or p.tapped:
-                return None
+                return False
             p.tapped = True  # pay the {T} first, before paying the mana cost
             if not pay_cost(st, cost, exclude_uids={perm.uid}):
-                return None
+                return False
+            return True
+
+        def resolve(st):
             st.mana_pool.add("G", 6)
             st.emit("Castle Garenbrig: {2}{G}{G}, {T} — add {G}{G}{G}{G}{G}{G}")
             return None
 
-        return [CardAction("Castle Garenbrig: add six {G}", fn)]
+        return [CardAction.activated(
+            "Castle Garenbrig: add six {G}",
+            pay,
+            resolve,
+            source_name="Castle Garenbrig",
+            ability_text="Add {G}{G}{G}{G}{G}{G}",
+        )]
