@@ -1,4 +1,7 @@
-"""Tale's End — exact within solitaire: never castable (counters target ability or legendary spell; nothing can be responded to in a solitaire game)."""
-from ._common import uncastable_spell
+"""Tale's End — counter your own legendary spell (fills the graveyard).
+Approximation: countering activated/triggered abilities is not modelled."""
+from ._common import counterspell
 
-uncastable_spell("Tale's End", 'counters target ability or legendary spell; nothing can be responded to in a solitaire game')
+TalesEnd = counterspell(
+    "Tale's End", target=lambda c: "legendary" in c.type_line.lower(),
+)

@@ -11,6 +11,7 @@
     <span class="logo">🐟 MtG Goldfish Simulator</span>
     <span class="spacer"></span>
     <span id="llm-pill" class="pill"></span>
+    <button id="model-btn" class="ghost" title="Choose the model that compiles properties and implements cards">⚙ Choose model</button>
     <button id="home-btn">Home</button>
   </header>
 
@@ -49,16 +50,17 @@
 
     <!-- SESSION VIEW -->
     <section id="session-view" class="hidden">
-      <div class="card-box">
-        <div class="row">
-          <h2 id="s-name" style="margin:0"></h2>
-          <span id="s-commanders" class="pill"></span>
-          <span id="s-format" class="pill"></span>
-          <span class="spacer"></span>
-          <button id="load-run-btn">Load previous run</button>
-          <button id="delete-session" class="danger">Delete</button>
+      <div class="row session-topbar">
+        <div class="card-box">
+          <div class="row session-head">
+            <h2 id="s-name" style="margin:0"></h2>
+            <span id="s-commanders" class="pill"></span>
+            <span id="s-format" class="pill"></span>
+          </div>
+          <div id="s-warnings" class="warnings"></div>
         </div>
-        <div id="s-warnings" class="warnings"></div>
+        <button id="load-run-btn">Load previous run</button>
+        <button id="delete-session" class="danger">Delete</button>
       </div>
 
       <div class="session-grid">
@@ -67,6 +69,7 @@
           <div class="deck-controls">
             <div class="row">
               <h3 style="margin:0">Decklist</h3>
+              <span id="impl-all" class="wrench hidden" title="Ask a model to implement all unimplemented cards"> 🔧</span>
               <span class="spacer"></span>
               <label>Sort</label>
               <select id="sort-select">
@@ -88,6 +91,7 @@
               <span class="spacer"></span>
               <button id="add-prop">+ Add property</button>
             </div>
+            <div class="muted" id="prop-llm-note" style="font-size:12px;margin:.15rem 0 .4rem"></div>
             <div id="prop-list"></div>
             <div class="row" style="margin-top:.5rem">
               <span class="spacer"></span>
@@ -103,6 +107,14 @@
               <div><label>Mulligans</label><br /><input id="mulligans" type="number" min="0" max="7" value="0" style="width:5rem" /></div>
               <div><label>Seed (optional)</label><br /><input id="seed" type="number" placeholder="random" style="width:8rem" /></div>
               <div><label>Start</label><br /><button id="play-draw-toggle" data-play="1">On the play</button></div>
+              <div><label>Search</label><br />
+                <select id="search-mode">
+                  <option value="dfs_heuristic" selected>DFS · heuristic ordering</option>
+                  <option value="dfs">DFS · natural order</option>
+                  <option value="bfs">BFS · shallowest lines first (slow, may time out)</option>
+                  <option value="best_first">Best-first · board progress</option>
+                </select>
+              </div>
               <span class="spacer"></span>
               <button id="run-btn" class="primary">Run</button>
               <button id="stop-btn" class="danger" disabled>Stop</button>
@@ -113,8 +125,8 @@
 
 
           <div class="card-box hidden" id="viz-box">
-            <h3>Successful games</h3>
-            <div class="muted" style="font-size:12px">Games where all properties were satisfied. Click to inspect the line of play.</div>
+            <h3>Games</h3>
+            <div class="muted" style="font-size:12px">One row per game (✓ success, ✗ not; ⏱ = timed out). Hover ✋ for the opening hand, 🌳 opens the explored-states graph, click a ✓ row to replay its winning line below.</div>
             <div id="viz-list"></div>
             <div id="viz-log" class="log hidden"></div>
           </div>
@@ -133,6 +145,26 @@
         <button id="run-modal-close">✕</button>
       </div>
       <div id="run-modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="model-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <b>Model</b>
+        <span class="spacer"></span>
+        <button id="model-modal-close">✕</button>
+      </div>
+      <div id="model-modal-body" class="modal-body">
+        <div class="muted" style="font-size:12px;margin-bottom:.6rem">
+          This model compiles English properties into code and implements cards
+          from their oracle text. The offline stub needs no download but can't
+          implement cards; local models run privately on your machine via
+          <a href="https://ollama.com" target="_blank">Ollama</a>; the API model
+          sends prompts to Anthropic and needs a key.
+        </div>
+        <div id="model-list"></div>
+      </div>
     </div>
   </div>
 

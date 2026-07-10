@@ -1,0 +1,79 @@
+"""Tezzeret, Cruel Captain — {3} Legendary Planeswalker — Tezzeret.
+Has no printed starting loyalty; instead it gains a loyalty counter whenever
+an artifact you control enters. One loyalty ability per turn (sorcery speed):
+ 0: untap target artifact or creature (branch; +1/+1 counter if it's an
+    artifact creature);
+ −3: search your library for an artifact with mana value 1 or less, put it
+    into your hand, then shuffle (branch per target).
+The −7 emblem is out of scope."""
+from __future__ import annotations
+
+from .base import Card, CardAction
+from .registry import register
+
+
+@register
+class TezzeretCruelCaptain(Card):
+    card_name = "Tezzeret, Cruel Captain"
+
+    def on_etb(self, state, permanent):
+        permanent.counters["loyalty"] = 0
+
+    def on_other_etb(self, state, perm, entering):
+        if "artifact" in entering.type_line.lower():
+            perm.counters["loyalty"] = perm.counters.get("loyalty", 0) + 1
+            state.emit(f"Tezzeret: artifact entered — loyalty {perm.counters['loyalty']}")
+
+    def battlefield_actions(self, state, perm):
+        if perm.turn_flags.get("loyalty_used"):
+            return []
+        acts = []
+
+        # 0: untap target artifact or creature.
+        targets = {}
+        for p in state.battlefield:
+            if (p.tapped and (p.is_creature_now or "artifact" in p.type_line.lower())
+                    and p.name not in targets):
+                targets[p.name] = p.uid
+
+        def make_zero(uid):
+            def fn(st):
+                p = st.find_permanent(perm.uid)
+                t = st.find_permanent(uid)
+                if p is None or t is None or p.turn_flags.get("loyalty_used"):
+                    return None
+                p.turn_flags["loyalty_used"] = 1
+                t.tapped = False
+                if t.is_creature_now and "artifact" in t.type_line.lower():
+                    t.counters["+1/+1"] = t.counters.get("+1/+1", 0) + 1
+                st.emit(f"Tezzeret 0: untap {t.name}")
+                return None
+            return fn
+
+        for name, uid in targets.items():
+            acts.append(CardAction(f"Tezzeret: 0 untap {name}", make_zero(uid)))
+
+        # −3: search for an artifact with mv <= 1 to hand.
+        if perm.counters.get("loyalty", 0) >= 3:
+            for target in state.search_library(
+                lambda c: "artifact" in c.type_line.lower() and not c.is_land and c.cmc <= 1
+            ):
+                def make_minus3(name):
+                    def fn(st):
+                        p = st.find_permanent(perm.uid)
+                        if p is None or p.turn_flags.get("loyalty_used"):
+                            return None
+                        card = next((c for c in st.library if c.name == name), None)
+                        if card is None:
+                            return None
+                        p.turn_flags["loyalty_used"] = 1
+                        p.counters["loyalty"] -= 3
+                        st.take_from_library(card)
+                        st.shuffle_library()
+                        st.hand.append(card)
+                        st.emit(f"Tezzeret −3: search {name} to hand — shuffle")
+                        return None
+                    return fn
+                acts.append(CardAction(f"Tezzeret: −3 search {target.name}", make_minus3(target.name)))
+
+        return acts

@@ -1,4 +1,5 @@
-"""Mental Misstep — exact within solitaire: never castable (counters target spell with mana value 1; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Mental Misstep — counter your own spell with mana value 1 (fills the graveyard).
+Approximation: the Phyrexian-blue alternative cost is not modelled."""
+from ._common import counterspell
 
-uncastable_spell('Mental Misstep', 'counters target spell with mana value 1; no opponent spells exist')
+MentalMisstep = counterspell("Mental Misstep", target=lambda c: int(c.cmc) == 1)

@@ -62,6 +62,15 @@ class Card:
     #: Whether this card's rules are actually modelled. `False` for the
     #: automatic fallback used when a card has no implementation yet.
     implemented: ClassVar[bool] = True
+    #: DFCs played as their BACK face (e.g. MDFC land backs) set this so the
+    #: permanent is on the right face from the moment it enters — before any
+    #: board frame is emitted.
+    enters_transformed: ClassVar[bool] = False
+    #: Static: while on the battlefield, land cards may be played from the
+    #: graveyard (Icetill Explorer).
+    grants_gy_land_plays: ClassVar[bool] = False
+    #: Static: creatures can't attack (Glacial Chasm).
+    prevents_attacks: ClassVar[bool] = False
 
     def __init__(self, data: CardData) -> None:
         self.data = data
@@ -94,12 +103,10 @@ class Card:
     def is_castable(self, state: "GameState") -> bool:
         """Whether this spell can legally be cast right now (beyond mana).
 
-        Default heuristic: a spell that counters another spell has no legal
-        target in a solitaire game (spells resolve atomically), so it is never
-        cast. Override for card-specific targeting rules."""
-        text = self.data.oracle_text.lower()
-        if "counter target" in text:
-            return False
+        Default: yes. Cards with real targeting constraints (e.g. counterspells,
+        which target a spell — including one of your own — via `counterspell`)
+        express those by overriding `cast_actions` to enumerate only legal
+        casts, returning an empty list when none exist."""
         return True
 
     def cast_actions(self, state: "GameState") -> list["CardAction"] | None:
@@ -124,12 +131,28 @@ class Card:
 
     def etb_tapped(self, state: "GameState") -> bool:
         text = self.data.oracle_text.lower()
-        if "enters tapped" not in text and "enters the battlefield tapped" not in text:
-            return False
-        # "unless"-style lands handle their condition via etb_modes/overrides.
-        if any(k in text for k in ("unless", "you may pay")):
-            return False
-        return True
+        # Look sentence by sentence: a card enters tapped only if IT is the
+        # subject of an "enters ... tapped" clause. Triggered abilities such as
+        # Amulet of Vigor's "whenever a permanent you control enters tapped,
+        # untap it" mention the phrase but refer to OTHER permanents.
+        for sentence in text.replace("\n", " ").split("."):
+            s = sentence.strip()
+            if "enters" not in s or "tapped" not in s:
+                continue
+            if s.startswith(("when", "whenever")):  # triggered ability, not self
+                continue
+            # Another permanent is the subject ("a land you control enters...").
+            head = s.split("enters", 1)[0]
+            if any(k in head for k in (
+                "you control", "another", "each ", "a land", "a creature",
+                "a permanent", "permanents", "they ", "one or more",
+            )):
+                continue
+            # "unless"-style lands resolve their condition via etb_modes/overrides.
+            if "unless" in s or "you may pay" in s:
+                return False
+            return True
+        return False
 
     # ---- battlefield ----------------------------------------------------------
     def mana_abilities(self, state: "GameState") -> list[ManaAbility]:
@@ -173,6 +196,23 @@ class Card:
 
     def on_cast_other(self, state: "GameState", perm: "Permanent", card: CardData) -> None:
         """Called (while on the battlefield) when the player casts any spell."""
+
+    def on_other_etb(self, state: "GameState", perm: "Permanent", entering: "Permanent") -> None:
+        """Called (while on the battlefield) when ANOTHER permanent enters —
+        landfall, 'whenever a permanent enters tapped' (Amulet of Vigor),
+        artifact triggers (Tezzeret)... Fired after the entering permanent's
+        tapped state is settled, before its own on_etb."""
+
+    def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
+        """Additional land plays per turn granted while on the battlefield
+        (Exploration, Icetill Explorer)."""
+        return 0
+
+    def attached_mana_amount_bonus(self, state: "GameState", perm: "Permanent",
+                                   host: "Permanent") -> int:
+        """For Auras attached to a land: extra mana added whenever the host is
+        tapped for mana (Wild Growth, Utopia Sprawl). Planner-visible."""
+        return 0
 
     def on_equipped_died(self, state: "GameState", perm: "Permanent") -> None:
         """Called when the creature this equipment was attached to dies."""

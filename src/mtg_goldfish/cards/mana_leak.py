@@ -1,4 +1,4 @@
-"""Mana Leak — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Mana Leak — counter your own spell (fills the graveyard)."""
+from ._common import counterspell
 
-uncastable_spell('Mana Leak', 'counters target spell; no opponent spells exist')
+ManaLeak = counterspell("Mana Leak")

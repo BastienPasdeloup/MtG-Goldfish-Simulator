@@ -1,4 +1,5 @@
-"""Memory Lapse — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Memory Lapse — counter your own spell; put it on top of your library.
+Lets you re-draw a spell next turn (does not fill the graveyard)."""
+from ._common import counterspell
 
-uncastable_spell('Memory Lapse', 'counters target spell; no opponent spells exist')
+MemoryLapse = counterspell("Memory Lapse", dest="library_top")

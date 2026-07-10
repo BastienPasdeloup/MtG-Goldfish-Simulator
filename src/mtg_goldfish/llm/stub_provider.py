@@ -110,6 +110,29 @@ def _compile_clause(clause: str) -> str | None:
     return None
 
 
+def _compile_history(english: str) -> str | None:
+    """Recognize "on each/every turn ..." phrasings that describe past states,
+    mapping them onto the per-turn history helpers."""
+    c = english.lower().strip().rstrip(".")
+    if "this turn" in c:
+        return None
+    if not re.search(r"\b(each|every)\b.*\bturn|\b(some|any|at least one)\s+turn", c):
+        return None
+    n = _find_num(c) or 1
+    if "graveyard" in c:
+        helper = "graveyard_added_on"
+    elif "creature" in c:
+        helper = "creatures_entered_on"
+    elif "land" in c:
+        helper = "lands_entered_on"
+    elif "permanent" in c or "play" in c or "battlefield" in c or "enter" in c:
+        helper = "permanents_entered_on"
+    else:
+        return None
+    quant = "some_turn" if re.search(r"\b(some|any|at least one)\b.*turn", c) else "each_turn"
+    return f"state.{quant}(lambda t: len(state.{helper}(t)) >= {n})"
+
+
 class StubProvider(LLMProvider):
     is_real = False
 
@@ -120,6 +143,14 @@ class StubProvider(LLMProvider):
     def generate(self, system: str, prompt: str, *, max_tokens: int = 4096) -> str:
         m = re.search(r"ENGLISH:\s*(.+)", prompt, re.DOTALL)
         english = (m.group(1) if m else prompt).strip()
+
+        history = _compile_history(english)
+        if history:
+            return (
+                "def check(state):\n"
+                f"    # Heuristically generated (offline stub) from: {english!r}\n"
+                f"    return {history}\n"
+            )
 
         exprs = [e for c in _clauses(english) if (e := _compile_clause(c))]
         if exprs:

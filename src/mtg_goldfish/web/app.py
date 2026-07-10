@@ -53,6 +53,7 @@ class SimulateRequest(BaseModel):
     mulligans: int = 0
     on_the_play: bool = True
     base_seed: int | None = None  # random when omitted
+    search_mode: str = "dfs_heuristic"  # see engine.simulator.SEARCH_MODES
 
 
 # --------------------------------------------------------------------------
@@ -214,16 +215,110 @@ def compile_properties(session_id: str) -> dict:
 
 
 # --------------------------------------------------------------------------
-# cards
+# LLM backend selection (stub / local Ollama / Anthropic API)
 # --------------------------------------------------------------------------
-@app.post("/api/cards/{card_name}/implement")
-def implement_card(card_name: str) -> dict:
-    # Placeholder per spec: the "ask a model to code it" action is wired in the
-    # UI but functionality is intentionally not implemented yet.
-    raise HTTPException(
-        status_code=501,
-        detail=f"Auto-implementing {card_name!r} is not wired up yet.",
-    )
+class LLMSelect(BaseModel):
+    model_id: str
+    api_key: str | None = None
+
+
+@app.get("/api/llm")
+def llm_status() -> dict:
+    from ..llm.catalog import load_selection, option_dicts, stored_api_key
+    from ..llm.ollama_provider import installed_models, ollama_available
+
+    available = ollama_available()
+    installed = installed_models() if available else set()
+    options = []
+    for opt in option_dicts():
+        opt = dict(opt)
+        if opt["kind"] == "local":
+            opt["ollama_running"] = available
+            opt["installed"] = opt["ollama_model"] in installed
+            opt["pull_cmd"] = f"ollama pull {opt['ollama_model']}"
+        options.append(opt)
+    return {
+        "options": options,
+        "selected": load_selection(),
+        "ollama_running": available,
+        "has_api_key": bool(stored_api_key()),
+    }
+
+
+@app.post("/api/llm")
+def llm_select(req: LLMSelect) -> dict:
+    from ..llm import reset_provider
+    from ..llm.catalog import CATALOG_BY_ID, save_selection
+
+    opt = CATALOG_BY_ID.get(req.model_id)
+    if opt is None:
+        raise HTTPException(status_code=400, detail=f"Unknown model {req.model_id!r}.")
+    if opt.needs_key and not (req.api_key or _existing_key()):
+        raise HTTPException(status_code=400, detail="This model requires an API key.")
+    save_selection(req.model_id, api_key=req.api_key)
+    reset_provider()
+    return {"ok": True, "selected": req.model_id}
+
+
+def _existing_key() -> bool:
+    from ..llm.catalog import stored_api_key
+
+    return bool(stored_api_key())
+
+
+# --------------------------------------------------------------------------
+# cards — auto-implementation via the selected model
+# --------------------------------------------------------------------------
+def _card_data(session: Session, card_name: str):
+    for e in session.deck.entries:
+        if e.card.name == card_name:
+            return e.card
+    return None
+
+
+def _implement_one(session: Session, card_name: str) -> dict:
+    from ..llm.card_codegen import CodegenError, generate_card
+
+    card = _card_data(session, card_name)
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"{card_name!r} is not in this deck.")
+    if is_implemented(card_name):
+        return {"name": card_name, "ok": True, "already": True}
+    try:
+        module = generate_card(card)
+        return {"name": card_name, "ok": True, "module": module}
+    except CodegenError as exc:
+        return {"name": card_name, "ok": False, "error": str(exc)}
+
+
+@app.post("/api/sessions/{session_id}/cards/{card_name}/implement")
+def implement_card(session_id: str, card_name: str) -> dict:
+    """Ask the selected model to write and register this card's behaviour."""
+    result = _implement_one(_load(session_id), card_name)
+    if not result["ok"]:
+        raise HTTPException(status_code=502, detail=result["error"])
+    return result
+
+
+@app.post("/api/sessions/{session_id}/cards/implement-all")
+def implement_all_cards(session_id: str) -> dict:
+    """Ask the selected model to implement every unimplemented card in the
+    deck. Returns a per-card report (some may fail — those stay unimplemented
+    and keep their vanilla approximation)."""
+    session = _load(session_id)
+    names = []
+    seen = set()
+    for e in session.deck.entries:
+        if e.card.name in seen or is_implemented(e.card.name):
+            continue
+        seen.add(e.card.name)
+        names.append(e.card.name)
+    results = [_implement_one(session, n) for n in names]
+    return {
+        "total": len(results),
+        "implemented": sum(1 for r in results if r["ok"]),
+        "results": results,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -236,12 +331,17 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
     store.save(session)
     loop = asyncio.get_running_loop()
     seed = req.base_seed if req.base_seed is not None else random.randrange(1_000_000_000)
+    from ..engine.simulator import SEARCH_MODES
+
+    if req.search_mode not in SEARCH_MODES:
+        raise HTTPException(status_code=400, detail=f"Unknown search mode: {req.search_mode}")
     config = SimConfig(
         num_games=req.num_games,
         timeout_per_game_s=req.timeout_per_game_s,
         mulligans=req.mulligans,
         on_the_play=req.on_the_play,
         base_seed=seed,
+        search_mode=req.search_mode,
     )
     try:
         result_id = runner.start(session, config, loop)

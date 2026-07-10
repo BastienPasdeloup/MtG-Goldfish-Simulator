@@ -64,11 +64,26 @@ def test_city_of_brass_pays_life():
     assert state.life == 19
 
 
-def test_counterspells_never_castable():
-    for name in ("Mana Tithe", "Daze", "Force of Negation", "Tale's End"):
+def test_counterspells_need_a_target_spell():
+    # A counterspell alone (no other spell in hand) has nothing to target.
+    for name in ("Mana Tithe", "Daze", "Force of Negation"):
         state = _state([], hand_names=[name])
-        state.put_on_battlefield(card("Plains")).summoning_sick = False
+        for _ in range(4):
+            state.put_on_battlefield(card("Plains")).summoning_sick = False
         assert not any(name in a.label for a in legal_actions(state) if "cast" in a.label), name
+
+
+def test_counterspell_can_counter_own_spell():
+    # With a target spell in hand and enough mana, the counter is castable and
+    # sends the countered spell to the graveyard (fuelling graveyard-matters).
+    state = _state([], hand_names=["Mana Leak", "Brainstorm"])
+    for _ in range(4):
+        state.put_on_battlefield(card("Island")).summoning_sick = False
+    acts = [a for a in legal_actions(state) if a.label.startswith("cast Mana Leak countering own")]
+    assert acts, "Mana Leak should be able to counter Brainstorm"
+    acts[0].apply(state)
+    assert "Mana Leak" in state.graveyard_names()
+    assert "Brainstorm" in state.graveyard_names()
 
 
 def test_fastland_condition():
@@ -78,6 +93,23 @@ def test_fastland_condition():
     for _ in range(3):
         state.put_on_battlefield(card("Plains"))
     assert impl.etb_tapped(state) is True   # 3 other lands
+
+
+def test_fetch_shuffles_library():
+    """Fetching must shuffle the remaining library (deterministically per seed)."""
+    fillers = ["Badlands", "Bayou", "Plateau", "Savannah", "Scrubland", "Taiga",
+               "Tundra", "Underground Sea", "Volcanic Island", "Plains",
+               "Command Tower", "City of Brass", "Mana Confluence", "Starting Town",
+               "Skullclamp", "Brainstorm", "Demonic Tutor", "Tithe", "Worldly Tutor"]
+    state = _state(["Tropical Island"] + fillers, hand_names=["Misty Rainforest"])
+    state.rng_seed = 99
+    before = [c.name for c in state.library]
+    next(a for a in legal_actions(state) if a.label.startswith("play land Misty")).apply(state)
+    next(a for a in legal_actions(state) if "fetch Tropical Island" in a.label).apply(state)
+    after = [c.name for c in state.library]
+    no_shuffle = [n for n in before if n != "Tropical Island"]
+    assert sorted(after) == sorted(no_shuffle)   # same cards...
+    assert after != no_shuffle                   # ...new order: it shuffled
 
 
 def test_skullclamp_draws_two():

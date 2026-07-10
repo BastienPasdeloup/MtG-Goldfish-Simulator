@@ -13,6 +13,7 @@ from .registry import register
 @register
 class SinkIntoStupor(Card):
     card_name = "Sink into Stupor // Soporific Springs"
+    enters_transformed = True  # on the battlefield it is Soporific Springs
 
     def is_castable(self, state):
         return False  # front face targets an opponent's spell/permanent
@@ -23,10 +24,6 @@ class SinkIntoStupor(Card):
             modes.append({"label": "pay 3 life, untapped", "tapped": False, "life": 3})
         modes.append({"label": "tapped", "tapped": True, "life": 0})
         return modes
-
-    def on_etb(self, state, permanent):
-        permanent.transformed = True  # on the battlefield it is Soporific Springs
-        return None
 
     def mana_abilities(self, state):
         return [ManaAbility(amount=1, choices=("U",))]

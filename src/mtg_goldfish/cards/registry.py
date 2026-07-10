@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import sys
 from typing import TYPE_CHECKING
 
 from ..deck.models import CardData
@@ -50,6 +51,15 @@ def load_all_cards() -> None:
 def is_implemented(name: str) -> bool:
     load_all_cards()
     return normalize(name) in _REGISTRY
+
+
+def load_module(module_name: str) -> None:
+    """(Re)import a single card module so a freshly written file registers."""
+    mod = f"{__package__}.{module_name}"
+    if mod in sys.modules:
+        importlib.reload(sys.modules[mod])
+    else:
+        importlib.import_module(mod)
 
 
 def get_impl(name: str) -> type[Card] | None:

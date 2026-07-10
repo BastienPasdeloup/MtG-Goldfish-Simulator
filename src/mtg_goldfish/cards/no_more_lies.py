@@ -1,4 +1,5 @@
-"""No More Lies — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""No More Lies — counter your own spell (fills the graveyard).
+(The exile clause is not modelled — the target still goes to the graveyard.)"""
+from ._common import counterspell
 
-uncastable_spell('No More Lies', 'counters target spell; no opponent spells exist')
+NoMoreLies = counterspell("No More Lies")

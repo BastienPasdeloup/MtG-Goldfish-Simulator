@@ -50,11 +50,14 @@ def test_commander_castable_by_turn_four():
 
 
 def test_property_stub_compiles_example():
+    from mtg_goldfish.llm.stub_provider import StubProvider
+
     spec = PropertySpec(
         id="p1", timing=Timing.AT, phase="postcombat_main", turn=4,
         english="the commander is in play and 4 non-creature spells have been cast this turn",
     )
-    spec = compile_property(spec)  # offline stub
+    # Force the offline stub explicitly, independent of the user's selected LLM.
+    spec = compile_property(spec, provider=StubProvider())
     assert "commander_in_play" in spec.code
     assert "noncreature_spells_cast_this_turn >= 4" in spec.code
     compiled = compile_all([spec])

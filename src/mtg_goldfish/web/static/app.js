@@ -17,6 +17,7 @@ const state = {
   currentResultId: null,
   imageMap: {},    // card/face name -> Scryfall image
   vizGames: [],    // successful games (each a list of board frames)
+  vizRuns: [],     // per-game run metadata (hand, branch counts, tree, frames)
   vizIdx: 0,
   vizStep: 0,
 };
@@ -83,9 +84,7 @@ async function api(path, opts) {
 // ---------------------------------------------------------------- init
 async function init() {
   state.meta = await api("/api/meta");
-  const pill = $("llm-pill");
-  pill.textContent = "LLM: " + state.meta.llm_provider + (state.meta.llm_is_real ? "" : " (offline stub)");
-  if (!state.meta.llm_is_real) pill.classList.add("warn");
+  updateLlmUi();
 
   const fs = $("format-select");
   fs.replaceChildren(...state.meta.formats.map((f) => el("option", { value: f.id, textContent: f.name })));
@@ -106,6 +105,10 @@ async function init() {
   $("load-run-btn").onclick = openRunsModal;
   $("run-modal-close").onclick = closeRunsModal;
   $("run-modal").onclick = (e) => { if (e.target.id === "run-modal") closeRunsModal(); };
+  $("impl-all").onclick = implementAll;
+  $("model-btn").onclick = openModelModal;
+  $("model-modal-close").onclick = () => $("model-modal").classList.add("hidden");
+  $("model-modal").onclick = (e) => { if (e.target.id === "model-modal") $("model-modal").classList.add("hidden"); };
   $("sort-select").onchange = renderDeck;
 
   await loadSessionList();
@@ -160,7 +163,9 @@ async function openSession(id) {
 function enterSession(payload) {
   state.session = payload.session;
   state.cards = payload.cards;
-  state.props = (payload.session.properties || []).map((p) => ({ ...p }));
+  // Always open with a single uninitialized property (a previous run's
+  // properties can be restored explicitly via "Load previous run").
+  state.props = [];
   state.imageMap = {};
   for (const c of state.cards) {
     if (c.image) state.imageMap[c.name] = c.image;
@@ -174,7 +179,7 @@ function enterSession(payload) {
   $("s-warnings").textContent = (payload.warnings || []).join("  •  ");
   $("mulligans").value = state.session.mulligans || 0;
   renderDeck();
-  if (!state.props.length) addProperty();
+  addProperty(); // exactly one blank property on open
   renderProps();
   $("sim-stats").innerHTML = "";
   $("sim-seed").textContent = "";
@@ -187,7 +192,7 @@ function enterSession(payload) {
 const fmtDate = (s) => (s || "").slice(0, 19).replace("T", " ");
 
 function propText(p) {
-  return p.description || `${p.timing} ${p.phase} of turn ${p.turn}: ${p.english}`;
+  return p.description || `${timingLabel(p.timing)} ${p.phase} of turn ${p.turn}: ${p.english}`;
 }
 
 function openRunsModal() {
@@ -235,6 +240,7 @@ function loadRun(r) {
   $("mulligans").value = cfg.mulligans ?? 0;
   $("timeout").value = cfg.timeout_per_game_s ?? 5;
   $("seed").value = cfg.base_seed ?? "";
+  $("search-mode").value = cfg.search_mode ?? "dfs_heuristic";
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -287,6 +293,8 @@ function renderDeck() {
   const total = state.cards.reduce((n, c) => n + c.quantity, 0);
   const impl = state.cards.filter((c) => c.implemented).length;
   $("deck-summary").textContent = `${total} cards · ${impl}/${state.cards.length} distinct implemented`;
+  // Global implement-all wrench appears only when something is unimplemented.
+  $("impl-all").classList.toggle("hidden", impl >= state.cards.length);
 
   const order = Object.keys(groups).sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
@@ -326,19 +334,129 @@ function cardRow(c) {
 
   if (!c.implemented) {
     const w = el("span", { className: "wrench", title: "Ask a model to code this card", textContent: "🔧" });
-    w.onclick = (e) => { e.stopPropagation(); askImplement(c.name); };
+    w.onclick = (e) => { e.stopPropagation(); askImplement(c.name, w); };
     row.append(w);
   }
   row.append(costEnd(c)); // mana cost at the far right
   return row;
 }
 
-async function askImplement(name) {
+// Refresh the deck's implemented flags after code generation.
+async function refreshDeck() {
+  const payload = await api(`/api/sessions/${state.session.id}`);
+  state.cards = payload.cards;
+  renderDeck();
+}
+
+async function askImplement(name, el0) {
+  if (el0) { el0.textContent = "⏳"; el0.style.pointerEvents = "none"; }
   try {
-    await api(`/api/cards/${encodeURIComponent(name)}/implement`, { method: "POST" });
+    await api(`/api/sessions/${state.session.id}/cards/${encodeURIComponent(name)}/implement`,
+      { method: "POST" });
+    await refreshDeck();
   } catch (e) {
     alert(`${name}: ${e.message}`);
+    if (el0) { el0.textContent = "🔧"; el0.style.pointerEvents = ""; }
   }
+}
+
+async function implementAll() {
+  const btn = $("impl-all");
+  const n = state.cards.filter((c) => !c.implemented).length;
+  if (!n) return;
+  if (!confirm(`Ask the selected model to implement ${n} unimplemented card(s)?\n` +
+    `Quality depends on the model; failures keep their vanilla approximation.`)) return;
+  btn.textContent = " ⏳";
+  try {
+    const r = await api(`/api/sessions/${state.session.id}/cards/implement-all`, { method: "POST" });
+    await refreshDeck();
+    const failed = (r.results || []).filter((x) => !x.ok);
+    let msg = `Implemented ${r.implemented}/${r.total} cards.`;
+    if (failed.length) msg += `\n\nStill unimplemented:\n` +
+      failed.slice(0, 12).map((x) => `• ${x.name}: ${x.error}`).join("\n");
+    alert(msg);
+  } catch (e) {
+    alert("Implement-all failed: " + e.message);
+  } finally {
+    btn.textContent = " 🔧";
+  }
+}
+
+// ---- model picker ----
+// Reflect the currently selected LLM everywhere it's shown: the top pill, the
+// Properties-section model button, and the note under it. The provider is
+// shared — the same model compiles properties and implements cards.
+function updateLlmUi() {
+  const m = state.meta || {};
+  const pill = $("llm-pill");
+  if (pill) {
+    pill.textContent = "LLM: " + m.llm_provider + (m.llm_is_real ? "" : " (offline stub)");
+    pill.classList.toggle("warn", !m.llm_is_real);
+  }
+  const note = $("prop-llm-note");
+  if (note) {
+    note.textContent = m.llm_is_real
+      ? `Properties are compiled to code by ${m.llm_provider}.`
+      : `Properties are compiled by the offline stub (regex heuristics only). Click “⚙ Model” to pick a local or API model for accurate compilation.`;
+    note.classList.toggle("warnings", !m.llm_is_real);
+  }
+}
+
+async function openModelModal() {
+  const body = $("model-list");
+  body.replaceChildren(el("div", { className: "muted", textContent: "Loading…" }));
+  $("model-modal").classList.remove("hidden");
+  let data;
+  try { data = await api("/api/llm"); }
+  catch (e) { body.replaceChildren(el("div", { className: "err", textContent: e.message })); return; }
+
+  const rows = data.options.map((o) => {
+    const row = el("div", { className: "model-row" + (o.id === data.selected ? " selected" : "") });
+    const head = el("div", { className: "model-head" },
+      el("b", { textContent: o.label }),
+      o.id === data.selected ? el("span", { className: "pill warn", textContent: "active" }) : "");
+    if (o.size) head.append(el("span", { className: "muted", textContent: " " + o.size }));
+    row.append(head, el("div", { className: "muted", style: "font-size:12px", textContent: o.detail }));
+
+    // Status + action line.
+    const foot = el("div", { className: "model-foot" });
+    if (o.kind === "local") {
+      if (!o.ollama_running) {
+        foot.append(el("span", { className: "problems", textContent:
+          "Ollama not detected — install from ollama.com, then run it." }));
+      } else if (!o.installed) {
+        foot.append(el("span", { className: "warnings", textContent: `Not downloaded — run:  ${o.pull_cmd}` }));
+      } else {
+        foot.append(el("span", { className: "muted", textContent: "Downloaded and ready." }));
+      }
+    } else if (o.kind === "api") {
+      foot.append(el("span", { className: "muted", textContent:
+        data.has_api_key ? "API key set." : "Requires an API key (entered below, stored locally)." }));
+    }
+    row.append(foot);
+
+    let keyInput = null;
+    if (o.needs_key && !data.has_api_key) {
+      keyInput = el("input", { type: "password", placeholder: "ANTHROPIC_API_KEY", style: "width:100%;margin-top:.4rem" });
+      row.append(keyInput);
+    }
+
+    const use = el("button", { className: "primary", style: "margin-top:.5rem",
+      textContent: o.id === data.selected ? "Selected" : "Use this model" });
+    use.disabled = o.id === data.selected;
+    use.onclick = async () => {
+      try {
+        await api("/api/llm", { method: "POST",
+          body: JSON.stringify({ model_id: o.id, api_key: keyInput ? keyInput.value : null }) });
+        state.meta = await api("/api/meta"); // pick up the new provider
+        updateLlmUi();
+        openModelModal(); // refresh the list
+      } catch (e) { alert(e.message); }
+    };
+    row.append(use);
+    return row;
+  });
+  body.replaceChildren(...rows);
 }
 
 const hover = $("hover-img");
@@ -370,10 +488,14 @@ function renderProps() {
   list.replaceChildren(...state.props.map((p, i) => propRow(p, i)));
 }
 
+// Display label for a timing value ("at" is checked during/at that phase, but
+// reads better as "at the end of" in the UI).
+const timingLabel = (t) => (t === "at" ? "at the end of" : t);
+
 function propRow(p, i) {
   const wrap = el("div", { className: "prop" });
   const timing = el("select", {}, ...["before", "at"].map((t) =>
-    el("option", { value: t, textContent: t, selected: p.timing === t })));
+    el("option", { value: t, textContent: timingLabel(t), selected: p.timing === t })));
   timing.onchange = () => (p.timing = timing.value);
 
   const phase = el("select", {}, ...state.meta.phases.map((ph) =>
@@ -435,6 +557,7 @@ async function runSim() {
     mulligans: parseInt($("mulligans").value) || 0,
     on_the_play: $("play-draw-toggle").dataset.play === "1",
     base_seed: seedField === "" ? null : parseInt(seedField),
+    search_mode: $("search-mode").value,
   });
   try {
     const r = await api(`/api/sessions/${state.session.id}/simulate`, { method: "POST", body });
@@ -464,7 +587,10 @@ function renderStats(stats) {
   const pct = (stats.success_rate * 100).toFixed(1);
   const progress = stats.total_games ? (stats.games_run / stats.total_games) * 100 : 0;
   const propNames = {};
-  state.props.forEach((p) => (propNames[p.id] = p.english || p.id));
+  state.props.forEach((p) => {
+    const phase = (p.phase || "").replace(/_/g, " ");
+    propNames[p.id] = `${timingLabel(p.timing || "at")} ${phase} of turn ${p.turn}, ${p.english || p.id}`;
+  });
 
   box.replaceChildren(
     el("div", { className: "bar" }, el("div", { style: `width:${progress}%` })),
@@ -488,30 +614,448 @@ function stat(k, v) {
   return el("div", { className: "stat" }, el("div", { className: "v", textContent: v }), el("div", { className: "k", textContent: k }));
 }
 
+// Normalise a result into a list of run objects, tolerating older results that
+// only stored `sample_success_logs` (those were successes by construction).
+function normalizeRuns(result) {
+  if (result.sample_runs && result.sample_runs.length) return result.sample_runs;
+  return (result.sample_success_logs || []).map((log, i) => ({
+    game_index: i, success: true, timed_out: false, node_capped: false,
+    hand: (log[0] && log[0].hand) || [],
+    branches_explored: null, branches_considered: null,
+    tree: null, tree_truncated: false, log,
+  }));
+}
+
 function renderViz(result) {
-  // Drop "pass" and "pay ..." steps, then order shortest games first.
-  state.vizGames = (result.sample_success_logs || [])
-    .map((g) => g.filter((f) => {
+  // One row per game, in game order. Replay frames drop "pass"/"pay" steps.
+  const runs = normalizeRuns(result).map((r, i) => ({
+    ...r,
+    _i: i, // original game index — openBoard/highlightGame key on this
+    frames: (r.log || []).filter((f) => {
       const d = f.desc || "";
       return !d.startsWith("pass") && !d.startsWith("pay ");
-    }))
-    .sort((a, b) => a.length - b.length);
-  const box = $("viz-box");
-  const list = $("viz-list");
-  if (!state.vizGames.length) { box.classList.add("hidden"); return; }
-  box.classList.remove("hidden");
-  list.replaceChildren(...state.vizGames.map((frames, i) => {
-    const b = el("button", { textContent: `Game #${i + 1} · ${frames.length} steps`, style: "margin:.15rem" });
-    b.onclick = () => { highlightGame(i); openBoard(i); };
-    return b;
+    }),
   }));
-  highlightGame(0);
-  openBoard(0);
+
+  state.vizRuns = runs;
+  state.vizProps = result.properties || []; // for the tree's status circles
+  state.vizGames = runs.map((r) => r.frames); // openBoard indexes into this
+  state.runsSort = { key: "#", dir: 1 };
+
+  const box = $("viz-box");
+  if (!runs.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  renderRunsTable();
+  // Open the first replayable (successful) game, if any.
+  const first = runs.findIndex((r) => r.frames.length);
+  $("viz-log").replaceChildren();
+  if (first >= 0) { highlightGame(first); openBoard(first); }
+}
+
+function renderRunsTable() {
+  const scroll = el("div", { className: "runs-scroll" }, runsTable(state.vizRuns));
+  scroll.classList.toggle("scrolling", state.vizRuns.length > 10);
+  $("viz-list").replaceChildren(scroll);
+  highlightGame(state.vizIdx);
+}
+
+// Sort accessors per column; null = "no value" (always sorted last).
+const RUN_SORTS = {
+  "#": (r) => r._i,
+  Result: (r) => (r.success ? 0 : r.timed_out || r.node_capped ? 1 : 2),
+  Steps: (r) => (r.frames.length ? r.frames.length : null),
+  Explored: (r) => r.branches_explored,
+  Considered: (r) => r.branches_considered,
+};
+
+function runsTable(runs) {
+  // [header, alignment-class, sortable] triples.
+  const COLS = [["#", "numc", true], ["Result", "cc", true], ["Hand", "cc", false],
+    ["Steps", "numc", true], ["Explored", "numc", true], ["Considered", "numc", true],
+    ["Tree", "cc", false]];
+  const { key, dir } = state.runsSort;
+  const thead = el("thead", {}, el("tr", {},
+    ...COLS.map(([h, cls, sortable]) => {
+      const th = el("th", { className: cls + (sortable ? " sortable" : "") }, h);
+      if (sortable) {
+        const active = key === h;
+        th.append(el("span", {
+          className: "sortv" + (active ? " active" : ""),
+          textContent: active && dir === -1 ? "▴" : "▾",
+        }));
+        th.title = "sort by " + h.toLowerCase();
+        th.onclick = () => {
+          state.runsSort = { key: h, dir: key === h ? -dir : 1 };
+          renderRunsTable();
+        };
+      }
+      return th;
+    })));
+
+  const f = RUN_SORTS[key] || RUN_SORTS["#"];
+  const sorted = runs.slice().sort((a, b) => {
+    const va = f(a), vb = f(b);
+    if (va == null && vb == null) return a._i - b._i;
+    if (va == null) return 1;   // missing values always last
+    if (vb == null) return -1;
+    return (va - vb) * dir || a._i - b._i;
+  });
+
+  const num = (v) => (v == null ? "—" : v.toLocaleString());
+  const tbody = el("tbody");
+  sorted.forEach((run) => {
+    const i = run._i;
+    // Result: green tick / red cross, with a suffix when the search was cut.
+    const mark = run.success ? "✓" : "✗";
+    const cls = run.success ? "ok" : "ko";
+    let title = run.success ? "all properties satisfied"
+      : "no line satisfying all properties was found";
+    let suffix = "";
+    if (run.timed_out) { suffix = " ⏱"; title += " — timed out before the search completed"; }
+    else if (run.node_capped) { suffix = " ▦"; title += " — node cap reached before the search completed"; }
+
+    const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the opening hand" });
+    hoverGrid(handIcon, run.hand || []);
+
+    const treeCell = (run.tree || run.tree_gz)
+      ? (() => {
+          const b = el("span", { className: "icon-btn", textContent: "🌳", title: "open the explored-states tree in a new tab" });
+          b.onclick = (e) => { e.stopPropagation(); openTree(run, i); };
+          return b;
+        })()
+      : el("span", { className: "muted", textContent: "—" });
+
+    const canReplay = run.frames.length > 0;
+    const tr = el("tr", { className: "run-row" + (canReplay ? " replayable" : "") },
+      el("td", { className: "numc", textContent: String(i + 1) }));
+    tr.dataset.idx = i; // original game index (survives sorting)
+    tr.append(
+      el("td", { className: "cc status " + cls, title, textContent: mark + suffix }),
+      el("td", { className: "cc" }, handIcon),
+      el("td", { className: "numc", title: "steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
+      el("td", { className: "numc", textContent: num(run.branches_explored) }),
+      el("td", { className: "numc", textContent: num(run.branches_considered) }),
+      el("td", { className: "cc" }, treeCell));
+    if (canReplay) {
+      tr.title = "click to replay the winning line below";
+      tr.onclick = () => { highlightGame(i); openBoard(i); };
+    }
+    tbody.append(tr);
+  });
+  return el("table", { className: "runs viz-runs" }, thead, tbody);
 }
 
 function highlightGame(gi) {
-  [...$("viz-list").children].forEach((b, i) =>
-    b.classList.toggle("primary", i === gi));
+  state.vizIdx = gi;
+  const tbody = $("viz-list").querySelector("tbody");
+  if (tbody) [...tbody.children].forEach((tr) => tr.classList.toggle("active", +tr.dataset.idx === gi));
+}
+
+// Floating grid of card images shown while hovering a hand icon.
+let hoverGridEl = null;
+function hoverGrid(node, names) {
+  const show = () => {
+    if (!hoverGridEl) { hoverGridEl = el("div", { id: "hover-grid" }); document.body.append(hoverGridEl); }
+    const g = hoverGridEl;
+    if (!names || !names.length) {
+      g.replaceChildren(el("div", { className: "gfallback", textContent: "hand not recorded" }));
+    } else {
+      g.replaceChildren(...names.map((n) => {
+        const img = state.imageMap[n];
+        return img ? el("img", { src: img, alt: n, title: n })
+                   : el("div", { className: "gfallback", textContent: n });
+      }));
+    }
+    g.style.display = "grid";
+  };
+  node.onmouseenter = show;
+  node.onmousemove = (e) => {
+    if (!hoverGridEl) return;
+    const w = hoverGridEl.offsetWidth || 480, h = hoverGridEl.offsetHeight || 240;
+    const x = Math.min(e.clientX + 18, window.innerWidth - w - 12);
+    const y = Math.min(e.clientY + 18, window.innerHeight - h - 12);
+    hoverGridEl.style.left = Math.max(8, x) + "px";
+    hoverGridEl.style.top = Math.max(8, y) + "px";
+  };
+  node.onmouseleave = () => { if (hoverGridEl) hoverGridEl.style.display = "none"; };
+}
+
+// Inflate a gzip+base64 tree stored by the server.
+async function inflateTree(b64) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
+}
+
+// Open the explored-states search tree for a run in a new browser tab.
+async function openTree(run, i) {
+  if (!run.tree && !run.tree_gz) return;
+  // window.open must happen synchronously in the click, before any await.
+  const w = window.open("", "_blank");
+  if (!w) { alert("Popup blocked — allow popups for this site to view the tree."); return; }
+  let tree = run.tree;
+  if (!tree) {
+    try { tree = await inflateTree(run.tree_gz); }
+    catch (e) { w.document.write("Failed to decode the stored tree: " + e); return; }
+  }
+  const payload = {
+    tree,
+    truncated: !!run.tree_truncated,
+    index: i + 1,
+    explored: run.branches_explored,
+    considered: run.branches_considered,
+    // Property list for the per-node status circles.
+    props: (state.vizProps || []).map((p) => ({
+      id: p.id, timing: p.timing, phase: p.phase, turn: p.turn,
+      name: p.english || p.description || p.id,
+    })),
+  };
+  w.document.open();
+  w.document.write(treeHtml(payload));
+  w.document.close();
+}
+
+// A self-contained HTML page that lays the tree out left-to-right as an SVG.
+// The graph starts compacted to the kept hand(s); clicking a state reveals the
+// subbranches initiated from it. Columns are search steps (hand / step 1..N)
+// with delimiters and a sticky step header.
+function treeHtml(payload) {
+  const json = JSON.stringify(payload).replace(/</g, "\\u003c");
+  return `<!doctype html><html><head><meta charset="utf-8">
+<title>Search tree — game #${payload.index}</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#0f1116; color:#e6e8ee;
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  #bar { display:flex; gap:1rem; align-items:center; flex-wrap:wrap;
+    padding:.6rem 1rem; border-bottom:1px solid #2e3340; background:#1c1f27; position:sticky; top:0; z-index:3; }
+  #bar b { color:#d9a441; }
+  #bar .k { color:#9aa3b2; }
+  #bar .warn { color:#e05561; }
+  #bar button { background:#232732; color:#e6e8ee; border:1px solid #2e3340; border-radius:6px; padding:.25rem .6rem; cursor:pointer; }
+  #bar .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin:0 .25rem -1px 0; }
+  #wrap { position:absolute; top:49px; bottom:0; left:0; right:0; overflow:auto; background:#0f1116; }
+  /* sticky step header: scrolls horizontally with the tree, pinned vertically */
+  #ruler { position:sticky; top:0; height:26px; z-index:2; background:#171a21; border-bottom:1px solid #2e3340; }
+  #ruler span { position:absolute; top:5px; font-size:11px; letter-spacing:.5px; text-transform:uppercase; color:#9aa3b2; white-space:nowrap; }
+  svg { display:block; }
+  .colline { stroke:#232732; stroke-width:1; stroke-dasharray:4 4; }
+  .edge { fill:none; stroke:#3a4150; stroke-width:1.2; }
+  .edge.win { stroke:#d9a441; stroke-width:2; }
+  /* one circle per property: orange = still to verify, green = verified,
+     red = can no longer be verified from this state */
+  .node circle { stroke:#0f1116; stroke-width:1; }
+  .node circle.todo { fill:#d98f41; }
+  .node circle.ok { fill:#4bbf73; }
+  .node circle.ko { fill:#e05561; }
+  .node circle.plain { fill:#4f8cff; }
+  .node.win circle { stroke:#f2e0b8; stroke-width:1.6; }
+  .node text { fill:#c5ccd8; font-size:11px; }
+  .node.win text { fill:#f2e0b8; }
+  .node.exp { cursor: pointer; }
+  .node.exp text:hover { fill:#e6e8ee; }
+</style></head><body>
+<div id="bar">
+  <b>Search tree · game #${payload.index}</b>
+  <span><span class="k">explored </span>${payload.explored == null ? "—" : payload.explored.toLocaleString()}</span>
+  <span><span class="k">considered </span>${payload.considered == null ? "—" : payload.considered.toLocaleString()}</span>
+  <span class="legend"><i style="background:#4bbf73"></i>verified <i style="background:#d98f41;margin-left:.5rem"></i>to verify <i style="background:#e05561;margin-left:.5rem"></i>unreachable — one circle per property (hover it)</span>
+  <span class="k">gold = winning line · click a state to show / hide its subbranches</span>
+  ${payload.truncated ? '<span class="warn">tree truncated (search too large to record fully)</span>' : ""}
+  <span style="flex:1"></span>
+  <button onclick="setAll(true)">expand all</button><button onclick="setAll(false)">collapse all</button>
+  <button onclick="zoom(1/1.2)">−</button><button onclick="zoom(1.2)">+</button><button onclick="resetView()">reset</button>
+</div>
+<div id="wrap"><div id="ruler"></div><svg id="svg"></svg></div>
+<script>
+const DATA = ${json};
+const NS = "http://www.w3.org/2000/svg";
+const PROPS = DATA.props || [];
+const K = Math.max(1, PROPS.length);       // circles per node (one per property)
+const CGAP = 13;                           // spacing between a node's circles
+const R = 5, Y_GAP = 24, MX = 28, MY = 20;
+const X_GAP = 260 + (K - 1) * CGAP;
+// Turn order, to decide whether a property's moment is already past.
+const PHASES = ["untap","upkeep","draw","precombat_main","begin_combat","declare_attackers",
+  "declare_blockers","combat_damage","end_combat","postcombat_main","end_step","cleanup"];
+const rankOf = (turn, phase) => turn * 100 + Math.max(0, PHASES.indexOf(phase));
+const svg = document.getElementById("svg");
+const ruler = document.getElementById("ruler");
+// "pass" states carry no decision: hide them, grafting their subbranches
+// into the parent (nested passes unroll fully; success flags are preserved,
+// so the winning line stays connected).
+function prunePass(n) {
+  const out = [];
+  for (const c of (n.children || [])) {
+    prunePass(c);
+    if ((c.label || "") === "pass" || (c.label || "").startsWith("pass ")) out.push(...c.children);
+    else out.push(c);
+  }
+  n.children = out;
+}
+prunePass(DATA.tree);
+// ✗ dead-end leaves are display noise: next to real branches they are
+// dropped, and a node whose only continuation is a dead end ABSORBS it — the
+// child is hidden and the node's circles take the dead end's status (its
+// turn/phase/verified set), showing where the line actually died.
+function tidyDead(n) {
+  const kids = n.children || [];
+  kids.forEach(tidyDead);
+  const live = kids.filter(c => !(c.label || "").startsWith("✗"));
+  if (live.length) { n.children = live; return; }
+  if (kids.length) { n._dead = kids[0]; n.children = []; }
+}
+tidyDead(DATA.tree);
+// The synthetic "game" root is hidden: the visible roots are the kept hands.
+// Every state starts collapsed — except the winning line, which opens unrolled.
+const roots = (DATA.tree.children && DATA.tree.children.length) ? DATA.tree.children : [DATA.tree];
+function openWin(nodes) {
+  for (const n of nodes) if (n.success) { n._open = true; openWin(n.children || []); }
+}
+openWin(roots);
+let baseW = 0, baseH = 0, scale = 1;
+
+const kidsOf = n => (n._open ? (n.children || []) : []);
+function layout() {
+  let yi = 0, maxDepth = 0;
+  const place = (n, d) => {
+    n.depth = d; if (d > maxDepth) maxDepth = d;
+    const kids = kidsOf(n);
+    if (!kids.length) { n.yi = yi++; }
+    else { kids.forEach(c => place(c, d + 1)); n.yi = (kids[0].yi + kids[kids.length - 1].yi) / 2; }
+  };
+  roots.forEach(r => place(r, 0));
+  return { leaves: Math.max(1, yi), maxDepth };
+}
+const px = n => MX + n.depth * X_GAP;
+const py = n => MY + n.yi * Y_GAP;
+const stepName = d => d === 0 ? "hand" : "step " + d;
+
+function edge(a, b, win) {
+  const p = document.createElementNS(NS, "path");
+  const x1 = px(a) + (K - 1) * CGAP + R, y1 = py(a), x2 = px(b) - R, y2 = py(b), mx = (x1 + x2) / 2;
+  p.setAttribute("d", "M" + x1 + "," + y1 + "C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2);
+  p.setAttribute("class", "edge" + (win ? " win" : ""));
+  svg.appendChild(p);
+}
+// Per-property status at a node: verified (green) / dead (red: its trigger
+// moment is past, it can no longer be verified from here) / pending (orange).
+function propStatus(n, p) {
+  if ((n.sat || []).includes(p.id)) return ["ok", "verified on this line"];
+  const here = rankOf(n.turn, n.phase);
+  const target = rankOf(p.turn, p.phase);
+  const dead = p.timing === "before" ? here >= target : here > target;
+  return dead ? ["ko", "can no longer be verified from here"] : ["todo", "still to be verified"];
+}
+function drawNode(n) {
+  const kids = n.children || [];
+  const g = document.createElementNS(NS, "g");
+  g.setAttribute("class", "node" + (n.success ? " win" : "") + (kids.length ? " exp" : ""));
+  // A node that absorbed its sole dead-end child shows the DEAD END's status.
+  const src = n._dead || n;
+  if (PROPS.length) {
+    PROPS.forEach((p, i) => {
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("cx", px(n) + i * CGAP); c.setAttribute("cy", py(n)); c.setAttribute("r", R);
+      const [cls, why] = propStatus(src, p);
+      c.setAttribute("class", cls);
+      const tt = document.createElementNS(NS, "title");
+      tt.textContent = (p.timing || "at") + " " + (p.phase || "").replace(/_/g, " ") +
+        " of turn " + p.turn + ", " + p.name + " — " + why;
+      c.appendChild(tt);
+      g.appendChild(c);
+    });
+  } else { // old runs without a stored property list: a single neutral circle
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("cx", px(n)); c.setAttribute("cy", py(n)); c.setAttribute("r", R);
+    c.setAttribute("class", "plain");
+    g.appendChild(c);
+  }
+  const t = document.createElementNS(NS, "text");
+  t.setAttribute("x", px(n) + (K - 1) * CGAP + R + 4); t.setAttribute("y", py(n) + 4);
+  let lbl = n.label || "";
+  if (lbl.length > 36) lbl = lbl.slice(0, 35) + "…";
+  // ▸N = N hidden subbranches (click to show); ▾ = expanded (click to hide).
+  const marker = kids.length ? (n._open ? " ▾" : " ▸" + kids.length) : "";
+  t.textContent = (n.turn ? "T" + n.turn + " " : "") + lbl + marker;
+  const title = document.createElementNS(NS, "title");
+  const where = n.phase && n.phase !== "start"
+    ? "turn " + n.turn + ", " + n.phase.replace(/_/g, " ") : "";
+  title.textContent = n.hand
+    ? "Opening hand:\\n" + n.hand.map(c => "  · " + c).join("\\n")   // initial state
+    : (n.label || "") + (where ? "\\n" + where : "") +
+      (kids.length ? "\\n" + kids.length + " subbranch" + (kids.length > 1 ? "es" : "") : "") +
+      (n._dead ? "\\n✗ line dies at turn " + n._dead.turn + ", " + (n._dead.phase || "").replace(/_/g, " ") : "");
+  g.appendChild(title); // on the group: hovering anywhere but a circle shows it
+  g.appendChild(t);
+  if (kids.length) {
+    g.addEventListener("click", () => { n._open = !n._open; render(); });
+  }
+  svg.appendChild(g);
+}
+function render() {
+  const { leaves, maxDepth } = layout();
+  baseW = MX * 2 + (maxDepth + 1) * X_GAP;
+  baseH = MY * 2 + leaves * Y_GAP;
+  svg.setAttribute("viewBox", "0 0 " + baseW + " " + baseH);
+  svg.replaceChildren();
+  ruler.replaceChildren();
+  // Column delimiters between steps + the sticky step header.
+  for (let d = 0; d <= maxDepth; d++) {
+    const s = document.createElement("span");
+    s.textContent = stepName(d);
+    s.dataset.x = MX + d * X_GAP - R;
+    ruler.appendChild(s);
+    if (d > 0) {
+      const l = document.createElementNS(NS, "line");
+      const x = MX + d * X_GAP - 14; // just before this step's nodes
+      l.setAttribute("x1", x); l.setAttribute("x2", x);
+      l.setAttribute("y1", 0); l.setAttribute("y2", baseH);
+      l.setAttribute("class", "colline");
+      svg.appendChild(l);
+    }
+  }
+  const walk = n => { kidsOf(n).forEach(c => { edge(n, c, n.success && c.success); walk(c); }); drawNode(n); };
+  roots.forEach(walk);
+  applyScale();
+}
+function setAll(open) {
+  if (open) {
+    let count = 0;
+    const cnt = n => { count++; (n.children || []).forEach(cnt); };
+    roots.forEach(cnt);
+    if (count > 4000 && !confirm("Expand all " + count.toLocaleString() + " states? Rendering may be slow.")) return;
+  }
+  const w = n => { n._open = open; (n.children || []).forEach(w); };
+  roots.forEach(w);
+  render();
+}
+render();
+
+function applyScale() {
+  svg.setAttribute("width", baseW * scale);
+  svg.setAttribute("height", baseH * scale);
+  ruler.style.width = (baseW * scale) + "px";
+  [...ruler.children].forEach(sp => { sp.style.left = (sp.dataset.x * scale) + "px"; });
+}
+function zoom(f, reset) {
+  scale = reset ? 1 : Math.max(0.2, Math.min(4, scale * f));
+  applyScale();
+}
+// Reset = zoom 1 + expansion back to the initial view: the winning line
+// unrolled when one exists, everything collapsed otherwise.
+function resetView() {
+  const close = n => { n._open = false; (n.children || []).forEach(close); };
+  roots.forEach(close);
+  openWin(roots);
+  scale = 1;
+  render();
+}
+document.getElementById("wrap").addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault(); zoom(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+}, { passive: false });
+</script></body></html>`;
 }
 
 // ---- graphical board (MTGO-like) ----
@@ -525,12 +1069,45 @@ function tile(name, opts = {}) {
   if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
   else t.append(el("div", { className: "fallback", textContent: name }));
   if (opts.commander) t.append(el("div", { className: "badge", textContent: "CMD" }));
+  // Markers: render every counter kind present on the permanent, not just a
+  // hardcoded few. +1/+1 and -1/-1 get P/T formatting, loyalty a shield, and
+  // any other kind (charge, oil, fade, page, lore, ...) shows "N×kind".
   const counters = opts.counters || {};
-  const plus = counters["+1/+1"];
-  if (plus) t.append(el("div", { className: "badge ctr", textContent: `+${plus}/+${plus}` }));
-  if (counters.fade) t.append(el("div", { className: "badge ctr", textContent: `fade ${counters.fade}` }));
-  if (counters.loyalty) t.append(el("div", { className: "badge ctr", textContent: `⟐${counters.loyalty}` }));
+  const kinds = Object.entries(counters).filter(([, v]) => v);
+  if (kinds.length) {
+    const row = el("div", { className: "ctr-row" });
+    for (const [k, v] of kinds) {
+      let label, cls = "badge ctr";
+      if (k === "+1/+1") { label = `+${v}/+${v}`; }
+      else if (k === "-1/-1") { label = `−${v}/−${v}`; cls += " neg"; }
+      else if (k === "loyalty") { label = `⟐${v}`; }
+      else { label = `${v}×${k}`; }
+      row.append(el("div", { className: cls, title: `${v} ${k} counter${v === 1 ? "" : "s"}`, textContent: label }));
+    }
+    t.append(row);
+  }
+  hoverable(t, img); // enlarge on hover, like the decklist
   return t;
+}
+
+// A pile of cards stacked on top of each other, each revealing only the top
+// strip of its image. Cards are added chronologically, so the last (most
+// recent) one paints over the previous. Hover shows the full card.
+function pile(names) {
+  const wrap = el("div", { className: "pile" });
+  const list = names || [];
+  if (!list.length) {
+    wrap.append(el("div", { className: "pile-empty", textContent: "—" }));
+    return wrap;
+  }
+  for (const n of list) {
+    const img = state.imageMap[n];
+    const card = el("div", { className: "pile-img", title: n });
+    if (img) card.append(el("img", { src: img, alt: n, loading: "lazy" }));
+    else card.append(el("div", { className: "fallback", textContent: n }));
+    wrap.append(hoverable(card, img));
+  }
+  return wrap;
 }
 
 function poolPips(pool) {
@@ -541,11 +1118,40 @@ function poolPips(pool) {
   return span;
 }
 
+// A permanent tile with any auras/equipment attached to it stacked BEHIND it
+// (peeking out from the top-right), so the enchanted/equipped card is on top.
+function permTile(p, attachedByHost) {
+  const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters });
+  const attached = attachedByHost[p.uid] || [];
+  if (!attached.length) return host;
+  const wrap = el("div", { className: "perm-stack" });
+  attached.forEach((a, i) => {
+    const at = tile(a.name, { tapped: a.tapped, counters: a.counters });
+    at.classList.add("attached");
+    at.style.transform = `translate(${(i + 1) * 13}px, ${-(i + 1) * 11}px)` + (a.tapped ? " rotate(90deg) scale(.86)" : "");
+    at.title = a.name + (a.is_aura ? " (enchanting " + p.name + ")" : " (equipping " + p.name + ")");
+    wrap.append(at);
+  });
+  host.classList.add("host");
+  wrap.append(host);
+  return wrap;
+}
+
 function renderBoard(f) {
   const bf = f.battlefield || [];
-  const mkPerm = (p) => tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters });
-  const lands = bf.filter((p) => p.is_land).map(mkPerm);
-  const nonlands = bf.filter((p) => !p.is_land).map(mkPerm);
+  // Attached permanents (auras/equipment) render behind their host, not as
+  // their own top-level tile.
+  const attachedByHost = {};
+  const hostUids = new Set(bf.map((p) => p.uid));
+  for (const p of bf) {
+    if (p.attached_to != null && hostUids.has(p.attached_to)) {
+      (attachedByHost[p.attached_to] ||= []).push(p);
+    }
+  }
+  const isAttached = (p) => p.attached_to != null && hostUids.has(p.attached_to);
+  const mkPerm = (p) => permTile(p, attachedByHost);
+  const lands = bf.filter((p) => p.is_land && !isAttached(p)).map(mkPerm);
+  const nonlands = bf.filter((p) => !p.is_land && !isAttached(p)).map(mkPerm);
   const c = f.counters || {};
 
   const header = el("div", { className: "board-header" },
@@ -558,30 +1164,31 @@ function renderBoard(f) {
     el("span", { className: "counter-chip", textContent: `noncreature ${c.noncreature || 0}` }),
     el("span", { className: "counter-chip", textContent: `drawn ${c.drawn || 0}` }));
 
-  // MTGO-like layout: command zone top-left, stack top-right (graveyard below
-  // it), the field in the middle (lands under the other permanents), hand at
-  // the bottom.
+  // MTGO-like layout: exile + graveyard piles on the left, the field in the
+  // middle (lands under the other permanents), command zone + stack on the
+  // right, hand across the bottom.
   const grid = el("div", { className: "board-grid" });
   grid.append(
-    el("div", { className: "bzone area-cmd" },
-      el("div", { className: "zlabel", textContent: `Command zone (${(f.command_zone || []).length})` }),
-      el("div", { className: "tiles small" }, ...(f.command_zone || []).map((n) => tile(n, { commander: true })))),
+    el("div", { className: "bzone area-left" },
+      el("div", { className: "side-box" },
+        el("div", { className: "zlabel", textContent: `Graveyard (${(f.graveyard || []).length})` }),
+        pile(f.graveyard)),
+      el("div", { className: "side-box" },
+        el("div", { className: "zlabel", textContent: `Exile (${(f.exile || []).length})` }),
+        pile(f.exile))),
     el("div", { className: "bzone area-field" },
       el("div", { className: "field-row" },
         el("div", { className: "zlabel", textContent: `Battlefield (${nonlands.length + lands.length})` }),
         el("div", { className: "tiles" }, ...nonlands)),
       el("div", { className: "field-row lands" },
         el("div", { className: "tiles" }, ...lands))),
-    el("div", { className: "bzone area-side" },
+    el("div", { className: "bzone area-right" },
+      el("div", { className: "side-box" },
+        el("div", { className: "zlabel", textContent: `Command zone (${(f.command_zone || []).length})` }),
+        pile(f.command_zone)),
       el("div", { className: "side-box" },
         el("div", { className: "zlabel", textContent: `Stack (${(f.stack || []).length})` }),
-        el("div", { className: "tiles small" }, ...(f.stack || []).map((n) => tile(n)))),
-      el("div", { className: "side-box" },
-        el("div", { className: "zlabel", textContent: `Graveyard (${(f.graveyard || []).length})` }),
-        el("div", { className: "tiles small" }, ...(f.graveyard || []).map((n) => tile(n)))),
-      (f.exile || []).length ? el("div", { className: "side-box" },
-        el("div", { className: "zlabel", textContent: `Exile (${f.exile.length})` }),
-        el("div", { className: "tiles small" }, ...f.exile.map((n) => tile(n)))) : ""),
+        pile(f.stack))),
     el("div", { className: "bzone area-hand" },
       el("div", { className: "zlabel", textContent: `Hand (${(f.hand || []).length})` }),
       el("div", { className: "tiles hand" }, ...(f.hand || []).map((n) => tile(n)))),
@@ -618,9 +1225,9 @@ function openBoard(gi) {
 
   const board = el("div", { className: "board" });
   host.append(
-    el("div", { className: "board-toolbar" }, prev, next, counter, range),
-    el("div", { className: "board-toolbar" }, desc),
     board,
+    el("div", { className: "board-toolbar" }, desc),
+    el("div", { className: "board-toolbar" }, prev, next, counter, range),
   );
   draw();
 }

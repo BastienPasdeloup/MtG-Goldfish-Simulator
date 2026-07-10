@@ -42,7 +42,23 @@ domain logic have no web dependency and can be driven from a script or tests.
   branch point — `actions.plan_payment` taps sources deterministically.
 - A game **succeeds** if some single line satisfies *all* properties at their
   trigger moments; per-property "satisfied in any line" is tracked separately
-  for statistics.
+  for statistics. Timing: "**at** X of turn N" is checked exactly there;
+  "**before** X of turn N" is checked at *every* checkpoint strictly before
+  that moment (any earlier phase or turn). Satisfaction is sticky along a
+  line, and the search stops as soon as every property has been verified.
+- **Viability pruning:** a branch is dropped the moment any unsatisfied
+  property can no longer be verified on it (its "at" moment is past, or its
+  "before" deadline reached) — no descendant could make the game a success.
+  Per-property statistics therefore count satisfaction in *viable* lines.
+- The **search strategy is selectable** (`SEARCH_MODES`): DFS with heuristic
+  move ordering (default: lands → commander → tutors → other spells →
+  abilities → pass, mulligan keeps closest to 3 lands first), DFS in natural
+  order, BFS, or greedy best-first on a board-progress score. Every mode
+  visits the same states — only the order differs — so winning lines are found
+  sooner and timeouts bite later.
+- The search records a tree node for **every state created** (including
+  passing priority), so the per-game graph shows all considered states; the
+  winning line is marked bottom-up via parent links.
 - Bounded by a per-game wall-clock **timeout** and a node cap; the search stops
   as soon as all properties are met.
 
@@ -89,6 +105,12 @@ Documented approximations (each card file's docstring states its own):
 - **New action/rule:** add an `Action` in `engine/actions.py`; `legal_actions`
   enumerates generically.
 - **New format:** subclass `Format`, register in `formats/__init__.py`.
-- **Card auto-implementation** (the 🔧 icon) is wired in the UI and returns 501
-  server-side — the intended hook is to have the LLM generate a `cards/*.py`
-  file from the card's oracle text.
+- **Card auto-implementation** (the per-card 🔧 and the global 🔧 on the
+  decklist header) asks the selected model to generate a `cards/*.py` from the
+  card's oracle text. Output is validated (compiles, imports, and actually
+  registers the card) before it is written and hot-loaded; failures are
+  reported and the card keeps its vanilla approximation.
+- **Model selection** (`llm/catalog.py`, the ⚙ Model dialog): the offline stub
+  (default; property conditions only), a local open model via Ollama
+  (`llm/ollama_provider.py` — private, downloaded with `ollama pull`), or the
+  Anthropic API (needs a key). The choice persists to `data/llm_config.json`.

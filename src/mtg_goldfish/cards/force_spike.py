@@ -1,4 +1,4 @@
-"""Force Spike — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Force Spike — counter your own spell (fills the graveyard)."""
+from ._common import counterspell
 
-uncastable_spell('Force Spike', 'counters target spell; no opponent spells exist')
+ForceSpike = counterspell("Force Spike")

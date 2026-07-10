@@ -1,4 +1,4 @@
-"""Spell Snare — exact within solitaire: never castable (counters target spell with mana value 2; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Spell Snare — counter your own spell with mana value 2 (fills the graveyard)."""
+from ._common import counterspell
 
-uncastable_spell('Spell Snare', 'counters target spell with mana value 2; no opponent spells exist')
+SpellSnare = counterspell("Spell Snare", target=lambda c: int(c.cmc) == 2)

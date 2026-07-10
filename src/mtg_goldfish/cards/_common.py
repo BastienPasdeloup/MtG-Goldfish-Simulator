@@ -143,6 +143,7 @@ def fetch_land(name: str, subtypes: tuple[str, str]) -> type[Card]:
             state.take_from_library(target)
             newp = state.put_on_battlefield(target, fire_etb=False)
             _apply_etb_mode(state, newp, mode)
+            state.fire_other_etb(newp)  # landfall / Amulet watchers
             state.shuffle_library()
             suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
             state.emit(f"fetched {target.name}{suffix} — shuffle")
@@ -220,6 +221,79 @@ def fast_land(name: str, colors: tuple[str, str]) -> type[Card]:
     return _Fast
 
 
+def counterspell(
+    name: str, *, target: Callable[[CardData], bool] | None = None,
+    dest: str = "graveyard", note: str = "",
+) -> type[Card]:
+    """A counterspell that targets YOUR OWN spell.
+
+    In a solitaire game there are no opponents' spells, and this engine resolves
+    spells atomically — but you can still usefully counter your own spell: cast
+    the target and the counter together (paying both costs) so the target is
+    countered instead of resolving. This puts the target card into your
+    graveyard (fuelling graveyard-matters cards) rather than onto the
+    battlefield / letting it resolve. `target(card)` restricts legal targets
+    (e.g. mana value 1 for Mental Misstep); `dest` is where the countered card
+    goes ("graveyard", or "library_top" for Memory Lapse)."""
+
+    def _merge(a: ManaCost, b: ManaCost) -> ManaCost:
+        pips: dict[str, int] = dict(a.pip_map)
+        for c, n in b.pip_map.items():
+            pips[c] = pips.get(c, 0) + n
+        return ManaCost(generic=a.generic + b.generic, pips=tuple(pips.items()))
+
+    @register
+    class _Counter(Card):
+        card_name = name
+
+        def cast_actions(self, state):
+            from ..engine.actions import begin_cast, can_afford, resolve_to_graveyard
+
+            my_cost = self.cast_cost(state)
+            acts: list[CardAction] = []
+            seen: set[str] = set()
+            for tgt in list(state.hand):
+                if tgt.name == name or tgt.name in seen or tgt.is_land:
+                    continue
+                if target is not None and not target(tgt):
+                    continue
+                seen.add(tgt.name)
+                combined = _merge(my_cost, ManaCost.parse(tgt.mana_cost))
+                if not can_afford(state, combined):
+                    continue
+
+                def make(target_name: str):
+                    def fn(st: "GameState"):
+                        counter = next((c for c in st.hand if c.name == name), None)
+                        victim = next((c for c in st.hand if c.name == target_name), None)
+                        if counter is None or victim is None:
+                            return None
+                        # Cast the victim (onto the stack), then the counter.
+                        if not begin_cast(st, victim, ManaCost.parse(victim.mana_cost)):
+                            return None
+                        if not begin_cast(st, counter, my_cost):
+                            return None
+                        # The counter resolves: the victim is countered.
+                        resolve_to_graveyard(st, counter)
+                        if victim in st.stack:
+                            st.stack.remove(victim)
+                        if dest == "library_top":
+                            st.library.insert(0, victim)
+                            st.emit(f"{name}: counter own {target_name} — to top of library")
+                        else:
+                            st.to_graveyard(victim)
+                            st.emit(f"{name}: counter own {target_name} — to graveyard")
+                        return None
+                    return fn
+
+                acts.append(CardAction(f"cast {name} countering own {tgt.name}", make(tgt.name)))
+            return acts
+
+    _Counter.__name__ = name.replace(" ", "").replace("'", "")
+    _Counter.__doc__ = f"{name} — counter your own spell to fill the graveyard.{(' ' + note) if note else ''}"
+    return _Counter
+
+
 def uncastable_spell(name: str, reason: str) -> type[Card]:
     """A spell with no legal use in a solitaire game (counterspells etc.).
     Fully implemented: its exact behaviour in a goldfish is 'never castable'."""
@@ -257,6 +331,187 @@ def transform_actions(
 
 
 # --------------------------------------------------------------------------
+# library-search helpers (all shuffle, like every real search)
+# --------------------------------------------------------------------------
+def tutor_to_battlefield_branches(
+    state: "GameState", pred: Callable, *, tapped: bool | None = True, note: str = "",
+) -> list["GameState"] | None:
+    """Branches: one per distinct matching library card, put onto the
+    battlefield (tapped by default), then shuffle. ETB/landfall triggers fire.
+    Returns None when nothing matches (caller keeps the un-branched state)."""
+    targets = state.search_library(pred)
+    if not targets:
+        return None
+
+    def fn(st: "GameState", name: str):
+        card = next(c for c in st.library if c.name == name)
+        st.take_from_library(card)
+        st.shuffle_library()
+        st.put_on_battlefield(card, tapped=tapped)
+        st.emit(f"search: {card.name} onto battlefield{' tapped' if tapped else ''} — shuffle{note}")
+
+    return branch_over(state, [t.name for t in targets], fn)
+
+
+def tutor_to_hand_branches(
+    state: "GameState", pred: Callable, *, note: str = "",
+) -> list["GameState"] | None:
+    """Branches: one per distinct matching library card, revealed to hand,
+    then shuffle."""
+    targets = state.search_library(pred)
+    if not targets:
+        return None
+
+    def fn(st: "GameState", name: str):
+        card = next(c for c in st.library if c.name == name)
+        st.take_from_library(card)
+        st.shuffle_library()
+        st.hand.append(card)
+        st.emit(f"search: {card.name} to hand — shuffle{note}")
+
+    return branch_over(state, [t.name for t in targets], fn)
+
+
+def any_identity_color(state: "GameState") -> tuple[str, ...]:
+    """'Add one mana of any color' — restricted to the commander identity
+    (other colours are useless in a Commander goldfish)."""
+    return tuple(state.commander_color_identity) or ("W", "U", "B", "R", "G")
+
+
+def controls_forest(state: "GameState") -> bool:
+    """'...unless you control a Forest' — honours Yavimaya, Cradle of Growth
+    (which makes every land a Forest)."""
+    yavi = any(p.name == "Yavimaya, Cradle of Growth" for p in state.battlefield)
+    return any(
+        "land" in p.type_line.lower() and (yavi or perm_has_subtype(p, ("Forest",)))
+        for p in state.battlefield
+    )
+
+
+def forest_count(state: "GameState") -> int:
+    yavi = any(p.name == "Yavimaya, Cradle of Growth" for p in state.battlefield)
+    return sum(
+        1 for p in state.battlefield
+        if "land" in p.type_line.lower() and (yavi or perm_has_subtype(p, ("Forest",)))
+    )
+
+
+def aura_on_land_cast_actions(
+    self: Card, state: "GameState", *, forests_only: bool = False,
+) -> list[CardAction]:
+    """Cast an Aura that enchants one of YOUR lands: one branch per distinct
+    eligible land. The Aura enters attached to the chosen host."""
+    from ..engine.actions import begin_cast, can_afford
+
+    cost = self.cast_cost(state)
+    if not can_afford(state, cost):
+        return []
+
+    hosts = {}
+    for p in state.battlefield:
+        if "land" not in p.type_line.lower():
+            continue
+        if forests_only and not (perm_has_subtype(p, ("Forest",))
+                                 or any(q.name == "Yavimaya, Cradle of Growth"
+                                        for q in state.battlefield)):
+            continue
+        hosts.setdefault(p.name, p.uid)
+
+    def make(uid: int):
+        def fn(st: "GameState"):
+            card = next((c for c in st.hand if c.name == self.card_name), None)
+            host = st.find_permanent(uid)
+            if card is None or host is None or not begin_cast(st, card, cost):
+                return None
+            if card in st.stack:
+                st.stack.remove(card)
+            perm = st.put_on_battlefield(card, fire_etb=False)
+            perm.attached_to = host.uid
+            st.emit(f"{self.card_name} resolves — enchant {host.name}")
+            st.check_deaths()
+            return None
+        return fn
+
+    return [CardAction(f"cast {self.card_name} → {name}", make(uid))
+            for name, uid in hosts.items()]
+
+
+def aura_on_creature_bestow_actions(
+    self: Card, state: "GameState", *, bestow_cost: str,
+) -> list[CardAction]:
+    """Bestow this enchantment-creature onto one of your creatures (branch per
+    creature). While bestowed it is an Aura granting +1/+1 via equip_mod."""
+    from ..engine.actions import begin_cast, can_afford
+    from ..engine.mana import ManaCost
+
+    cost = ManaCost.parse(bestow_cost)
+    if not can_afford(state, cost):
+        return []
+
+    hosts = {}
+    for p in state.battlefield:
+        if p.is_creature_now and p.name not in hosts:
+            hosts[p.name] = p.uid
+
+    def make(uid: int):
+        def fn(st: "GameState"):
+            card = next((c for c in st.hand if c.name == self.card_name), None)
+            host = st.find_permanent(uid)
+            if card is None or host is None or not begin_cast(st, card, cost, tag="bestow"):
+                return None
+            if card in st.stack:
+                st.stack.remove(card)
+            perm = st.put_on_battlefield(card, fire_etb=False)
+            perm.attached_to = host.uid
+            perm.counters["bestowed"] = 1  # it is an Aura, not a creature, now
+            st.emit(f"{self.card_name} resolves — bestow onto {host.name}")
+            st.check_deaths()
+            return None
+        return fn
+
+    return [CardAction(f"cast {self.card_name} (bestow) → {name}", make(uid))
+            for name, uid in hosts.items()]
+
+
+def sac_fetch_land(name: str, types: tuple[str, ...]) -> type[Card]:
+    """'When this land enters, sacrifice it. When you do, search your library
+    for a basic <T1/T2/T3> card, put it onto the battlefield tapped, then
+    shuffle and you gain 1 life.' (Brokers Hideout cycle.)"""
+
+    @register
+    class _SacFetch(Card):
+        card_name = name
+
+        def on_etb(self, state, permanent):
+            state.leaves_battlefield(permanent, "graveyard")
+            state.emit(f"{name}: sacrifice")
+            targets = state.search_library(
+                lambda c: "basic" in c.type_line.lower() and has_subtype(c, types)
+            )
+            if not targets:
+                state.shuffle_library()
+                state.life += 1
+                return None
+
+            def fn(st: "GameState", nm: str):
+                card = next(c for c in st.library if c.name == nm)
+                st.take_from_library(card)
+                st.shuffle_library()
+                st.put_on_battlefield(card, tapped=True)
+                st.life += 1
+                st.emit(f"{name}: fetch {nm} tapped, gain 1 life — shuffle")
+
+            return branch_over(state, [t.name for t in targets], fn)
+
+    _SacFetch.__name__ = name.replace(" ", "").replace("'", "")
+    _SacFetch.__doc__ = (
+        f"{name} — Land. ETB: sacrifice it; search a basic {'/'.join(types)} "
+        f"card onto the battlefield tapped, then shuffle; gain 1 life."
+    )
+    return _SacFetch
+
+
+# --------------------------------------------------------------------------
 # token implementations
 # --------------------------------------------------------------------------
 @register
@@ -282,3 +537,91 @@ class ClueToken(Card):
             return None
 
         return [CardAction("Clue: {2}, sacrifice — draw a card", fn)]
+
+
+@register
+class TreasureToken(Card):
+    """Treasure token — {T}, Sacrifice: add one mana of any color.
+    Modelled as a mana source that sacrifices itself when tapped for mana."""
+
+    card_name = "Treasure"
+
+    def mana_abilities(self, state):
+        return [ManaAbility(amount=1, choices=any_identity_color(state))]
+
+    def on_tap_for_mana(self, state, permanent, color):
+        state.leaves_battlefield(permanent, "none")
+        state.emit("sacrifice Treasure for mana")
+
+
+@register
+class FoodToken(Card):
+    """Food token — {2}, {T}, Sacrifice: you gain 3 life."""
+
+    card_name = "Food"
+
+    def battlefield_actions(self, state, perm):
+        from ..engine.actions import can_afford, pay_cost
+
+        cost = ManaCost(generic=2)
+        if perm.tapped or not can_afford(state, cost):
+            return []
+
+        def fn(st):
+            p = st.find_permanent(perm.uid)
+            if p is None or p.tapped or not pay_cost(st, cost):
+                return None
+            st.leaves_battlefield(p, "none")
+            st.life += 3
+            st.emit("sacrifice Food — gain 3 life")
+            return None
+
+        return [CardAction("Food: {2}, sacrifice — gain 3 life", fn)]
+
+
+@register
+class LanderToken(Card):
+    """Lander token — {2}, {T}, Sacrifice: search your library for a basic
+    land card, put it onto the battlefield tapped, then shuffle."""
+
+    card_name = "Lander"
+
+    def battlefield_actions(self, state, perm):
+        from ..engine.actions import can_afford, pay_cost
+
+        cost = ManaCost(generic=2)
+        if perm.tapped or not can_afford(state, cost):
+            return []
+
+        acts = []
+        for target in state.search_library(lambda c: c.is_land and "basic" in c.type_line.lower()):
+            def fn(st, name=target.name):
+                p = st.find_permanent(perm.uid)
+                if p is None or p.tapped or not pay_cost(st, cost):
+                    return None
+                st.leaves_battlefield(p, "none")
+                card = next((c for c in st.library if c.name == name), None)
+                if card is None:
+                    return None
+                st.take_from_library(card)
+                st.shuffle_library()
+                st.put_on_battlefield(card, tapped=True)
+                st.emit(f"Lander: fetch {name} tapped — shuffle")
+                return None
+            acts.append(CardAction(f"Lander: fetch {target.name}", fn))
+        return acts
+
+
+@register
+class EldraziSpawnToken(Card):
+    """Eldrazi Spawn token — 0/1; Sacrifice: add {C}.
+    Modelled as a mana source that sacrifices itself when tapped for mana."""
+
+    card_name = "Eldrazi Spawn"
+
+    def mana_abilities(self, state):
+        return [ManaAbility(amount=1, choices=("C",))]
+
+    def on_tap_for_mana(self, state, permanent, color):
+        state.leaves_battlefield(permanent, "none")
+        state.emit("sacrifice Eldrazi Spawn for {C}")

@@ -43,6 +43,23 @@ Zones (lists of names):
   state.battlefield_names() -> list[str]
   state.graveyard_names() -> list[str]
 
+Past states / per-turn history (describe what happened on EARLIER turns):
+  state.turns_played() -> int                       # current turn number
+  state.graveyard_added_on(turn: int) -> list[str]  # cards put in GY that turn
+  state.permanents_entered_on(turn: int) -> list[str]  # permanents that entered
+  state.creatures_entered_on(turn: int) -> list[str]   # creatures that entered
+  state.lands_entered_on(turn: int) -> list[str]       # lands that entered
+  state.each_turn(pred) -> bool   # pred(turn)->bool holds for EVERY turn 1..now
+  state.some_turn(pred) -> bool   # pred(turn)->bool holds for at least one turn
+
 Each card exposed to count_on_battlefield's predicate has: .name, .cmc,
 .type_line, .is_land, .is_creature, .colors (list like ["R"]).
+
+History examples:
+  # "a card was put in the graveyard on each turn since the beginning"
+  def check(state):
+      return state.each_turn(lambda t: len(state.graveyard_added_on(t)) >= 1)
+  # "a creature has entered the battlefield on every turn"
+  def check(state):
+      return state.each_turn(lambda t: len(state.creatures_entered_on(t)) >= 1)
 """

@@ -13,6 +13,7 @@ class SimConfig(BaseModel):
     mulligans: int = 0
     on_the_play: bool = True
     base_seed: int = 12345
+    search_mode: str = "dfs_heuristic"  # see engine.simulator.SEARCH_MODES
 
 
 class SimResult(BaseModel):
@@ -23,8 +24,15 @@ class SimResult(BaseModel):
     properties: list[PropertySpec] = Field(default_factory=list)
     stats: dict = Field(default_factory=dict)
     # A handful of successful lines of play (each a list of board-snapshot
-    # frames) for graphical review.
+    # frames) for graphical review. Retained for backward compatibility; new
+    # runs populate `sample_runs`, which carries the same frames plus the
+    # opening hand, search-shape counts and the explored-states tree.
     sample_success_logs: list[list[dict]] = Field(default_factory=list)
+    # One entry per game: {game_index, success, timed_out, node_capped, hand,
+    # branches_explored, branches_considered, tree_gz (gzip+base64 search tree
+    # with per-node board snapshots), tree_truncated, log(frames, successes
+    # only)}.
+    sample_runs: list[dict] = Field(default_factory=list)
 
 
 class Session(BaseModel):

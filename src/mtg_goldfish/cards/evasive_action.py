@@ -1,4 +1,4 @@
-"""Evasive Action — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Evasive Action — counter your own spell (fills the graveyard)."""
+from ._common import counterspell
 
-uncastable_spell('Evasive Action', 'counters target spell; no opponent spells exist')
+EvasiveAction = counterspell("Evasive Action")

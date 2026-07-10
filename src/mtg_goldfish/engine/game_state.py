@@ -125,6 +125,7 @@ class GameState:
 
     # per-turn counters (reset at untap)
     lands_played_this_turn: int = 0
+    bonus_land_drops: int = 0  # one-shot extras this turn (Summer Bloom)
     spells_cast_this_turn: int = 0
     creature_spells_cast_this_turn: int = 0
     noncreature_spells_cast_this_turn: int = 0
@@ -139,6 +140,11 @@ class GameState:
     attackers: list[int] = field(default_factory=list)  # uids attacking this turn
     _next_uid: int = 1
     log: list[dict] = field(default_factory=list)
+
+    # per-turn HISTORY (never reset — lets properties describe past states, e.g.
+    # "a card went to the graveyard on every turn"). Keyed by turn number.
+    graveyard_by_turn: dict = field(default_factory=dict)  # turn -> [card names]
+    entered_by_turn: dict = field(default_factory=dict)     # turn -> [{name,is_creature,is_land,is_token}]
 
     # ---- cloning -----------------------------------------------------------
     def clone(self) -> "GameState":
@@ -161,6 +167,7 @@ class GameState:
             on_the_play=self.on_the_play,
             rng_seed=self.rng_seed,
             lands_played_this_turn=self.lands_played_this_turn,
+            bonus_land_drops=self.bonus_land_drops,
             spells_cast_this_turn=self.spells_cast_this_turn,
             creature_spells_cast_this_turn=self.creature_spells_cast_this_turn,
             noncreature_spells_cast_this_turn=self.noncreature_spells_cast_this_turn,
@@ -173,6 +180,8 @@ class GameState:
             attackers=list(self.attackers),
             _next_uid=self._next_uid,
             log=list(self.log),
+            graveyard_by_turn={t: list(v) for t, v in self.graveyard_by_turn.items()},
+            entered_by_turn={t: [dict(e) for e in v] for t, v in self.entered_by_turn.items()},
         )
 
     # ---- helpers -----------------------------------------------------------
@@ -196,6 +205,7 @@ class GameState:
 
     def reset_turn_counters(self) -> None:
         self.lands_played_this_turn = 0
+        self.bonus_land_drops = 0
         self.spells_cast_this_turn = 0
         self.creature_spells_cast_this_turn = 0
         self.noncreature_spells_cast_this_turn = 0
@@ -205,9 +215,36 @@ class GameState:
         for p in self.battlefield:
             p.turn_flags.clear()
 
+    def mill(self, n: int) -> None:
+        """Put the top n cards of the library into the graveyard."""
+        milled = []
+        for _ in range(n):
+            if not self.library:
+                break
+            card = self.library.pop(0)
+            self.to_graveyard(card)
+            milled.append(card.name)
+        if milled:
+            self.emit(f"mill {len(milled)}: {', '.join(milled)}")
+
+    def max_land_drops(self) -> int:
+        """Land plays allowed this turn: 1 + one-shot bonuses (Summer Bloom)
+        + battlefield statics (Exploration, Icetill Explorer)."""
+        return 1 + self.bonus_land_drops + sum(
+            p.impl.extra_land_drops(self, p) for p in self.battlefield
+        )
+
+    def fire_other_etb(self, entering: Permanent) -> None:
+        """Notify every OTHER permanent that `entering` just entered
+        (landfall, Amulet of Vigor, Tezzeret...)."""
+        for p in list(self.battlefield):
+            if p is not entering and p in self.battlefield:
+                p.impl.on_other_etb(self, p, entering)
+
     def to_graveyard(self, card: CardData) -> None:
         self.graveyard.append(card)
         self.gy_this_turn.append(card.name)
+        self.graveyard_by_turn.setdefault(self.turn, []).append(card.name)
 
     # ---- drawing (fires draw triggers) --------------------------------------
     def draw(self, n: int = 1) -> None:
@@ -245,12 +282,25 @@ class GameState:
     def put_on_battlefield(
         self, card: CardData, *, is_commander: bool = False,
         tapped: bool | None = None, token: bool = False, fire_etb: bool = True,
+        announce: str | None = None,
     ) -> Permanent:
         perm = make_permanent(self, card, is_commander=is_commander, token=token)
         if tapped is not None:
             perm.tapped = tapped
         self.battlefield.append(perm)
+        self.entered_by_turn.setdefault(self.turn, []).append({
+            "name": perm.name,
+            "is_creature": perm.is_creature_now,
+            "is_land": "land" in perm.type_line.lower(),
+            "is_token": perm.is_token,
+        })
+        # Announce the entry BEFORE any ETB triggers fire, so the replay shows
+        # the permanent entering first and its triggers (landfall, Amulet, ...)
+        # resolving afterwards — not the other way round.
+        if announce:
+            self.emit(announce)
         if fire_etb:
+            self.fire_other_etb(perm)  # landfall / enters-tapped watchers first
             perm.impl.on_etb(self, perm)
         return perm
 
@@ -266,10 +316,13 @@ class GameState:
             return
         self.battlefield.remove(perm)
         self.permanent_left_battlefield_this_turn = True
-        # Unattach any equipment pointing at it.
-        for eq in self.battlefield:
-            if eq.attached_to == perm.uid:
-                eq.attached_to = None
+        # Auras attached to it die; equipment merely unattaches.
+        for att in list(self.battlefield):
+            if att.attached_to == perm.uid:
+                if "aura" in att.type_line.lower():
+                    self.leaves_battlefield(att, "graveyard")
+                else:
+                    att.attached_to = None
         perm.impl.on_leave(self, perm)
         if perm.is_token:
             return  # tokens cease to exist
@@ -390,6 +443,36 @@ class GameState:
     def creatures_with_power_at_least(self, n: int) -> int:
         return sum(1 for p in self._creatures() if self.effective_power(p) >= n)
 
+    # ---- per-turn HISTORY (past states) -------------------------------------
+    def turns_played(self) -> int:
+        """The current turn number (turn 1 is the first)."""
+        return self.turn
+
+    def graveyard_added_on(self, turn: int) -> list[str]:
+        """Names of cards put into the graveyard during `turn` (any zone)."""
+        return list(self.graveyard_by_turn.get(turn, ()))
+
+    def permanents_entered_on(self, turn: int) -> list[str]:
+        """Names of permanents that entered the battlefield during `turn`."""
+        return [e["name"] for e in self.entered_by_turn.get(turn, ())]
+
+    def creatures_entered_on(self, turn: int) -> list[str]:
+        """Names of creatures that entered the battlefield during `turn`."""
+        return [e["name"] for e in self.entered_by_turn.get(turn, ()) if e["is_creature"]]
+
+    def lands_entered_on(self, turn: int) -> list[str]:
+        """Names of lands that entered the battlefield during `turn`."""
+        return [e["name"] for e in self.entered_by_turn.get(turn, ()) if e["is_land"]]
+
+    def each_turn(self, predicate) -> bool:
+        """True if `predicate(turn)` holds for EVERY turn played so far
+        (turns 1..current). Use for "on each turn since the beginning..."."""
+        return all(predicate(t) for t in range(1, self.turn + 1))
+
+    def some_turn(self, predicate) -> bool:
+        """True if `predicate(turn)` holds for AT LEAST ONE past/current turn."""
+        return any(predicate(t) for t in range(1, self.turn + 1))
+
     # ---- moment comparison -------------------------------------------------
     def moment_rank(self) -> tuple[int, int]:
         return (self.turn, phase_index(self.phase))
@@ -411,6 +494,9 @@ class GameState:
             "battlefield": [
                 {
                     "name": p.name,
+                    "uid": p.uid,
+                    "attached_to": p.attached_to,  # host uid for auras/equipment
+                    "is_aura": "aura" in p.type_line.lower(),
                     "tapped": p.tapped,
                     "sick": p.summoning_sick,
                     "is_land": "land" in p.type_line.lower(),
@@ -463,6 +549,7 @@ def make_permanent(
         summoning_sick=True,
         is_commander=is_commander,
         is_token=token,
+        transformed=impl.enters_transformed,  # back-face plays (MDFC lands)
         uid=state.new_uid(),
     )
     perm.tapped = impl.etb_tapped(state)

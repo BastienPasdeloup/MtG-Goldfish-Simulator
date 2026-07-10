@@ -1,4 +1,4 @@
-"""Wash Away — exact within solitaire: never castable (counters target spell; no opponent spells exist)."""
-from ._common import uncastable_spell
+"""Wash Away — counter your own spell (fills the graveyard)."""
+from ._common import counterspell
 
-uncastable_spell('Wash Away', 'counters target spell; no opponent spells exist')
+WashAway = counterspell("Wash Away")

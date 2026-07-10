@@ -21,18 +21,35 @@ from .mana import ManaAbility, ManaCost, ManaPool
 # --------------------------------------------------------------------------
 # Mana
 # --------------------------------------------------------------------------
-def available_mana_sources(state: GameState) -> list[tuple[Permanent, ManaAbility]]:
+def available_mana_sources(
+    state: GameState, exclude_uids: set[int] | None = None
+) -> list[tuple[Permanent, ManaAbility]]:
     """(permanent, ability) pairs currently usable. A permanent may contribute
-    several entries (alternative abilities); the planner uses at most one."""
+    several entries (alternative abilities); the planner uses at most one.
+
+    `exclude_uids` omits specific permanents — used when an activated ability
+    that taps the source must pay its OWN mana cost (the source can't also help
+    pay it, e.g. Castle Garenbrig's {2}{G}{G},{T}: add six {G})."""
+    exclude_uids = exclude_uids or set()
     sources: list[tuple[Permanent, ManaAbility]] = []
     for perm in state.battlefield:
-        if perm.tapped:
+        if perm.tapped or perm.uid in exclude_uids:
             continue
         if perm.is_creature_now and perm.summoning_sick and not state.has_keyword(perm, "Haste"):
             continue
+        # Auras like Wild Growth add mana whenever the host is tapped for mana.
+        bonus = sum(
+            att.impl.attached_mana_amount_bonus(state, att, perm)
+            for att in state.battlefield if att.attached_to == perm.uid
+        )
         for ability in perm.impl.mana_abilities_perm(state, perm):
             if ability.life_cost and state.life <= ability.life_cost:
                 continue
+            if bonus:
+                ability = ManaAbility(
+                    amount=ability.amount + bonus, choices=ability.choices,
+                    life_cost=ability.life_cost,
+                )
             sources.append((perm, ability))
     return sources
 
@@ -93,11 +110,13 @@ def _pool_str(pool: ManaPool) -> str:
     return "{" + " ".join(parts) + "}" if parts else "{empty}"
 
 
-def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0) -> bool:
-    """Tap sources and spend `cost` (plus optional life). False if unaffordable."""
+def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0,
+             exclude_uids: set[int] | None = None) -> bool:
+    """Tap sources and spend `cost` (plus optional life). False if unaffordable.
+    `exclude_uids` omits permanents from the payment (see available_mana_sources)."""
     if extra_life and state.life <= extra_life:
         return False
-    sources = available_mana_sources(state)
+    sources = available_mana_sources(state, exclude_uids)
     plan = plan_payment(cost, sources, state.mana_pool)
     if plan is None:
         return False
@@ -118,10 +137,13 @@ def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0) -> bool:
     return ok
 
 
-def can_afford(state: GameState, cost: ManaCost, extra_life: int = 0) -> bool:
+def can_afford(state: GameState, cost: ManaCost, extra_life: int = 0,
+               exclude_uids: set[int] | None = None) -> bool:
     if extra_life and state.life <= extra_life:
         return False
-    return plan_payment(cost, available_mana_sources(state), state.mana_pool) is not None
+    return plan_payment(
+        cost, available_mana_sources(state, exclude_uids), state.mana_pool
+    ) is not None
 
 
 # --------------------------------------------------------------------------
@@ -161,7 +183,10 @@ def resolve_to_battlefield(
     perm = state.put_on_battlefield(card, is_commander=is_commander, fire_etb=False)
     if marks:
         perm.counters.update(marks)
+    # Announce the enter BEFORE ETB triggers fire (Amulet / Tezzeret / landfall)
+    # so the replay shows the permanent entering first, effects after.
     state.emit(f"{card.name} resolves — enters the battlefield")
+    state.fire_other_etb(perm)
     branches = perm.impl.on_etb(state, perm)
     state.check_deaths()
     return branches
@@ -196,19 +221,23 @@ class PassPhase(Action):
 
 
 class PlayLand(Action):
-    def __init__(self, card_name: str, mode: dict | None = None) -> None:
+    def __init__(self, card_name: str, mode: dict | None = None, zone: str = "hand") -> None:
         self.card_name = card_name
         self.mode = mode
+        self.zone = zone  # "hand" | "graveyard" (Icetill Explorer)
         suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
-        self.label = f"play land {card_name}{suffix}"
+        origin = " from graveyard" if zone == "graveyard" else ""
+        self.label = f"play land {card_name}{suffix}{origin}"
 
     def apply(self, state: GameState):
-        card = _find_in_zone(state.hand, self.card_name)
-        state.hand.remove(card)
+        src = state.hand if self.zone == "hand" else state.graveyard
+        card = _find_in_zone(src, self.card_name)
+        src.remove(card)
         state.lands_played_this_turn += 1
         perm = state.put_on_battlefield(card, fire_etb=False)
         _apply_etb_mode(state, perm, self.mode)
-        state.emit(self.label)
+        state.emit(self.label)  # announce the land entering BEFORE its triggers
+        state.fire_other_etb(perm)  # landfall / Amulet, after the enter mode
         branches = perm.impl.on_etb(state, perm)
         state.check_deaths()
         return branches
@@ -272,6 +301,7 @@ def legal_actions(state: GameState) -> list[Action]:
     branching factor."""
     actions: list[Action] = []
     seen: set[str] = set()
+    land_drop_ok = state.lands_played_this_turn < state.max_land_drops()
 
     # --- from hand ---
     for card in list(state.hand):
@@ -280,7 +310,7 @@ def legal_actions(state: GameState) -> list[Action]:
         seen.add(card.name)
         impl = _impl(card)
 
-        if impl.is_land and state.lands_played_this_turn < 1:
+        if impl.is_land and land_drop_ok:
             modes = impl.etb_modes(state)
             if modes:
                 actions.extend(PlayLand(card.name, mode=m) for m in modes)
@@ -315,6 +345,20 @@ def legal_actions(state: GameState) -> list[Action]:
         seen_gy.add(card.name)
         actions.extend(_impl(card).graveyard_actions(state))
 
+    # --- land plays from the graveyard (Icetill Explorer) ---
+    if land_drop_ok and any(p.impl.grants_gy_land_plays for p in state.battlefield):
+        seen_gyl: set[str] = set()
+        for card in state.graveyard:
+            impl = _impl(card)
+            if not impl.is_land or card.name in seen_gyl:
+                continue
+            seen_gyl.add(card.name)
+            modes = impl.etb_modes(state)
+            if modes:
+                actions.extend(PlayLand(card.name, mode=m, zone="graveyard") for m in modes)
+            else:
+                actions.append(PlayLand(card.name, zone="graveyard"))
+
     # --- exile "you may play it" cards (Gwen Stacy) ---
     seen_ex: set[str] = set()
     for source_uid, card in list(state.exile_playable):
@@ -345,7 +389,7 @@ def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]
             if entry is None:
                 return None
             if _impl(c).is_land:
-                if st.lands_played_this_turn >= 1:
+                if st.lands_played_this_turn >= st.max_land_drops():
                     return None
                 st.exile_playable.remove(entry)
                 if c in st.exile:
@@ -408,6 +452,8 @@ class DeclareAttackers(Action):
 
 def combat_actions(state: GameState) -> list[Action]:
     """Actions at declare-attackers: attack all, or don't."""
+    if any(p.impl.prevents_attacks for p in state.battlefield):
+        return []  # Glacial Chasm: creatures you control can't attack
     able = [
         p for p in state.battlefield
         if p.is_creature_now and not p.tapped
