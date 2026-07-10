@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Examples — MtG Goldfish Simulator</title>
+<meta name="description" content="Worked examples: running a simulation, reading the results, and implementing cards for the MtG Goldfish Simulator.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
+    <nav>
+      <a href="index.html">How it works</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="properties.html">Properties &amp; states</a>
+      <a class="active" href="examples.html">Examples</a>
+    </nav>
+    <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+
+<h1>Worked examples</h1>
+<p class="lead">A complete session walkthrough, how to read the results, and how to implement
+cards — from a basic land to abilities that use the stack.</p>
+
+<h2 id="session">Example session: “can my deck ramp?”</h2>
+
+<ol>
+  <li><strong>Import.</strong> Paste a Moxfield URL, pick Duel Commander, name the session.
+  The decklist shows every card with its image; unimplemented cards are red with a 🔧 button.</li>
+  <li><strong>Properties.</strong> Two properties:
+    <ul>
+      <li><em>at precombat main of turn 3</em> — “at least 5 lands on the battlefield”</li>
+      <li><em>before end step of turn 3</em> — “the commander is in play”</li>
+    </ul>
+  </li>
+  <li><strong>Compile → review code.</strong> The generated <code>check(state)</code> functions
+  appear under each property:
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.lands_in_play() >= 5</code></pre>
+  </li>
+  <li><strong>Run.</strong> 100 games, 5 s timeout per game, 1 mulligan allowed, on the play.
+  A seed is drawn (and displayed) so the run is reproducible; statistics stream live.</li>
+</ol>
+
+<h3>Reading the results</h3>
+
+<div class="table-scroll"><table>
+  <tr><th>Output</th><th>Meaning</th></tr>
+  <tr><td><strong>Success rate</strong></td><td>Games where one single line satisfied <em>all</em> properties at their moments.</td></tr>
+  <tr><td><strong>Per property</strong></td><td>Games where each property was satisfiable in <em>any</em> viable line (can be higher than the joint rate).</td></tr>
+  <tr><td><strong>Runs table</strong></td><td>One row per game: ✓/✗ result (⏱ timed out, ▦ node-capped), opening hand on hover, steps of the winning line, states explored/considered, and the 🌳 full search tree.</td></tr>
+  <tr><td><strong>Board replay</strong></td><td>Click a successful game to replay its winning line step by step on an MTGO-like board — zones, stack, mana pool, counters.</td></tr>
+  <tr><td><strong>Search tree</strong></td><td>Every state the search created, laid out left-to-right; per-node circles show each property's status (verified / pending / unreachable), the winning line in gold.</td></tr>
+</table></div>
+
+<div class="panel callout">
+  <div class="title">Interpreting a low success rate</div>
+  <p style="margin:0">Check the per-property numbers first. If one property alone scores low,
+  the deck can't do that thing — if all score high individually but the joint rate is low, the
+  deck can't do them <em>on the same line</em>. Open a few ✗ games' trees: the red circles show
+  exactly where each line died.</p>
+</div>
+
+<h2 id="card">Implementing cards</h2>
+
+<p>Every implemented card is one file in <code>src/mtg_goldfish/cards/</code>, auto-discovered at
+startup. The docstring states the card's oracle behaviour and any solitaire approximation.</p>
+
+<h3>A dual land</h3>
+<pre><code><span class="str">"""Badlands — Land — Swamp Mountain. {T}: add {B} or {R}."""</span>
+<span class="kw">from</span> ..engine.mana <span class="kw">import</span> ManaAbility
+<span class="kw">from</span> .base <span class="kw">import</span> Card
+<span class="kw">from</span> .registry <span class="kw">import</span> register
+
+
+<span class="fn">@register</span>
+<span class="kw">class</span> <span class="fn">Badlands</span>(Card):
+    card_name = <span class="str">"Badlands"</span>
+
+    <span class="kw">def</span> <span class="fn">mana_abilities</span>(self, state):
+        <span class="kw">return</span> [ManaAbility(amount=1, choices=(<span class="str">"B"</span>, <span class="str">"R"</span>))]</code></pre>
+
+<h3>“Enters with counters” — a replacement effect</h3>
+<p>Counters a permanent <em>enters with</em> are on it from the moment it enters: nothing goes
+on the stack, no trigger fires. Use the <code>enters_with_counters</code> hook:</p>
+<pre><code><span class="str">"""Hickory Woodlot — Land. Enters tapped with two depletion counters.
+{T}, Remove a depletion counter: add {G}{G}; when none remain, sacrifice it."""</span>
+<span class="fn">@register</span>
+<span class="kw">class</span> <span class="fn">HickoryWoodlot</span>(Card):
+    card_name = <span class="str">"Hickory Woodlot"</span>
+
+    <span class="kw">def</span> <span class="fn">etb_tapped</span>(self, state):
+        <span class="kw">return</span> <span class="kw">True</span>
+
+    <span class="kw">def</span> <span class="fn">enters_with_counters</span>(self, state):
+        <span class="kw">return</span> {<span class="str">"depletion"</span>: 2}
+
+    <span class="kw">def</span> <span class="fn">mana_abilities_perm</span>(self, state, perm):
+        <span class="kw">if</span> perm.counters.get(<span class="str">"depletion"</span>, 0) &lt;= 0:
+            <span class="kw">return</span> []
+        <span class="kw">return</span> [ManaAbility(amount=2, choices=(<span class="str">"G"</span>,))]
+
+    <span class="kw">def</span> <span class="fn">on_tap_for_mana</span>(self, state, permanent, color):
+        permanent.counters[<span class="str">"depletion"</span>] -= 1
+        <span class="kw">if</span> permanent.counters[<span class="str">"depletion"</span>] &lt;= 0:
+            state.emit(<span class="str">"Hickory Woodlot: no depletion counters — sacrifice"</span>)
+            state.leaves_battlefield(permanent, <span class="str">"graveyard"</span>)</code></pre>
+
+<h3>A triggered ability</h3>
+<p>Override the matching hook — the engine wraps it into a stack item when the event happens,
+and the hook body runs when the trigger <em>resolves</em>:</p>
+<pre><code><span class="str">"""Lotus Cobra — Landfall: whenever a land you control enters, add one mana."""</span>
+<span class="fn">@register</span>
+<span class="kw">class</span> <span class="fn">LotusCobra</span>(Card):
+    card_name = <span class="str">"Lotus Cobra"</span>
+
+    <span class="kw">def</span> <span class="fn">on_other_etb</span>(self, state, perm, entering):
+        <span class="kw">if</span> <span class="str">"land"</span> <span class="kw">in</span> entering.type_line.lower():
+            state.mana_pool.add(<span class="str">"G"</span>, 1)   <span class="comment"># simplified for the example</span>
+            state.emit(<span class="str">"Lotus Cobra: landfall — add {G}"</span>)</code></pre>
+
+<h3 id="activated">An activated ability: pay at activation, effect at resolution</h3>
+<p>Activated abilities use <code>CardAction.activated(label, pay_fn, resolve_fn)</code>. The
+engine calls <code>pay_fn</code> <em>before</em> the ability goes on the stack — it pays every
+cost and returns <code>True</code> (or <code>False</code> to abort). <code>resolve_fn</code>
+applies the effect when the ability resolves. Because the game state may have changed between
+the two, both re-find their objects by uid:</p>
+<pre><code><span class="str">"""Zuran Orb — {0}: Sacrifice a land: You gain 2 life."""</span>
+<span class="fn">@register</span>
+<span class="kw">class</span> <span class="fn">ZuranOrb</span>(Card):
+    card_name = <span class="str">"Zuran Orb"</span>
+
+    <span class="kw">def</span> <span class="fn">battlefield_actions</span>(self, state, perm):
+        lands = [p <span class="kw">for</span> p <span class="kw">in</span> state.battlefield <span class="kw">if</span> <span class="str">"land"</span> <span class="kw">in</span> p.type_line.lower()]
+        <span class="kw">if</span> <span class="kw">not</span> lands:
+            <span class="kw">return</span> []
+        pick = next((p <span class="kw">for</span> p <span class="kw">in</span> lands <span class="kw">if</span> p.tapped), lands[0])
+
+        <span class="kw">def</span> <span class="fn">pay</span>(st):                          <span class="comment"># at ACTIVATION</span>
+            sac = st.find_permanent(pick.uid)
+            <span class="kw">if</span> sac <span class="kw">is</span> <span class="kw">None</span>:
+                <span class="kw">return</span> <span class="kw">False</span>
+            st.leaves_battlefield(sac, <span class="str">"graveyard"</span>)
+            st.emit(f<span class="str">"Zuran Orb: sacrifice {sac.name}"</span>)
+            <span class="kw">return</span> <span class="kw">True</span>
+
+        <span class="kw">def</span> <span class="fn">resolve</span>(st):                      <span class="comment"># at RESOLUTION</span>
+            st.life += 2
+            st.emit(<span class="str">"Zuran Orb: gain 2 life"</span>)
+
+        <span class="kw">return</span> [CardAction.activated(
+            <span class="str">"Zuran Orb: sacrifice a land — gain 2 life"</span>,
+            pay,
+            resolve,
+            source_name=<span class="str">"Zuran Orb"</span>,        <span class="comment"># lets the viewer show the card image on the stack</span>
+            ability_text=<span class="str">"Sacrifice a land: You gain 2 life"</span>,
+        )]</code></pre>
+
+<h3>Choices are branches</h3>
+<p>A hook that must choose (fetch target, tutor target, discard) never picks inside its effect —
+it either enumerates one <code>CardAction</code> per choice, or returns one cloned state per
+option from its resolve function so the exhaustive search explores them all:</p>
+<pre><code><span class="kw">def</span> <span class="fn">on_resolve</span>(self, state):          <span class="comment"># e.g. a tutor spell</span>
+    targets = state.search_library(<span class="kw">lambda</span> c: c.is_creature)
+    <span class="kw">return</span> branch_over(state, [t.name <span class="kw">for</span> t <span class="kw">in</span> targets], put_in_hand)</code></pre>
+
+<div class="panel callout blue">
+  <div class="title">Or let the LLM write it</div>
+  <p style="margin:0">In the UI, the 🔧 button next to any unimplemented card asks the selected
+  model to generate the implementation from the card's oracle text. The output is validated —
+  it must compile, import, and register the card — before being written and hot-loaded; failures
+  keep the vanilla approximation.</p>
+</div>
+
+<h2 id="replay">What a winning line looks like</h2>
+
+<p>Each step of the replay is one log frame. The stack fills and empties as spells and
+abilities go on and resolve — for example, cracking a fetchland:</p>
+
+<pre><code>1  'play land Bloodstained Mire'                          stack: —
+2  'Bloodstained Mire: tap, pay 1 life, sacrifice'        stack: —            <span class="comment">← cost paid at activation</span>
+3  'Bloodstained Mire: fetch Mountain (on the stack)'     stack: [fetch]      <span class="comment">← ability stacked</span>
+4  'fetched Mountain — shuffle'                           stack: —            <span class="comment">← resolves + effect, one step</span></code></pre>
+
+</main>
+
+<footer class="site">
+  MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">source on GitHub</a>.
+  Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+</footer>
+
+</body>
+</html>

@@ -54,14 +54,27 @@ class FormidableSpeaker(Card):
                 tapped[p.name] = p.uid
         acts = []
         for name, uid in tapped.items():
-            def fn(st, target_uid=uid):
+            def pay(st, target_uid=uid):
                 p = st.find_permanent(perm.uid)
                 t = st.find_permanent(target_uid)
                 if p is None or p.tapped or t is None or not pay_cost(st, cost):
-                    return None
+                    return False
                 p.tapped = True
+                return True
+
+            def resolve(st, target_uid=uid):
+                t = st.find_permanent(target_uid)
+                if t is None:
+                    return None
                 t.tapped = False
                 st.emit(f"Formidable Speaker: untap {t.name}")
                 return None
-            acts.append(CardAction(f"Formidable Speaker: untap {name}", fn))
+
+            acts.append(CardAction.activated(
+                f"Formidable Speaker: untap {name}",
+                pay,
+                resolve,
+                source_name="Formidable Speaker",
+                ability_text=f"Untap {name}",
+            ))
         return acts

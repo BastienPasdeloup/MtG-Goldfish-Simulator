@@ -27,17 +27,30 @@ class Subtlety(Card):
                         if "U" in c.colors and c.name != self.card_name})
 
         def make(blue_name: str):
-            def fn(st):
+            def pay(st):
                 card = next((c for c in st.hand if c.name == self.card_name), None)
                 pitch = next((c for c in st.hand if c.name == blue_name), None)
                 if card is None or pitch is None:
-                    return None
+                    return False
                 st.hand.remove(pitch)
                 st.exile.append(pitch)
                 st.emit(f"evoke Subtlety: exile {blue_name} from hand")
                 if not begin_cast(st, card, ManaCost(), tag="evoke"):
+                    return False
+                return True
+
+            def resolve(st):
+                card = next((c for c in st.stack if c.name == self.card_name), None)
+                if card is None:
                     return None
                 return resolve_to_battlefield(st, card, marks={"evoked": 1}) or None
-            return fn
 
-        return [CardAction(f"evoke Subtlety (exile {b})", make(b)) for b in blues]
+            return CardAction.activated(
+                f"evoke Subtlety (exile {blue_name})",
+                pay,
+                resolve,
+                source_name="Subtlety",
+                ability_text=f"Evoke — exile {blue_name} from your hand",
+            )
+
+        return [make(b) for b in blues]

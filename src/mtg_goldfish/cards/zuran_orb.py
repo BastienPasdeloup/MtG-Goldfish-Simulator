@@ -18,15 +18,29 @@ class ZuranOrb(Card):
             return []
         pick = next((p for p in lands if p.tapped), lands[0])
 
-        def fn(st):
-            sac = next((p for p in st.battlefield
-                        if p.uid == pick.uid), None) or next(
-                (p for p in st.battlefield if "land" in p.type_line.lower()), None)
-            if sac is None:
-                return None
+        def pay(st):
+            # Cost: sacrifice a land (paid at activation, before the ability
+            # goes on the stack).
+            p = st.find_permanent(perm.uid)
+            if p is None:
+                return False
+            sac = st.find_permanent(pick.uid) or next(
+                (q for q in st.battlefield if "land" in q.type_line.lower()), None)
+            if sac is None or "land" not in sac.type_line.lower():
+                return False
             st.leaves_battlefield(sac, "graveyard")
+            st.emit(f"Zuran Orb: sacrifice {sac.name}")
+            return True
+
+        def resolve(st):
             st.life += 2
-            st.emit(f"Zuran Orb: sacrifice {sac.name} — gain 2 life")
+            st.emit("Zuran Orb: gain 2 life")
             return None
 
-        return [CardAction("Zuran Orb: sacrifice a land — gain 2 life", fn)]
+        return [CardAction.activated(
+            "Zuran Orb: sacrifice a land — gain 2 life",
+            pay,
+            resolve,
+            source_name="Zuran Orb",
+            ability_text="Sacrifice a land: You gain 2 life",
+        )]

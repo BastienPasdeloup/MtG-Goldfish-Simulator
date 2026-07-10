@@ -27,12 +27,16 @@ class LorienRevealed(Card):
         islands = state.search_library(lambda c: c.is_land and has_subtype(c, ("Island",)))
 
         def make(target_name: str | None):
-            def fn(st):
+            def pay(st):
                 card = next((c for c in st.hand if c.name == self.card_name), None)
                 if card is None or not pay_cost(st, cost):
-                    return None
+                    return False
                 st.hand.remove(card)
                 st.to_graveyard(card)
+                st.emit("islandcycle Lórien Revealed: pay {1}, discard")
+                return True
+
+            def resolve(st):
                 if target_name is not None:
                     t = next((c for c in st.library if c.name == target_name), None)
                     if t is not None:
@@ -41,8 +45,18 @@ class LorienRevealed(Card):
                 st.shuffle_library()
                 st.emit(f"islandcycle Lórien Revealed → {target_name or 'no Island found'}")
                 return None
-            return fn
+            return pay, resolve
+
+        def action(target_name: str | None, label: str) -> CardAction:
+            pay, resolve = make(target_name)
+            return CardAction.activated(
+                label,
+                pay,
+                resolve,
+                source_name=self.card_name,
+                ability_text="Islandcycling {1}",
+            )
 
         if not islands:
-            return [CardAction("islandcycle Lórien Revealed (whiff)", make(None))]
-        return [CardAction(f"islandcycle Lórien Revealed → {c.name}", make(c.name)) for c in islands]
+            return [action(None, "islandcycle Lórien Revealed (whiff)")]
+        return [action(c.name, f"islandcycle Lórien Revealed → {c.name}") for c in islands]

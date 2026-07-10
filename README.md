@@ -10,6 +10,13 @@ Think of it as a search engine over the decision tree of a solo game: it does
 not try to play *well*, it tries every legal sequence of decisions and counts
 the ones that reach your target board state.
 
+## Documentation
+
+Full documentation lives on the project website:
+**<https://bastienpasdeloup.github.io/MtG-Goldfish-Simulator/>** — how the
+simulator works, code architecture with diagrams, how to write properties
+(constraints, states, timing semantics), and worked examples.
+
 ## Status
 
 Early scaffold + a runnable vertical slice. See

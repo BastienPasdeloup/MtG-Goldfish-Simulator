@@ -36,15 +36,15 @@ class LionSash(Card):
                         c = next((x for x in st.graveyard if x.name == name), None)
                         if p is None or c is None or not pay_cost(st, cost_w):
                             return False
-                        st.graveyard.remove(c)
-                        st.exile.append(c)
                         return True
 
                     def resolve(st):
                         p = st.find_permanent(perm.uid)
-                        c = next((x for x in st.exile if x.name == name), None)
+                        c = next((x for x in st.graveyard if x.name == name), None)
                         if p is None or c is None:
                             return None
+                        st.graveyard.remove(c)
+                        st.exile.append(c)
                         if c.is_permanent:
                             p.counters["+1/+1"] = p.counters.get("+1/+1", 0) + 1
                         st.emit(f"Lion Sash: exile {name} from graveyard"

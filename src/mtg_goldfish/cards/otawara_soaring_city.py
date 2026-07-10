@@ -34,16 +34,33 @@ class OtawaraSoaringCity(Card):
         ]
 
         def make(uid):
-            def fn(st):
+            def pay(st):
                 card = next((c for c in st.hand if c.name == self.card_name), None)
                 perm = st.find_permanent(uid)
                 if card is None or perm is None or not pay_cost(st, cost):
-                    return None
+                    return False
                 st.hand.remove(card)
                 st.to_graveyard(card)
-                st.emit(f"channel Otawara (discard) — return {perm.name} to hand")
+                st.emit("channel Otawara (discard)")
+                return True
+
+            def resolve(st):
+                perm = st.find_permanent(uid)
+                if perm is None:
+                    return None
+                st.emit(f"channel Otawara: return {perm.name} to hand")
                 st.leaves_battlefield(perm, "hand")
                 return None
-            return fn
+            return pay, resolve
 
-        return [CardAction(f"channel Otawara: bounce {t.name}", make(t.uid)) for t in targets]
+        acts = []
+        for t in targets:
+            pay, resolve = make(t.uid)
+            acts.append(CardAction.activated(
+                f"channel Otawara: bounce {t.name}",
+                pay,
+                resolve,
+                source_name=self.card_name,
+                ability_text=f"Channel — return {t.name} to its owner's hand",
+            ))
+        return acts

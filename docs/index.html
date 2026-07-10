@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MtG Goldfish Simulator</title>
+<meta name="description" content="A solitaire Magic: the Gathering simulator that exhaustively explores every line of play and measures how often your deck reaches a target board state.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
+    <nav>
+      <a class="active" href="index.html">How it works</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="properties.html">Properties &amp; states</a>
+      <a href="examples.html">Examples</a>
+    </nav>
+    <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+
+<div class="hero">
+  <span class="fish">🐟</span>
+  <h1>MtG Goldfish Simulator</h1>
+  <p class="lead">
+    A solitaire (“goldfish”) <strong>Magic: the Gathering</strong> simulator with a web interface.
+    Give it a deck and a set of <em>properties</em> written in plain English — it exhaustively
+    explores <strong>every line of play</strong> and measures how often those properties can be satisfied.
+  </p>
+  <div class="btns">
+    <a class="primary" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">Get the code</a>
+    <a href="properties.html">Write your first property</a>
+  </div>
+</div>
+
+<div class="cards3">
+  <div class="panel">
+    <h3>Not a “good pilot”</h3>
+    <p>The simulator does not try to play <em>well</em>. It is a <strong>search engine over the
+    decision tree</strong> of a solo game: it tries every legal sequence of decisions and counts
+    the ones that reach your target state.</p>
+  </div>
+  <div class="panel">
+    <h3>Real rules engine</h3>
+    <p>Turn structure, the stack, mana payment, commander tax, fetchlands, activated and
+    triggered abilities, tokens, combat against a phantom opponent — with per-card behaviour
+    implemented one file per card.</p>
+  </div>
+  <div class="panel">
+    <h3>English → code</h3>
+    <p>Properties are written in plain English (“the commander is in play and 4 non-creature
+    spells were cast this turn”) and compiled to Python by an LLM — reviewable before running.</p>
+  </div>
+</div>
+
+<h2 id="pipeline">From deck URL to statistics</h2>
+
+<p>The data flows in one direction. You import a deck, describe what you want to observe,
+and the engine answers with a success rate and replayable winning lines.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 210" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="13">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <!-- boxes -->
+  <g stroke="#2e3340" fill="#1c1f27">
+    <rect x="10"  y="70" width="150" height="56" rx="9"/>
+    <rect x="205" y="70" width="150" height="56" rx="9"/>
+    <rect x="400" y="70" width="150" height="56" rx="9"/>
+    <rect x="595" y="70" width="140" height="56" rx="9"/>
+    <rect x="780" y="70" width="110" height="56" rx="9"/>
+    <rect x="400" y="10" width="150" height="42" rx="9"/>
+    <rect x="400" y="150" width="150" height="42" rx="9"/>
+  </g>
+  <g fill="#e6e8ee" text-anchor="middle">
+    <text x="85"  y="94">Moxfield URL</text><text x="85" y="112" fill="#9aa3b2">deck import</text>
+    <text x="280" y="94">Scryfall</text><text x="280" y="112" fill="#9aa3b2">card data + images</text>
+    <text x="475" y="94">Session</text><text x="475" y="112" fill="#9aa3b2">deck + properties</text>
+    <text x="665" y="94">Engine</text><text x="665" y="112" fill="#9aa3b2">exhaustive search</text>
+    <text x="835" y="94">Stats +</text><text x="835" y="112" fill="#9aa3b2">winning lines</text>
+    <text x="475" y="36">English properties</text>
+    <text x="475" y="176">Card behaviours</text>
+  </g>
+  <g stroke="#9aa3b2" fill="none" marker-end="url(#arr)">
+    <line x1="160" y1="98" x2="203" y2="98"/>
+    <line x1="355" y1="98" x2="398" y2="98"/>
+    <line x1="550" y1="98" x2="593" y2="98"/>
+    <line x1="735" y1="98" x2="778" y2="98"/>
+    <line x1="475" y1="52" x2="475" y2="68"/>
+    <line x1="560" y1="171" x2="660" y2="128"/>
+  </g>
+  <text x="493" y="64" fill="#d9a441" font-size="11">LLM compiles to code</text>
+  <text x="565" y="185" fill="#d9a441" font-size="11">cards/ registry (one file per card)</text>
+</svg>
+<figcaption>The web layer is a thin FastAPI shell; the engine has no web dependency and can be driven from a script or tests.</figcaption>
+</figure>
+
+<h2 id="simulation">How a simulation runs</h2>
+
+<p>A run plays <strong>N independent games</strong>. Each game is one random shuffle of the deck
+(seeded, so runs are reproducible). For each game the engine then searches the whole decision
+tree:</p>
+
+<ol>
+  <li><strong>Mulligans.</strong> If you allow <code>Y</code> mulligans, every way of bottoming
+  <code>Y</code> cards of the opening 7 becomes a separate root of the search.</li>
+  <li><strong>Lines of play.</strong> In each main phase, every legal action — playing a distinct
+  land (with its enter modes: a shockland can enter tapped or cost 2 life), casting a distinct
+  affordable spell, activating an ability, or passing — is a branch. Fetch targets, tutor
+  targets, discards, X values and modal choices branch too.</li>
+  <li><strong>Mana is not a branch point.</strong> Tapping sources to pay a cost is solved
+  deterministically by a payment planner, keeping the tree focused on genuinely meaningful
+  decisions.</li>
+  <li><strong>Checkpoints.</strong> The game state is checked against your properties at every
+  phase entry and after every action in a main phase.</li>
+</ol>
+
+<p>A game is a <strong>success</strong> if <em>some single line</em> satisfies <em>all</em>
+properties at their respective trigger moments. Independently, per-property statistics count the
+games where each property was satisfiable in <em>any</em> line.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3a4150"/>
+    </marker>
+  </defs>
+  <!-- edges -->
+  <g stroke="#3a4150" fill="none" marker-end="url(#arr2)">
+    <path d="M120,150 C170,150 170,60 220,60"/>
+    <path d="M120,150 C170,150 170,150 220,150"/>
+    <path d="M120,150 C170,150 170,240 220,240"/>
+    <path d="M330,60 C380,60 380,30 430,30"/>
+    <path d="M330,60 C380,60 380,90 430,90"/>
+    <path d="M330,240 C380,240 380,240 430,240"/>
+  </g>
+  <!-- winning line -->
+  <g stroke="#d9a441" stroke-width="2.4" fill="none" marker-end="url(#arr2)">
+    <path d="M330,150 C380,150 380,165 430,165"/>
+    <path d="M540,165 C590,165 590,165 640,165"/>
+    <path d="M750,165 C790,165 790,165 820,165"/>
+  </g>
+  <!-- nodes -->
+  <g stroke="#2e3340" fill="#1c1f27">
+    <rect x="20"  y="130" width="100" height="40" rx="8"/>
+    <rect x="220" y="40"  width="110" height="40" rx="8"/>
+    <rect x="220" y="130" width="110" height="40" rx="8"/>
+    <rect x="220" y="220" width="110" height="40" rx="8"/>
+    <rect x="430" y="10"  width="110" height="40" rx="8"/>
+    <rect x="430" y="70"  width="110" height="40" rx="8"/>
+    <rect x="430" y="145" width="110" height="40" rx="8" stroke="#d9a441"/>
+    <rect x="430" y="220" width="110" height="40" rx="8"/>
+    <rect x="640" y="145" width="110" height="40" rx="8" stroke="#d9a441"/>
+  </g>
+  <g fill="#e6e8ee" text-anchor="middle">
+    <text x="70"  y="154">keep hand</text><text x="70" y="167" fill="#9aa3b2">7 cards</text>
+    <text x="275" y="64">play Forest</text>
+    <text x="275" y="154">play Bayou</text>
+    <text x="275" y="244">pass</text>
+    <text x="485" y="34">cast Sol Ring</text>
+    <text x="485" y="94">fetch → Taiga</text>
+    <text x="485" y="169" fill="#f2e0b8">cast commander</text>
+    <text x="485" y="244">pass</text>
+    <text x="695" y="169" fill="#f2e0b8">attack</text>
+  </g>
+  <text x="826" y="170" fill="#d9a441" font-size="16">✓</text>
+  <text x="845" y="170" fill="#d9a441" font-size="12">all properties satisfied</text>
+  <!-- dead-end -->
+  <text x="560" y="34" fill="#e05561" font-size="12">✗ property no longer verifiable → pruned</text>
+</svg>
+<figcaption>Every state created during the search is recorded; the UI can open the full explored tree of any game, with the winning line highlighted in gold.</figcaption>
+</figure>
+
+<h3>Pruning &amp; bounds</h3>
+<ul>
+  <li><strong>Viability pruning:</strong> a branch is dropped the moment any unsatisfied property
+  can no longer be verified on it (its “at” moment is past, or its “before” deadline reached) —
+  no descendant could make the game a success.</li>
+  <li><strong>Sticky satisfaction:</strong> once a property holds at one of its checkpoints on a
+  line, it stays satisfied on that line; the search stops as soon as every property is verified.</li>
+  <li><strong>Budgets:</strong> each game is bounded by a wall-clock timeout and a node cap.
+  Cut-off games are reported as such (⏱ / ▦ in the runs table).</li>
+</ul>
+
+<h3>Search strategies</h3>
+<p>All strategies are exhaustive — they visit the same states, only the <em>order</em> differs,
+so winning lines are found sooner and timeouts bite later:</p>
+<div class="table-scroll"><table>
+  <tr><th>Mode</th><th>Order</th></tr>
+  <tr><td><code>dfs_heuristic</code> <span class="pill gold">default</span></td>
+      <td>DFS with move ordering: lands → commander → tutors → other spells → abilities → pass; mulligan keeps closest to 3 lands first.</td></tr>
+  <tr><td><code>dfs</code></td><td>DFS in natural action order.</td></tr>
+  <tr><td><code>bfs</code></td><td>Breadth-first — shallowest lines first.</td></tr>
+  <tr><td><code>best_first</code></td><td>Greedy on a board-progress score (satisfied properties, permanents, cards seen).</td></tr>
+</table></div>
+
+<h2 id="stack">Spells, abilities and the stack</h2>
+
+<p>The engine models the stack the way the game does:</p>
+<ul>
+  <li><strong>Casting a spell</strong> pays its full cost first, then puts the card on the stack
+  (cast triggers fire), then it resolves — permanents enter the battlefield, other spells go to
+  the graveyard as their effect applies.</li>
+  <li><strong>Activated abilities</strong> pay their costs (tapping, sacrificing, mana, life)
+  <em>at activation time</em>, before the ability goes on the stack. The effect applies at the
+  moment the ability resolves — in a single step.</li>
+  <li><strong>Triggered abilities</strong> (ETB, landfall, upkeep, attack triggers…) are put on
+  the stack when their event happens and apply their effect when they resolve.</li>
+  <li><strong>Replacement effects</strong> never use the stack: a land that “enters with two
+  depletion counters” has them from the moment it enters.</li>
+  <li><strong>Mana abilities</strong> don’t use the stack either — they are solved inside the
+  payment planner.</li>
+</ul>
+<p>The board viewer shows the stack zone live during replays, so you can watch spells and
+abilities go on and come off it, step by step.</p>
+
+<h2 id="quickstart">Quick start</h2>
+
+<pre><code>uv sync
+uv run mtg-goldfish        <span class="comment"># starts the web UI on http://127.0.0.1:8000</span></code></pre>
+
+<p>Then in the browser:</p>
+<ol>
+  <li>Choose a format (Duel Commander) and paste a <strong>Moxfield deck URL</strong>. Commanders
+  and companions are detected automatically.</li>
+  <li>Define <a href="properties.html">properties</a> (trigger moment + English condition) and
+  how many mulligans to allow.</li>
+  <li>Compile, review the generated code, and run a simulation. Statistics stream live; each
+  successful game can be replayed on an MTGO-like board, and its full search tree opened.</li>
+</ol>
+
+<div class="panel callout blue">
+  <div class="title">Optional: LLM features</div>
+  <p style="margin:0">With an <code>ANTHROPIC_API_KEY</code> (or a local model via Ollama), the
+  simulator compiles English properties into code and can auto-implement missing cards from
+  their oracle text. Without one, a deterministic offline stub handles simple conditions.</p>
+</div>
+
+</main>
+
+<footer class="site">
+  MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">source on GitHub</a>.
+  Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+</footer>
+
+</body>
+</html>

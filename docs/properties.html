@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Properties &amp; states — MtG Goldfish Simulator</title>
+<meta name="description" content="How to write properties (constraints) for the MtG Goldfish Simulator: trigger moments, timing semantics, the state API, and worked examples.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
+    <nav>
+      <a href="index.html">How it works</a>
+      <a href="architecture.html">Architecture</a>
+      <a class="active" href="properties.html">Properties &amp; states</a>
+      <a href="examples.html">Examples</a>
+    </nav>
+    <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+
+<h1>Properties &amp; states</h1>
+<p class="lead">A <strong>property</strong> (or constraint) is an assertion about the game,
+checked at a specific moment: <em>“<strong>at</strong> the precombat main phase of
+<strong>turn 3</strong>, the commander is in play and at least 4 lands are on the
+battlefield.”</em> The simulator measures how often your deck can make all of your properties
+true at once.</p>
+
+<h2 id="anatomy">Anatomy of a property</h2>
+
+<p>Each property has four parts:</p>
+
+<div class="table-scroll"><table>
+  <tr><th>Part</th><th>Values</th><th>Meaning</th></tr>
+  <tr><td><strong>Timing</strong></td><td><code>at</code> · <code>before</code></td><td>When the condition is evaluated (see below).</td></tr>
+  <tr><td><strong>Phase</strong></td><td>untap, upkeep, draw, precombat main, …, end step</td><td>The phase of the trigger moment.</td></tr>
+  <tr><td><strong>Turn</strong></td><td>1, 2, 3…</td><td>The turn of the trigger moment.</td></tr>
+  <tr><td><strong>Condition</strong></td><td>plain English</td><td>Compiled to a Python <code>check(state)</code> function you can review.</td></tr>
+</table></div>
+
+<h2 id="states">What is a “state”?</h2>
+
+<p>A <strong>state</strong> is a full photograph of the game at one instant on one line of play:
+all zones (library, hand, battlefield, graveyard, exile, command zone, stack), whose turn and
+phase it is, life totals, the mana pool, per-turn tallies (spells cast, lands played, cards
+drawn…), and per-turn history (what entered play or hit the graveyard on every earlier turn).</p>
+
+<p>The search creates a new state for every decision it explores — the same turn-3 moment exists
+in <em>many</em> states, one per line of play that reaches it. Your condition is evaluated
+against each state reached at the property's trigger moment; the game succeeds if
+<strong>one single line</strong> makes <strong>all</strong> properties true.</p>
+
+<p>Conditions are evaluated at <strong>checkpoints</strong>: on entering every phase, and after
+every individual action inside a main phase (so “4 spells cast this turn” can be caught between
+two casts of the same phase).</p>
+
+<h2 id="timing">Timing semantics: <code>at</code> vs <code>before</code></h2>
+
+<ul>
+  <li><strong><code>at</code> phase P of turn N</strong> — checked at every checkpoint where the
+  game is exactly at that phase of that turn (including after each action of a main phase).
+  In the UI this reads as “at the end of”, since the last checkpoint of the phase is the one
+  that usually matters.</li>
+  <li><strong><code>before</code> phase P of turn N</strong> — checked at <em>every</em>
+  checkpoint strictly earlier than that moment: any earlier phase, any earlier turn. Use it for
+  “X happens at some point in the first N turns”.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 150" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <!-- timeline -->
+  <line x1="30" y1="70" x2="870" y2="70" stroke="#3a4150" stroke-width="2"/>
+  <g fill="#1c1f27" stroke="#2e3340">
+    <circle cx="110" cy="70" r="7"/><circle cx="230" cy="70" r="7"/>
+    <circle cx="350" cy="70" r="7"/><circle cx="470" cy="70" r="7"/>
+    <circle cx="590" cy="70" r="7"/><circle cx="710" cy="70" r="7" stroke="#d9a441" fill="#d9a441"/>
+    <circle cx="820" cy="70" r="7"/>
+  </g>
+  <g fill="#9aa3b2" text-anchor="middle">
+    <text x="110" y="100">T1 main</text><text x="230" y="100">T1 end</text>
+    <text x="350" y="100">T2 main</text><text x="470" y="100">T2 end</text>
+    <text x="590" y="100">T3 upkeep</text><text x="710" y="100" fill="#d9a441">T3 main</text>
+    <text x="820" y="100">T3 end</text>
+  </g>
+  <!-- before bracket -->
+  <path d="M70,40 L70,28 L672,28 L672,40" stroke="#4f8cff" fill="none"/>
+  <text x="370" y="20" fill="#4f8cff" text-anchor="middle">“before precombat main of turn 3” — every checkpoint in here</text>
+  <!-- at marker -->
+  <path d="M710,48 L710,58" stroke="#d9a441"/>
+  <text x="710" y="130" fill="#d9a441" text-anchor="middle">“at precombat main of turn 3” — exactly here</text>
+</svg>
+</figure>
+
+<p>Two more rules complete the picture:</p>
+<ul>
+  <li><strong>Sticky satisfaction.</strong> Once a property holds at one of its checkpoints on a
+  line, it stays satisfied on that line — it does not need to remain true afterwards.</li>
+  <li><strong>Viability pruning.</strong> A line is abandoned as soon as an unsatisfied property
+  can no longer be verified on it (its <code>at</code> moment is past, or its
+  <code>before</code> deadline reached). The search tree viewer shows exactly where each dead
+  line died, and why, with one status circle per property.</li>
+</ul>
+
+<h2 id="writing">Writing conditions</h2>
+
+<p>Write the condition in plain English, then hit <em>Compile → review code</em>. The selected
+LLM turns it into a Python function <code>check(state)</code>, displayed under the property so
+you can verify it matches your intent before running. (Without an API key or local model, an
+offline stub compiles simple numeric conditions with regex heuristics.)</p>
+
+<p>The generated code runs in a restricted sandbox against a documented, stable
+<code>state</code> API:</p>
+
+<h3>Counts and booleans</h3>
+<pre><code>state.commander_in_play() -> bool          <span class="comment"># a commander is on the battlefield</span>
+state.lands_in_play() -> int
+state.creatures_in_play() -> int
+state.permanents_in_play() -> int
+state.cards_in_hand() -> int
+state.cards_in_graveyard() -> int
+state.has_permanent_named(name: str) -> bool   <span class="comment"># case-insensitive</span>
+state.count_on_battlefield(pred) -> int        <span class="comment"># pred: fn(card_data) -> bool</span></code></pre>
+
+<h3>Creature stats (on the battlefield)</h3>
+<pre><code>state.total_power() -> int
+state.total_toughness() -> int
+state.max_power() -> int
+state.max_toughness() -> int
+state.creatures_with_power_at_least(n: int) -> int</code></pre>
+
+<h3>Per-turn tallies (reset each turn)</h3>
+<pre><code>state.spells_cast_this_turn -> int
+state.creature_spells_cast_this_turn -> int
+state.noncreature_spells_cast_this_turn -> int
+state.lands_played_this_turn -> int
+state.cards_drawn_this_turn -> int
+state.storm_count -> int</code></pre>
+
+<h3>Game-long</h3>
+<pre><code>state.cards_drawn -> int          <span class="comment"># total cards drawn this game</span>
+state.life -> int
+state.turn -> int</code></pre>
+
+<h3>Zones (lists of names)</h3>
+<pre><code>state.hand_names() -> list[str]
+state.battlefield_names() -> list[str]
+state.graveyard_names() -> list[str]</code></pre>
+
+<h3>Past states / per-turn history</h3>
+<p>These describe what happened on <em>earlier</em> turns of the same line — the state carries
+its own history:</p>
+<pre><code>state.turns_played() -> int                          <span class="comment"># current turn number</span>
+state.graveyard_added_on(turn: int) -> list[str]     <span class="comment"># cards put in GY that turn</span>
+state.permanents_entered_on(turn: int) -> list[str]
+state.creatures_entered_on(turn: int) -> list[str]
+state.lands_entered_on(turn: int) -> list[str]
+state.each_turn(pred) -> bool    <span class="comment"># pred(turn)->bool holds for EVERY turn 1..now</span>
+state.some_turn(pred) -> bool    <span class="comment"># … for at least one turn</span></code></pre>
+
+<p class="muted">Cards exposed to <code>count_on_battlefield</code>'s predicate have:
+<code>.name</code>, <code>.cmc</code>, <code>.type_line</code>, <code>.is_land</code>,
+<code>.is_creature</code>, <code>.colors</code> (a list like <code>["R"]</code>).</p>
+
+<h2 id="examples">Worked examples</h2>
+
+<h3>“The commander is in play and at least 4 lands on the battlefield”</h3>
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.commander_in_play() <span class="kw">and</span> state.lands_in_play() >= 4</code></pre>
+
+<h3>“4 non-creature spells have been cast this turn”</h3>
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.noncreature_spells_cast_this_turn >= 4</code></pre>
+
+<h3>“Urza's Saga is on the battlefield and there are at least 8 cards in the graveyard”</h3>
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.has_permanent_named(<span class="str">"Urza's Saga"</span>) <span class="kw">and</span> state.cards_in_graveyard() >= 8</code></pre>
+
+<h3>“A card was put in the graveyard on each turn since the beginning”</h3>
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.each_turn(<span class="kw">lambda</span> t: len(state.graveyard_added_on(t)) >= 1)</code></pre>
+
+<h3>“At least two creatures with power 4 or more”</h3>
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.creatures_with_power_at_least(4) >= 2</code></pre>
+
+<h3>“At least 3 artifacts on the battlefield”</h3>
+<pre><code><span class="kw">def</span> <span class="fn">check</span>(state):
+    <span class="kw">return</span> state.count_on_battlefield(<span class="kw">lambda</span> c: <span class="str">"artifact"</span> <span class="kw">in</span> c.type_line.lower()) >= 3</code></pre>
+
+<h2 id="tips">Tips &amp; pitfalls</h2>
+
+<ul>
+  <li><strong>Pick the right timing.</strong> “I can have X by turn 3” is usually
+  <code>before end step of turn 3</code> (any moment counts), not <code>at</code> — with
+  <code>at</code>, the condition must hold at that exact phase.</li>
+  <li><strong>Use exact card names.</strong> <code>has_permanent_named</code> is case-insensitive
+  but matches the full name (either face of a double-faced card works).</li>
+  <li><strong>Each property is checked independently.</strong> Two properties don't need to hold
+  at the same instant — they each have their own trigger moment; the game succeeds if one line
+  satisfies all of them at their respective moments.</li>
+  <li><strong>Review the generated code.</strong> The English → code step is an LLM; the code
+  shown under the property is what actually runs. If it doesn't match your intent, rephrase and
+  recompile.</li>
+  <li><strong>Mind the search budget.</strong> Late trigger moments (turn 5+) explode the tree.
+  Raise the per-game timeout, lower the number of games, or use properties on earlier turns
+  to keep runs fast.</li>
+  <li><strong>Errors count as false.</strong> If the compiled code raises at a checkpoint, the
+  property simply doesn't hold there — the run continues.</li>
+</ul>
+
+</main>
+
+<footer class="site">
+  MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">source on GitHub</a>.
+  Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+</footer>
+
+</body>
+</html>

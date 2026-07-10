@@ -245,14 +245,22 @@ class GameState:
                     continue
                 progressed = True
                 ability = state.stack.pop()
-                state.emit(f"{ability.name} resolves")
+                # The ability's effects apply the moment it resolves: pop it,
+                # run the effect, and let the effect's own emit be the single
+                # replay frame (stack popped + effects applied together). Only
+                # if the effect emitted nothing do we add a fallback frame.
+                base_len = len(state.log)
                 branches = ability.resolve(state)
                 if branches is None:
+                    if len(state.log) == base_len:
+                        state.emit(f"{ability.name} resolves")
                     state.check_deaths()
                     next_states.append(state)
                     continue
                 branched = True
                 for branch in branches:
+                    if len(branch.log) == base_len:
+                        branch.emit(f"{ability.name} resolves")
                     branch.check_deaths()
                     next_states.append(branch)
             states = next_states
@@ -687,4 +695,9 @@ def make_permanent(
         uid=state.new_uid(),
     )
     perm.tapped = impl.etb_tapped(state)
+    # "Enters with N counters" is a replacement effect: the counters are on the
+    # permanent from the moment it exists, before any trigger or board frame.
+    for kind, n in impl.enters_with_counters(state).items():
+        if n:
+            perm.counters[kind] = perm.counters.get(kind, 0) + n
     return perm

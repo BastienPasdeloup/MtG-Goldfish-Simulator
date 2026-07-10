@@ -360,6 +360,7 @@ def transform_actions(
         p = st.find_permanent(perm.uid)
         if p is None or p.transformed or not pay_cost(st, cost):
             return False
+        return True
 
     def resolve(st: "GameState"):
         p = st.find_permanent(perm.uid)

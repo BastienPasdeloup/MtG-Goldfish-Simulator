@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — MtG Goldfish Simulator</title>
+<meta name="description" content="Code architecture of the MtG Goldfish Simulator: packages, game state, the stack, the mana planner, the exhaustive search and the web layer.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
+    <nav>
+      <a href="index.html">How it works</a>
+      <a class="active" href="architecture.html">Architecture</a>
+      <a href="properties.html">Properties &amp; states</a>
+      <a href="examples.html">Examples</a>
+    </nav>
+    <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+
+<h1>Code architecture</h1>
+<p class="lead">The project is a plain Python package (<code>src/mtg_goldfish/</code>) with a
+FastAPI shell on top. The engine and domain logic have no web dependency and can be driven from
+a script or from tests.</p>
+
+<h2 id="packages">Packages</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="13">
+  <defs>
+    <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <!-- web shell -->
+  <rect x="10" y="10" width="880" height="66" rx="10" fill="none" stroke="#4f8cff" stroke-dasharray="6 4"/>
+  <text x="30" y="34" fill="#4f8cff">web/ — FastAPI routes · WebSocket hub · threaded SimulationRunner · static frontend (app.js)</text>
+  <text x="30" y="56" fill="#9aa3b2">thin shell: parses requests, streams progress, persists results</text>
+
+  <!-- core row -->
+  <g stroke="#2e3340" fill="#1c1f27">
+    <rect x="10"  y="110" width="160" height="80" rx="9"/>
+    <rect x="195" y="110" width="160" height="80" rx="9"/>
+    <rect x="380" y="110" width="160" height="80" rx="9"/>
+    <rect x="565" y="110" width="160" height="80" rx="9"/>
+    <rect x="750" y="110" width="140" height="80" rx="9"/>
+    <rect x="195" y="230" width="160" height="70" rx="9"/>
+    <rect x="380" y="230" width="160" height="70" rx="9"/>
+    <rect x="565" y="230" width="160" height="70" rx="9"/>
+  </g>
+  <g fill="#e6e8ee" text-anchor="middle">
+    <text x="90"  y="140">deck/</text><text x="90"  y="160" fill="#9aa3b2">Moxfield + Scryfall</text><text x="90" y="176" fill="#9aa3b2">CardData, Deck</text>
+    <text x="275" y="140">session/</text><text x="275" y="160" fill="#9aa3b2">Session, SimResult</text><text x="275" y="176" fill="#9aa3b2">JSON store</text>
+    <text x="460" y="140">engine/</text><text x="460" y="160" fill="#9aa3b2">GameState, actions,</text><text x="460" y="176" fill="#9aa3b2">mana, simulator</text>
+    <text x="645" y="140">cards/</text><text x="645" y="160" fill="#9aa3b2">one file per card</text><text x="645" y="176" fill="#9aa3b2">+ registry</text>
+    <text x="820" y="140">formats/</text><text x="820" y="160" fill="#9aa3b2">Duel Commander</text><text x="820" y="176" fill="#9aa3b2">validation</text>
+    <text x="275" y="260">properties/</text><text x="275" y="280" fill="#9aa3b2">spec · compiler · evaluator</text>
+    <text x="460" y="260">llm/</text><text x="460" y="280" fill="#9aa3b2">Anthropic · Ollama · stub</text>
+    <text x="645" y="260">config</text><text x="645" y="280" fill="#9aa3b2">env, paths, model</text>
+  </g>
+  <g stroke="#9aa3b2" fill="none" marker-end="url(#arrA)">
+    <line x1="450" y1="78" x2="450" y2="108"/>
+    <line x1="565" y1="150" x2="542" y2="150"/>
+    <line x1="355" y1="265" x2="380" y2="265"/>
+    <line x1="330" y1="228" x2="400" y2="192"/>
+  </g>
+  <text x="560" y="145" fill="#9aa3b2" font-size="11" text-anchor="end"></text>
+</svg>
+<figcaption>cards/ plugs behaviour into the engine; properties/ compiles English into code the engine evaluates at checkpoints.</figcaption>
+</figure>
+
+<div class="table-scroll"><table>
+  <tr><th>Package</th><th>Responsibility</th></tr>
+  <tr><td><code>config</code></td><td>Environment and paths (<code>ANTHROPIC_API_KEY</code>, <code>MTG_DATA_DIR</code>, selected model).</td></tr>
+  <tr><td><code>deck</code></td><td><code>CardData</code>/<code>Deck</code> models, cached Scryfall client, Moxfield importer. Commander/companion roles come from Moxfield's boards, cross-checked against Scryfall facts.</td></tr>
+  <tr><td><code>formats</code></td><td><code>Format</code> rules (Duel Commander): starting life and hand, deck validation.</td></tr>
+  <tr><td><code>cards</code></td><td>Runtime card <strong>behaviour</strong>. One file per card, auto-discovered; <code>build_card</code> returns the registered <code>Card</code> or an <code>UnimplementedCard</code> vanilla approximation.</td></tr>
+  <tr><td><code>engine</code></td><td><code>GameState</code> (cloneable), turn <code>phases</code>, <code>mana</code> (+ payment planner), <code>actions</code>, and the exhaustive <code>simulator</code>.</td></tr>
+  <tr><td><code>properties</code></td><td><code>PropertySpec</code> model, LLM compiler (English → <code>check(state)</code>), sandboxed evaluator.</td></tr>
+  <tr><td><code>llm</code></td><td>Provider interface + Anthropic + local Ollama + deterministic offline stub; card auto-implementation (codegen).</td></tr>
+  <tr><td><code>session</code></td><td><code>Session</code>/<code>SimResult</code> models and a JSON-file store.</td></tr>
+  <tr><td><code>web</code></td><td>FastAPI routes, WebSocket <code>Hub</code>, threaded <code>SimulationRunner</code>, static frontend.</td></tr>
+</table></div>
+
+<h2 id="gamestate">The game state</h2>
+
+<p><code>GameState</code> is the single mutable object the simulator branches over. It is cloned
+at <em>every decision point</em>, so it deliberately holds plain, cheap-to-copy data:</p>
+
+<ul>
+  <li><strong>Zones:</strong> library, hand, battlefield (a list of <code>Permanent</code>s),
+  graveyard, exile, command zone, and the <strong>stack</strong> (cards being cast and
+  <code>StackAbility</code> items).</li>
+  <li><strong>Permanent:</strong> the card, its behaviour implementation, tapped/summoning-sick
+  flags, counters, temporary P/T, attachments (auras/equipment by uid), chosen modes.</li>
+  <li><strong>Tallies:</strong> per-turn counters (spells cast, lands played, cards drawn, storm)
+  and game-long history (what entered / hit the graveyard on each turn) — these power the
+  <a href="properties.html">property API</a>.</li>
+  <li><strong>Log:</strong> every notable event appends a <em>frame</em> — a description plus a
+  compact board snapshot — which is what the replay viewer plays back.</li>
+</ul>
+
+<p>Card <em>data</em> (<code>CardData</code>) and card <em>behaviour</em> (<code>Card</code>
+instances) are immutable and shared between clones; only per-game facts are copied. Mid-game
+shuffles are deterministic per branch (seeded), so a game's outcome is reproducible from its
+seed.</p>
+
+<h2 id="cards">Card behaviour: the <code>Card</code> class</h2>
+
+<p>Each implemented card is a file in <code>cards/</code> with a <code>@register</code>-decorated
+subclass of <code>Card</code>. The engine drives cards through hooks; a card only overrides what
+it changes:</p>
+
+<div class="table-scroll"><table>
+  <tr><th>Hook</th><th>Meaning</th></tr>
+  <tr><td><code>cast_cost(state)</code></td><td>Dynamic costs (domain reduction, commander tax handled by the engine).</td></tr>
+  <tr><td><code>cast_actions(state)</code></td><td>Override the default cast to enumerate targets / X values / modes — one <code>CardAction</code> per choice.</td></tr>
+  <tr><td><code>hand_actions</code> / <code>graveyard_actions</code></td><td>Non-cast plays: cycling, channel, escape, MDFC land faces…</td></tr>
+  <tr><td><code>etb_modes(state)</code> / <code>etb_tapped(state)</code></td><td>How a permanent may enter (shockland pay-2/tapped choice, fastlands).</td></tr>
+  <tr><td><code>enters_with_counters(state)</code></td><td>Replacement effect: counters the permanent enters with (depletion, fading…). Never uses the stack.</td></tr>
+  <tr><td><code>mana_abilities…</code> / <code>on_tap_for_mana</code></td><td>Mana production (visible to the payment planner), pain-land side effects.</td></tr>
+  <tr><td><code>battlefield_actions(state, perm)</code></td><td>Activated abilities: fetches, equip, draw engines, loyalty…</td></tr>
+  <tr><td><code>on_etb / on_leave / on_phase / on_attack / on_combat_damage / on_draw_card / on_cast_other / on_other_etb</code></td><td>Triggered abilities. The hook body is the <em>resolution effect</em>; the engine wraps it in a stack item automatically.</td></tr>
+  <tr><td><code>dynamic_power/toughness</code>, <code>equip_mod</code></td><td>Characteristic-defining stats, equipment bonuses.</td></tr>
+</table></div>
+
+<div class="panel callout">
+  <div class="title">Approximations are documented per card</div>
+  <p style="margin:0">There is no opponent, so opponent-facing text is a no-op and is stated as
+  such in each card file's docstring (e.g. counterspells can only counter <em>your own</em>
+  spells to fill the graveyard). Unimplemented cards still play as vanilla approximations and
+  are flagged red in the UI, with a 🔧 button that asks the selected LLM to generate the
+  implementation from oracle text — validated (compiles, imports, registers) before being
+  hot-loaded.</p>
+</div>
+
+<h2 id="stack">The stack: casting, activating, triggering</h2>
+
+<p>Three kinds of objects go on the stack, and costs are always paid <em>before</em> anything
+is put there:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 260" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="13">
+  <defs>
+    <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <g stroke="#2e3340" fill="#1c1f27">
+    <rect x="10"  y="30"  width="200" height="60" rx="9"/>
+    <rect x="10"  y="110" width="200" height="60" rx="9"/>
+    <rect x="10"  y="190" width="200" height="60" rx="9"/>
+    <rect x="330" y="30"  width="180" height="60" rx="9"/>
+    <rect x="330" y="110" width="180" height="60" rx="9"/>
+    <rect x="330" y="190" width="180" height="60" rx="9"/>
+    <rect x="640" y="110" width="250" height="60" rx="9" stroke="#d9a441"/>
+  </g>
+  <g fill="#e6e8ee" text-anchor="middle">
+    <text x="110" y="55">Cast a spell</text><text x="110" y="75" fill="#9aa3b2">pay full cost</text>
+    <text x="110" y="135">Activate an ability</text><text x="110" y="155" fill="#9aa3b2">tap · sac · mana · life</text>
+    <text x="110" y="215">Trigger fires</text><text x="110" y="235" fill="#9aa3b2">ETB, landfall, upkeep…</text>
+    <text x="420" y="55">card on stack</text><text x="420" y="75" fill="#9aa3b2">cast triggers fire</text>
+    <text x="420" y="135">StackAbility</text><text x="420" y="155" fill="#9aa3b2">label + resolve fn</text>
+    <text x="420" y="215">StackAbility</text><text x="420" y="235" fill="#9aa3b2">queued in order</text>
+    <text x="765" y="135" fill="#f2e0b8">Resolution</text>
+    <text x="765" y="155" fill="#9aa3b2">effect applies in one step</text>
+  </g>
+  <g stroke="#9aa3b2" fill="none" marker-end="url(#arrB)">
+    <line x1="210" y1="60"  x2="328" y2="60"/>
+    <line x1="210" y1="140" x2="328" y2="140"/>
+    <line x1="210" y1="220" x2="328" y2="220"/>
+    <line x1="510" y1="60"  x2="655" y2="118"/>
+    <line x1="510" y1="140" x2="638" y2="140"/>
+    <line x1="510" y1="220" x2="655" y2="162"/>
+  </g>
+  <text x="560" y="105" fill="#9aa3b2" font-size="11">LIFO — top of stack first</text>
+</svg>
+<figcaption>Permanents enter the battlefield on resolution; instants and sorceries apply their effect and go to the graveyard. Replacement effects and mana abilities bypass the stack entirely.</figcaption>
+</figure>
+
+<p>In code, an activated ability is a <code>CardAction.activated(label, pay_fn, resolve_fn)</code>:
+<code>pay_fn</code> pays all costs at activation (returning <code>False</code> aborts — nothing
+is stacked), then the ability is pushed; <code>resolve_fn</code> applies the effect when it
+resolves. Resolution branches (a fetch enumerates its targets) simply return a list of successor
+states — the search explores them all.</p>
+
+<h2 id="mana">The mana planner</h2>
+
+<p>Mana is deliberately <strong>not</strong> a branch point. When a cost must be paid,
+<code>plan_payment</code> chooses which sources to tap deterministically and greedily: coloured
+pips are covered by the least-flexible, lowest-life-cost sources first, then generic mana is
+topped up. Special sources fit the same interface — Ancient Tomb-style life costs, auras like
+Wild Growth that add mana when the host is tapped, lands that sacrifice themselves
+(Hickory Woodlot's depletion counters are removed by <code>on_tap_for_mana</code>).</p>
+
+<h2 id="search">The simulator</h2>
+
+<p><code>engine/simulator.py</code> runs one search per game (see
+<a href="index.html#simulation">How it works</a>). Implementation highlights:</p>
+
+<ul>
+  <li>The frontier is a stack / deque / heap depending on the strategy; every mode is exhaustive
+  and visits identical states, only in a different order.</li>
+  <li>Each created state gets a node in a <strong>recorded search tree</strong> (with per-node
+  property status), gzip-compressed into the stored result; the UI inflates it client-side with
+  <code>DecompressionStream</code>.</li>
+  <li>Checkpoints (<code>_check_due</code>) evaluate properties at each phase entry and after
+  every main-phase action; <code>_viable</code> prunes branches where an unsatisfied property is
+  no longer verifiable.</li>
+  <li>Per-game wall-clock timeout and node cap; a frontier size valve protects BFS/best-first
+  memory.</li>
+</ul>
+
+<h2 id="web">The web layer</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 190" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="13">
+  <defs>
+    <marker id="arrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <g stroke="#2e3340" fill="#1c1f27">
+    <rect x="10"  y="60" width="170" height="70" rx="9"/>
+    <rect x="250" y="60" width="180" height="70" rx="9"/>
+    <rect x="500" y="60" width="180" height="70" rx="9"/>
+    <rect x="740" y="60" width="150" height="70" rx="9"/>
+  </g>
+  <g fill="#e6e8ee" text-anchor="middle">
+    <text x="95"  y="88">Browser</text><text x="95" y="108" fill="#9aa3b2">app.js (vanilla)</text>
+    <text x="340" y="88">FastAPI</text><text x="340" y="108" fill="#9aa3b2">REST + /ws hub</text>
+    <text x="590" y="88">SimulationRunner</text><text x="590" y="108" fill="#9aa3b2">worker thread</text>
+    <text x="815" y="88">SessionStore</text><text x="815" y="108" fill="#9aa3b2">JSON on disk</text>
+  </g>
+  <g stroke="#9aa3b2" fill="none" marker-end="url(#arrC)">
+    <line x1="180" y1="80"  x2="248" y2="80"/>
+    <line x1="248" y1="110" x2="180" y2="110"/>
+    <line x1="430" y1="95"  x2="498" y2="95"/>
+    <line x1="680" y1="95"  x2="738" y2="95"/>
+  </g>
+  <text x="214" y="70"  fill="#9aa3b2" font-size="11">REST</text>
+  <text x="196" y="128" fill="#9aa3b2" font-size="11">WebSocket progress</text>
+</svg>
+<figcaption>The engine is CPU-bound and synchronous, so each run executes in its own thread and pushes progress to WebSocket clients.</figcaption>
+</figure>
+
+<ul>
+  <li><strong>Board viewer:</strong> every log frame carries a full board snapshot (zones, stack,
+  mana pool, counters), rendered as an MTGO-like board with Scryfall card images; the stack zone
+  shows spells and abilities with their trigger/effect text on hover.</li>
+  <li><strong>Search-tree viewer:</strong> a self-contained HTML page laying the explored tree
+  left-to-right, one circle per property per node (green verified / orange pending / red
+  unreachable), the winning line in gold.</li>
+  <li><strong>Sessions and runs</strong> persist to JSON; any previous run can be reloaded with
+  its exact configuration, seed, and replayable winning lines.</li>
+</ul>
+
+<h2 id="extending">Extending</h2>
+
+<ul>
+  <li><strong>New card:</strong> add <code>cards/&lt;snake_name&gt;.py</code> with a
+  <code>@register</code>-ed <code>Card</code> subclass; it is auto-discovered. See the
+  <a href="examples.html#card">worked examples</a>.</li>
+  <li><strong>New action/rule:</strong> add an <code>Action</code> in
+  <code>engine/actions.py</code>; <code>legal_actions</code> enumerates generically.</li>
+  <li><strong>New format:</strong> subclass <code>Format</code>, register it in
+  <code>formats/__init__.py</code>.</li>
+</ul>
+
+</main>
+
+<footer class="site">
+  MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">source on GitHub</a>.
+  Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+</footer>
+
+</body>
+</html>

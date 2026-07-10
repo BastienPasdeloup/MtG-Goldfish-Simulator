@@ -1,0 +1,137 @@
+/* MtG Goldfish Simulator — documentation site */
+:root {
+  --bg: #0f1116;
+  --bg2: #151823;
+  --panel: #1c1f27;
+  --border: #2e3340;
+  --text: #e6e8ee;
+  --muted: #9aa3b2;
+  --accent: #d9a441;   /* gold */
+  --accent2: #4f8cff;  /* blue */
+  --ok: #4bbf73;
+  --ko: #e05561;
+  --code-bg: #12141b;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f7f5; --bg2: #efefeb; --panel: #ffffff; --border: #d8d8d2;
+    --text: #1c1e24; --muted: #5c6470; --accent: #a87415; --accent2: #2563eb;
+    --code-bg: #f1f1ec;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---- header / nav ---- */
+header.site {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+header.site .inner {
+  max-width: 980px; margin: 0 auto; padding: .7rem 1.2rem;
+  display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap;
+}
+header.site .logo { font-weight: 700; color: var(--accent); font-size: 1.05rem; white-space: nowrap; }
+header.site .logo .fish { margin-right: .45rem; }
+header.site nav { display: flex; gap: 1rem; flex-wrap: wrap; }
+header.site nav a { color: var(--muted); font-size: .95rem; }
+header.site nav a.active, header.site nav a:hover { color: var(--text); text-decoration: none; }
+header.site .gh { margin-left: auto; color: var(--muted); font-size: .9rem; }
+
+/* ---- layout ---- */
+main { max-width: 980px; margin: 0 auto; padding: 2rem 1.2rem 4rem; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: .4rem 0 .6rem; }
+h1 + p.lead { color: var(--muted); font-size: 1.08rem; margin-top: 0; }
+h2 { font-size: 1.35rem; margin: 2.4rem 0 .6rem; padding-top: .4rem; border-top: 1px solid var(--border); }
+h3 { font-size: 1.08rem; margin: 1.6rem 0 .4rem; color: var(--accent); }
+p, li { color: var(--text); }
+li { margin: .25rem 0; }
+strong { color: var(--text); }
+.muted { color: var(--muted); }
+hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+
+/* ---- panels, callouts ---- */
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.2rem; margin: 1rem 0;
+}
+.callout { border-left: 3px solid var(--accent); }
+.callout.blue { border-left-color: var(--accent2); }
+.callout .title { font-weight: 600; color: var(--accent); margin-bottom: .3rem; }
+.callout.blue .title { color: var(--accent2); }
+
+/* ---- code ---- */
+code {
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 5px; padding: .08rem .35rem;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .9rem 1.1rem; overflow-x: auto;
+  margin: .8rem 0;
+}
+pre code { background: none; border: none; padding: 0; font-size: 13px; }
+.comment { color: var(--muted); }
+.kw { color: var(--accent2); }
+.str { color: var(--ok); }
+.fn { color: var(--accent); }
+
+/* ---- tables ---- */
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .95rem; }
+th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .4px; }
+td code { white-space: nowrap; }
+.table-scroll { overflow-x: auto; }
+
+/* ---- diagrams ---- */
+figure.diagram {
+  margin: 1.2rem 0; padding: 1rem; background: var(--bg2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow-x: auto; text-align: center;
+}
+figure.diagram svg { max-width: 100%; height: auto; }
+figure.diagram figcaption { color: var(--muted); font-size: .85rem; margin-top: .6rem; text-align: center; }
+
+/* diagram text uses currentColor so it adapts to the theme */
+figure.diagram { color: var(--text); }
+
+/* ---- hero (home page) ---- */
+.hero { text-align: center; padding: 2.2rem 0 1rem; }
+.hero h1 { font-size: 2.3rem; }
+.hero .fish { font-size: 2.6rem; display: block; margin-bottom: .4rem; }
+.hero p.lead { max-width: 46rem; margin: .6rem auto 1.2rem; }
+.hero .btns { display: flex; gap: .8rem; justify-content: center; flex-wrap: wrap; }
+.hero .btns a {
+  display: inline-block; padding: .55rem 1.1rem; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font-weight: 600; font-size: .95rem;
+}
+.hero .btns a.primary { background: var(--accent); border-color: var(--accent); color: #14161c; }
+.hero .btns a:hover { text-decoration: none; filter: brightness(1.1); }
+
+.cards3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.6rem 0; }
+.cards3 .panel { margin: 0; }
+.cards3 .panel h3 { margin-top: 0; }
+
+/* ---- footer ---- */
+footer.site {
+  border-top: 1px solid var(--border); color: var(--muted);
+  text-align: center; font-size: .85rem; padding: 1.4rem; margin-top: 2rem;
+}
+
+/* ---- misc ---- */
+.pill {
+  display: inline-block; font-size: .75rem; font-weight: 600; letter-spacing: .3px;
+  padding: .1rem .55rem; border-radius: 99px; border: 1px solid var(--border);
+  color: var(--muted); vertical-align: middle;
+}
+.pill.gold { color: var(--accent); border-color: var(--accent); }
+.kbd-seq { color: var(--muted); font-size: .9rem; }

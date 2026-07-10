@@ -14,8 +14,10 @@ from .registry import register
 class UginEyeOfTheStorms(Card):
     card_name = "Ugin, Eye of the Storms"
 
-    def on_etb(self, state, permanent):
-        permanent.counters["loyalty"] = 7
+    def enters_with_counters(self, state):
+        # Starting loyalty is a replacement effect: the counters are on the
+        # planeswalker from the moment it enters; nothing goes on the stack.
+        return {"loyalty": 7}
 
     def battlefield_actions(self, state, perm):
         if perm.turn_flags.get("loyalty_used"):
@@ -30,8 +32,10 @@ class UginEyeOfTheStorms(Card):
             return True
 
         def resolve_plus2(st):
+            p = st.find_permanent(perm.uid)
+            loyalty = p.counters.get("loyalty", 0) if p is not None else 0
             st.life += 3
-            st.emit(f"Ugin +2 (loyalty {p.counters['loyalty']}): gain 3 life, draw")
+            st.emit(f"Ugin +2 (loyalty {loyalty}): gain 3 life, draw")
             st.draw(1)
             return None
 

@@ -16,8 +16,11 @@ from .registry import register
 class TezzeretCruelCaptain(Card):
     card_name = "Tezzeret, Cruel Captain"
 
-    def on_etb(self, state, permanent):
-        permanent.counters["loyalty"] = 0
+    def enters_with_counters(self, state):
+        # No printed starting loyalty: it enters with 0 loyalty counters (a
+        # replacement effect — no ETB trigger; the engine skips zero counts
+        # and loyalty reads default to 0 anyway).
+        return {"loyalty": 0}
 
     def other_etb_stack_items(self, state, perm, entering):
         if "artifact" not in entering.type_line.lower():

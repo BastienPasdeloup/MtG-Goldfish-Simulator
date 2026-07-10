@@ -47,16 +47,28 @@ class PreWarFormalwear(Card):
         targets = [p for p in state.battlefield
                    if p.is_creature_now and p.uid != perm.attached_to]
 
-        def make(uid: int):
-            def fn(st):
+        def make(uid: int, target_name: str):
+            def pay(st):
                 me = st.find_permanent(perm.uid)
                 t = st.find_permanent(uid)
                 if me is None or t is None or not pay_cost(st, cost):
+                    return False
+                return True
+
+            def resolve(st):
+                me = st.find_permanent(perm.uid)
+                t = st.find_permanent(uid)
+                if me is None or t is None:
                     return None
                 me.attached_to = t.uid
                 st.emit(f"equip Pre-War Formalwear to {t.name} (+2/+2)")
                 return None
-            return fn
+            return CardAction.activated(
+                f"equip Pre-War Formalwear → {target_name}",
+                pay,
+                resolve,
+                source_name="Pre-War Formalwear",
+                ability_text="Equip",
+            )
 
-        return [CardAction(f"equip Pre-War Formalwear → {t.name}", make(t.uid))
-                for t in targets]
+        return [make(t.uid, t.name) for t in targets]

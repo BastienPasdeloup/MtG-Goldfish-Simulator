@@ -179,6 +179,13 @@ class Card:
         `None` = single default mode (etb_tapped decides tapped)."""
         return None
 
+    def enters_with_counters(self, state: "GameState") -> dict[str, int]:
+        """Counters this permanent enters the battlefield with ("enters with
+        two depletion counters", loyalty, fading/vanishing...). This is a
+        REPLACEMENT effect: the counters are on the permanent from the moment
+        it enters — it never goes on the stack and no trigger fires."""
+        return {}
+
     def etb_tapped(self, state: "GameState") -> bool:
         text = self.data.oracle_text.lower()
         # Look sentence by sentence: a card enters tapped only if IT is the

@@ -61,5 +61,8 @@ class DetectivesPhoenix(Card):
                 return None
             return fn
 
-        return [CardAction(f"bestow Detective's Phoenix → {c.name}", make(c.uid))
+        # Label starts with "cast " so CardAction.apply treats this as a spell
+        # cast (pay + resolve immediately) rather than an activated ability —
+        # otherwise the whole cost would wrongly be paid at resolution.
+        return [CardAction(f"cast Detective's Phoenix (bestow) → {c.name}", make(c.uid))
                 for c in creatures]

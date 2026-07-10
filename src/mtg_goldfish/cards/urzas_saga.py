@@ -1,5 +1,6 @@
 """Urza's Saga — Enchantment Land — Urza's Saga.
-Enters with lore counter I; adds one after each of your draw steps.
+Enters with lore counter I (a replacement effect — the counter is on it from
+the moment it enters); adds one after each of your draw steps.
 I: gains "{T}: Add {C}" (modelled as always-on from chapter I).
 II: gains "{2}, {T}: create a 0/0 Construct with +1/+1 per artifact".
 III (at the chapter-3 lore bump): search your library for an artifact card
@@ -19,8 +20,10 @@ from .registry import register
 class UrzasSaga(Card):
     card_name = "Urza's Saga"
 
-    def on_etb(self, state, permanent):
-        permanent.counters["lore"] = 1
+    def enters_with_counters(self, state):
+        # "Enters with a lore counter" — a replacement effect: the counter is
+        # on the Saga from the moment it enters; nothing goes on the stack.
+        return {"lore": 1}
 
     def mana_abilities_perm(self, state, perm):
         if perm.counters.get("lore", 0) >= 1:

@@ -52,21 +52,28 @@ class NickFury(Card):
                 choices.append(c.name)
 
         def make(put_name: str | None):
-            def fn(st):
+            def pay(st):
                 p = st.find_permanent(perm.uid)
                 if p is None or p.counters.get("powered_up"):
-                    return None
+                    return False
                 c, t = _powerup_cost(st, p)
                 if not pay_cost(st, c):
-                    return None
+                    return False
                 if t == "free via Advancing the Spirit":
                     for adv in st.battlefield:
                         if adv.card.name == "Advancing the Spirit":
                             adv.turn_flags["powerup_free_used"] = 1
                             break
-                p.counters["powered_up"] = 1
+                p.counters["powered_up"] = 1  # "Activate only once."
+                st.emit(f"Power-up Nick Fury ({t})")
+                return True
+
+            def resolve(st):
+                p = st.find_permanent(perm.uid)
+                if p is None:
+                    return None
                 p.counters["+1/+1"] = p.counters.get("+1/+1", 0) + 2
-                st.emit(f"Power-up Nick Fury ({t}): +2 counters, look at top 7")
+                st.emit("Power-up Nick Fury: +2 counters, look at top 7")
                 seven = st.library[:7]
                 del st.library[: len(seven)]
                 branches = None
@@ -85,10 +92,17 @@ class NickFury(Card):
                 st.library.extend(rng_cards)
                 st.check_deaths()
                 return branches
-            return fn
+            return pay, resolve
 
         out = []
         for name in choices:
             label = f"Power-up Nick Fury ({tag})" + (f" → put {name}" if name else " → put nothing")
-            out.append(CardAction(label, make(name)))
+            pay, resolve = make(name)
+            out.append(CardAction.activated(
+                label,
+                pay,
+                resolve,
+                source_name=self.card_name,
+                ability_text="Power-up — +2 +1/+1 counters; look at the top seven",
+            ))
         return out

@@ -108,7 +108,7 @@ def session_payload(session: Session) -> dict:
 # --------------------------------------------------------------------------
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(_STATIC / "index.html")
+    return FileResponse(_STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/meta")
@@ -374,5 +374,16 @@ def _load(session_id: str) -> Session:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """Static assets must revalidate on every load: the board-snapshot format
+    and app.js evolve together, and a heuristically-cached stale app.js
+    renders the new frames as grey "[object Object]" tiles."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Mounted last so /api/* and /ws/* take precedence.
-app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+app.mount("/static", _NoCacheStaticFiles(directory=_STATIC), name="static")
