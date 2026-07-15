@@ -226,6 +226,10 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .tile .ctr-row { position: absolute; bottom: 2px; left: 2px; right: 2px; display: flex; flex-wrap: wrap; gap: 2px; pointer-events: none; }
 .tile .badge.ctr { position: static; background: var(--accent-2); color: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
 .tile .badge.ctr.neg { background: var(--bad, #e05561); }
+/* Current P/T of variable-P/T creatures (CDAs like Barrowgoyf's *​/*) */
+.tile .badge.pt { left: auto; right: 2px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
+/* Granted (until end of turn) abilities, e.g. Cosmic Spider-Man's combat buff */
+.tile .badge.kw { position: static; background: var(--ok, #4bbf73); color: #10240f; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
 /* Composed token face (tokens have no card image) */
 .tile.token-card { background: linear-gradient(160deg, #3a3f4d, #262a34); }
 .tok-face { display: flex; flex-direction: column; height: 100%; padding: 3px 4px; text-align: left; }

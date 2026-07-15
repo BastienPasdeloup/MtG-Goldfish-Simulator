@@ -47,13 +47,18 @@ resolution actually did):
       # of a card whose name contains `source` was activated (optionally on `turn`)
   state.ability_succeeded(source: str, turn=None) -> bool  # ...and it achieved its
       # purpose (e.g. Nick Fury's power-up actually put a card onto the battlefield)
-  state.played_on(name: str, turn=None) -> bool
-      # a card named like `name` was played/cast during `turn` (None = any
-      # turn): it entered the battlefield (tokens excluded) or its spell
-      # resolved. Game-long history — usable at ANY later checkpoint. ALWAYS
-      # use this for "X is/was played on turn N" when the property's trigger
-      # moment is LATER than turn N (has_permanent_named + state.turn would
-      # never match there).
+  state.played_on(name: str, turn=None, min_turn=None, max_turn=None) -> bool
+      # a card named like `name` was played/cast: it entered the battlefield
+      # (tokens excluded) or its spell resolved. Restrict the moment with
+      # `turn` (exactly that turn) or the INCLUSIVE min_turn/max_turn range.
+      # Game-long history — usable at ANY later checkpoint. ALWAYS use this
+      # for "X is/was played on/before/between turn(s) ..." when the
+      # property's trigger moment is LATER (has_permanent_named + state.turn
+      # would never match there). Examples:
+      #   "played on turn 4"                  -> played_on(name, 4)
+      #   "came into play before turn 4"      -> played_on(name, max_turn=3)
+      #   "played between turns 2 and 4"      -> played_on(name, min_turn=2, max_turn=4)
+      #   "played by (on or before) turn 4"   -> played_on(name, max_turn=4)
   state.spell_resolved(name: str, turn=None) -> bool   # the spell resolved (not countered)
   state.trigger_resolved(source: str, turn=None) -> bool  # a triggered ability resolved
   Examples:

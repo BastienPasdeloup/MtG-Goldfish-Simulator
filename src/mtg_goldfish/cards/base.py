@@ -307,6 +307,14 @@ class Card:
     def etb_stack_items(self, state: "GameState", permanent: "Permanent") -> list:
         if type(self).on_etb is Card.on_etb:
             return []
+        # Implemented DFC ETBs belong to the FRONT face: a permanent that is
+        # already on its back face when it enters (Deadpool copying a flipped
+        # card, an MDFC played as its land back) must not fire them. (A DFC
+        # that enters front-faced and transforms during the same resolution —
+        # Nick Fury's power-up — queues here BEFORE transforming, so its front
+        # ETB still resolves.)
+        if permanent.transformed and len(self.data.faces) > 1:
+            return []
 
         def resolve(st, uid=permanent.uid):
             perm = st.find_permanent(uid)

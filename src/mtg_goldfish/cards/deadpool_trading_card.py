@@ -18,10 +18,11 @@ House rules of the exchange:
     active face's text and keywords move to Deadpool, and Deadpool's
     `transformed` view is aligned so the swapped impl keeps behaving as that
     face. The other creature keeps its own face (name/types/P&T unchanged).
-  * A spent power-up moves WITH the text box: if the other creature had
+  * A spent power-up is COPIED with the text box: if the other creature had
     already powered up, Deadpool's gained power-up is also spent — tracked as
     the hidden "_powered_up" counter so no "powered_up" badge shows on
-    Deadpool (he never powered up himself).
+    Deadpool (he never powered up himself), while the original creature keeps
+    its own badge.
 """
 from __future__ import annotations
 
@@ -94,10 +95,12 @@ class DeadpoolTradingCard(Card):
             other.card = _with_swapped_text(other.card, other.transformed,
                                             other_text, other_kws)
             me.transformed = other.transformed
-            # A spent power-up moves with the text box — hidden marker, so no
-            # "powered_up" badge appears on Deadpool (he never powered up).
-            spent = (other.counters.pop("powered_up", None)
-                     or other.counters.pop("_powered_up", None))
+            # A spent power-up is COPIED to Deadpool as the hidden marker: he
+            # can't use the gained (already-activated) power-up and shows no
+            # "powered_up" badge, while the original creature KEEPS its badge
+            # (it did power up — the marker is part of its history).
+            spent = (other.counters.get("powered_up")
+                     or other.counters.get("_powered_up"))
             if spent:
                 me.counters["_powered_up"] = spent
             st.emit(f"Deadpool enters: exchange text boxes with {other.name}")

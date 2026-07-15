@@ -755,17 +755,28 @@ class GameState:
         e.g. Nick Fury's power-up actually put a card onto the battlefield)."""
         return bool(self.events_matching("ability_success", source, turn))
 
-    def played_on(self, name: str, turn: int | None = None) -> bool:
+    def played_on(self, name: str, turn: int | None = None,
+                  min_turn: int | None = None, max_turn: int | None = None) -> bool:
         """A card named like `name` (substring, case-insensitive) was played or
-        cast during `turn` (None = any turn): it entered the battlefield (not
-        as a token) or its spell resolved. Game-long event history, so this can
-        be checked at ANY later moment — e.g. "Deadpool, Trading Card is played
-        on turn 4", verified at the end step of turn 6:
-        played_on("Deadpool, Trading Card", 4)."""
+        cast: it entered the battlefield (not as a token) or its spell
+        resolved. Restrict the moment with `turn` (exactly that turn) or an
+        inclusive `min_turn`/`max_turn` range. Game-long event history, so this
+        can be checked at ANY later moment. Examples:
+          "played on turn 4"              -> played_on(name, 4)
+          "came into play before turn 4"  -> played_on(name, max_turn=3)
+          "played between turns 2 and 4"  -> played_on(name, min_turn=2, max_turn=4)
+        """
+        def in_range(e) -> bool:
+            if min_turn is not None and e["turn"] < min_turn:
+                return False
+            if max_turn is not None and e["turn"] > max_turn:
+                return False
+            return True
         return bool(
             self.events_matching(kind="enter_battlefield", name=name, turn=turn,
-                                 pred=lambda e: not e.get("is_token"))
-            or self.events_matching(kind="spell_resolved", name=name, turn=turn)
+                                 pred=lambda e: not e.get("is_token") and in_range(e))
+            or self.events_matching(kind="spell_resolved", name=name, turn=turn,
+                                    pred=in_range)
         )
 
     def spell_resolved(self, name: str, turn: int | None = None) -> bool:
@@ -904,6 +915,51 @@ class GameState:
         return (self.turn, phase_index(self.phase))
 
     # ---- snapshot for the board viewer --------------------------------------
+    def _perm_view(self, p: Permanent) -> dict:
+        """One battlefield permanent as the board viewer consumes it."""
+        view = {
+            "name": p.name,
+            "uid": p.uid,
+            "attached_to": p.attached_to,  # host uid for auras/equipment
+            "is_aura": "aura" in p.type_line.lower(),
+            "tapped": p.tapped,
+            "sick": p.summoning_sick,
+            "is_land": p.is_land,
+            "is_lander": p.is_lander,
+            "is_creature": p.is_creature_now,
+            "commander": p.is_commander,
+            "token": p.is_token,
+            # Underscore-prefixed counters are internal bookkeeping
+            # (e.g. "_powered_up" moved by Deadpool's text exchange) —
+            # never shown as badges.
+            "counters": {k: v for k, v in p.counters.items()
+                         if v and not k.startswith("_")},
+            "attacking": p.uid in self.attackers,
+        }
+        # Granted (until-end-of-turn) abilities, e.g. Cosmic Spider-Man's
+        # combat buff: shown as badges for as long as they last.
+        if p.temp_keywords:
+            view["granted"] = sorted(p.temp_keywords)
+        if p.is_token:
+            # Tokens have no card image: ship what the tile needs to render a
+            # composed card face (type, textbox, P/T).
+            view.update(
+                type_line=p.type_line,
+                text=p.card.oracle_text,
+                power=self.effective_power(p) if p.is_creature_now else None,
+                toughness=self.effective_toughness(p) if p.is_creature_now else None,
+            )
+        elif p.is_creature_now:
+            # Variable P/T (a characteristic-defining ability, e.g. Barrowgoyf's
+            # */*): the printed card gives no number, so the tile always shows
+            # the current values.
+            impl = p.pt_impl or p.impl
+            if (impl.dynamic_power(self, p) is not None
+                    or impl.dynamic_toughness(self, p) is not None):
+                view["power"] = self.effective_power(p)
+                view["toughness"] = self.effective_toughness(p)
+        return view
+
     def snapshot(self) -> dict:
         def stack_item_view(item):
             if isinstance(item, StackAbility):
@@ -929,36 +985,7 @@ class GameState:
             "exile": [c.name for c in self.exile],
             "stack": [stack_item_view(c) for c in self.stack],
             "mana_pool": {k: v for k, v in self.mana_pool.amounts.items() if v},
-            "battlefield": [
-                {
-                    "name": p.name,
-                    "uid": p.uid,
-                    "attached_to": p.attached_to,  # host uid for auras/equipment
-                    "is_aura": "aura" in p.type_line.lower(),
-                    "tapped": p.tapped,
-                    "sick": p.summoning_sick,
-                    "is_land": p.is_land,
-                    "is_lander": p.is_lander,
-                    "is_creature": p.is_creature_now,
-                    "commander": p.is_commander,
-                    "token": p.is_token,
-                    # Underscore-prefixed counters are internal bookkeeping
-                    # (e.g. "_powered_up" moved by Deadpool's text exchange) —
-                    # never shown as badges.
-                    "counters": {k: v for k, v in p.counters.items()
-                                 if v and not k.startswith("_")},
-                    "attacking": p.uid in self.attackers,
-                    # Tokens have no card image: ship what the tile needs to
-                    # render a composed card face (type, textbox, P/T).
-                    **({
-                        "type_line": p.type_line,
-                        "text": p.card.oracle_text,
-                        "power": self.effective_power(p) if p.is_creature_now else None,
-                        "toughness": self.effective_toughness(p) if p.is_creature_now else None,
-                    } if p.is_token else {}),
-                }
-                for p in self.battlefield
-            ],
+            "battlefield": [self._perm_view(p) for p in self.battlefield],
             "counters": {
                 "spells": self.spells_cast_this_turn,
                 "noncreature": self.noncreature_spells_cast_this_turn,

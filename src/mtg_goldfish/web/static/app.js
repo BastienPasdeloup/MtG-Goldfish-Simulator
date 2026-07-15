@@ -1288,26 +1288,54 @@ function tile(name, opts = {}) {
   } else if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
   else t.append(el("div", { className: "fallback", textContent: name }));
   if (opts.commander) t.append(el("div", { className: "badge", textContent: "CMD" }));
+  // Variable P/T (a characteristic-defining ability, e.g. Barrowgoyf's */*):
+  // the printed card gives no number, so the current values are always shown.
+  if (!opts.token && opts.power != null && opts.toughness != null) {
+    t.append(el("div", {
+      className: "badge pt",
+      title: `current power/toughness: ${opts.power}/${opts.toughness}`,
+      textContent: `${opts.power}/${opts.toughness}`,
+    }));
+  }
   // Markers: render every counter kind present on the permanent, not just a
   // hardcoded few. +1/+1 and -1/-1 get P/T formatting, loyalty a shield, and
   // any other kind (charge, oil, fade, page, lore, ...) shows "N×kind".
   const counters = opts.counters || {};
   const kinds = Object.entries(counters).filter(([, v]) => v);
-  if (kinds.length) {
+  const granted = opts.granted || [];
+  if (kinds.length || granted.length) {
     const row = el("div", { className: "ctr-row" });
     for (const [k, v] of kinds) {
       let label, cls = "badge ctr";
       if (k === "+1/+1") { label = `+${v}/+${v}`; }
       else if (k === "-1/-1") { label = `−${v}/−${v}`; cls += " neg"; }
       else if (k === "loyalty") { label = `⟐${v}`; }
+      else if (k === "powered_up") { label = "powered up"; }
       else { label = `${v}×${k}`; }
-      row.append(el("div", { className: cls, title: `${v} ${k} counter${v === 1 ? "" : "s"}`, textContent: label }));
+      const title = k === "powered_up" ? "powered up" : `${v} ${k} counter${v === 1 ? "" : "s"}`;
+      row.append(el("div", { className: cls, title, textContent: label }));
+    }
+    // Granted (until-end-of-turn) abilities, e.g. Cosmic Spider-Man's buff.
+    for (const kw of granted) {
+      row.append(el("div", {
+        className: "badge kw",
+        title: `has ${kw} (granted until end of turn)`,
+        textContent: KW_SHORT[kw] || kw,
+      }));
     }
     t.append(row);
   }
   hoverable(t, img); // enlarge on hover, like the decklist
   return t;
 }
+
+// Compact labels for granted-keyword badges (tiles are 78px wide).
+const KW_SHORT = {
+  "flying": "fly", "first strike": "1st", "double strike": "2×st",
+  "trample": "trmp", "lifelink": "life", "haste": "haste",
+  "vigilance": "vigil", "deathtouch": "death", "reach": "reach",
+  "menace": "menace", "hexproof": "hex", "indestructible": "indstr",
+};
 
 // A pile of cards stacked on top of each other, each revealing only the top
 // strip of its image. Cards are added chronologically, so the last (most
@@ -1377,7 +1405,7 @@ function energyPips(n) {
 // (peeking out from the top-right), so the enchanted/equipped card is on top.
 function permTile(p, attachedByHost) {
   const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
-    token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness });
+    granted: p.granted, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness });
   const attached = attachedByHost[p.uid] || [];
   if (!attached.length) return host;
   const wrap = el("div", { className: "perm-stack" });
