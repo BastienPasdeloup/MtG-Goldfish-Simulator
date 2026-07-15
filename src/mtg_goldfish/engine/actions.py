@@ -491,8 +491,11 @@ def combat_actions(state: GameState) -> list[Action]:
 
 
 def deal_combat_damage(state: GameState) -> None:
-    """At the combat-damage step: attackers hit the phantom opponent."""
+    """At the combat-damage step: attackers hit the phantom opponent. ALL
+    damage is dealt and reported (life totals, lifelink) first; only then do
+    the combat-damage triggers go on the stack and resolve."""
     total = 0
+    hits: list[tuple[Permanent, int]] = []
     for uid in list(state.attackers):
         perm = state.find_permanent(uid)
         if perm is None:
@@ -504,9 +507,11 @@ def deal_combat_damage(state: GameState) -> None:
         state.opponent_life -= dmg
         if state.has_keyword(perm, "Lifelink"):
             state.life += dmg
-        state.queue_combat_damage_triggers(perm, dmg)
+        hits.append((perm, dmg))
     if total:
         state.emit(f"combat: {total} damage to opponent (opponent at {state.opponent_life})")
+    for perm, dmg in hits:
+        state.queue_combat_damage_triggers(perm, dmg)
     state.settle_nonbranching("combat damage triggers")
 
 

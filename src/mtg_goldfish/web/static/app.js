@@ -253,8 +253,23 @@ async function openRunsModal() {
   if (!results.length) {
     body.replaceChildren(el("div", { className: "muted", textContent: "No runs yet." }));
   } else {
+    // Top bar: delete every stored run at once.
+    const topbar = el("div", { className: "runs-topbar" },
+      el("span", { className: "muted", textContent: `${results.length} run${results.length > 1 ? "s" : ""}` }),
+      el("button", {
+        className: "danger",
+        textContent: "Delete all",
+        onclick: async () => {
+          if (!confirm(`Delete all ${results.length} runs of this session?`)) return;
+          try { await api(`/api/sessions/${state.session.id}/results`, { method: "DELETE" }); }
+          catch (e) { alert("Could not delete: " + e.message); return; }
+          state.session.results = [];
+          $("load-run-btn").disabled = true;
+          openRunsModal(); // re-render (shows "No runs yet.")
+        },
+      }));
     const thead = el("thead", {}, el("tr", {},
-      ...["Date", "Properties", "Success", "Games", "Hand", "Mulligans", "Start", "Seed"].map((h) => el("th", { textContent: h }))));
+      ...["Date", "Properties", "Success", "Games", "Hand", "Mulligans", "Start", "Seed", ""].map((h) => el("th", { textContent: h }))));
     const tbody = el("tbody");
     results.slice().reverse().forEach((r) => {
       const st = r.stats || {}, cfg = r.config || {}, gr = st.games_run || 0;
@@ -282,6 +297,25 @@ async function openRunsModal() {
       } else if (r.status === "stopped") {
         dateCell.append(el("div", {}, el("span", { className: "pill", textContent: "stopped" })));
       }
+      const actionsCell = el("td", { className: "run-actions" },
+        el("button", {
+          textContent: "Load",
+          title: "restore this run's settings, properties and results",
+          onclick: (e) => { e.stopPropagation(); loadRun(r); },
+        }),
+        el("button", {
+          className: "danger",
+          textContent: "Delete",
+          title: "remove this run from the session",
+          onclick: async (e) => {
+            e.stopPropagation();
+            try { await api(`/api/sessions/${state.session.id}/results/${r.id}`, { method: "DELETE" }); }
+            catch (err) { alert("Could not delete: " + err.message); return; }
+            state.session.results = (state.session.results || []).filter((x) => x.id !== r.id);
+            $("load-run-btn").disabled = !state.session.results.length;
+            openRunsModal(); // re-render the table
+          },
+        }));
       const tr = el("tr", {},
         dateCell,
         el("td", {}, ...(propCells.length ? propCells : [el("span", { className: "muted", textContent: "—" })])),
@@ -292,11 +326,12 @@ async function openRunsModal() {
         handCell,
         el("td", { textContent: String(cfg.mulligans ?? 0) }),
         el("td", { textContent: cfg.on_the_play === false ? "draw" : "play" }),
-        el("td", { textContent: String(cfg.base_seed ?? "") }));
+        el("td", { textContent: String(cfg.base_seed ?? "") }),
+        actionsCell);
       tr.onclick = () => loadRun(r);
       tbody.append(tr);
     });
-    body.replaceChildren(el("table", { className: "runs" }, thead, tbody));
+    body.replaceChildren(topbar, el("table", { className: "runs" }, thead, tbody));
   }
   $("run-modal").classList.remove("hidden");
 }
@@ -1303,7 +1338,7 @@ function tile(name, opts = {}) {
   const counters = opts.counters || {};
   const kinds = Object.entries(counters).filter(([, v]) => v);
   const granted = opts.granted || [];
-  if (kinds.length || granted.length) {
+  if (kinds.length || granted.length || opts.chosen) {
     const row = el("div", { className: "ctr-row" });
     for (const [k, v] of kinds) {
       let label, cls = "badge ctr";
@@ -1311,9 +1346,20 @@ function tile(name, opts = {}) {
       else if (k === "-1/-1") { label = `−${v}/−${v}`; cls += " neg"; }
       else if (k === "loyalty") { label = `⟐${v}`; }
       else if (k === "powered_up") { label = "powered up"; }
+      else if (k === "deadpool") { label = "deadpool"; }
       else { label = `${v}×${k}`; }
-      const title = k === "powered_up" ? "powered up" : `${v} ${k} counter${v === 1 ? "" : "s"}`;
+      const title = k === "powered_up" ? "powered up"
+        : k === "deadpool" ? "text box exchanged with Deadpool, Trading Card"
+        : `${v} ${k} counter${v === 1 ? "" : "s"}`;
       row.append(el("div", { className: cls, title, textContent: label }));
+    }
+    // "As it enters, choose ..." (e.g. Multiversal Passage's basic land type).
+    if (opts.chosen) {
+      row.append(el("div", {
+        className: "badge ctr chosen",
+        title: `enters as: ${opts.chosen}`,
+        textContent: opts.chosen,
+      }));
     }
     // Granted (until-end-of-turn) abilities, e.g. Cosmic Spider-Man's buff.
     for (const kw of granted) {
@@ -1405,7 +1451,7 @@ function energyPips(n) {
 // (peeking out from the top-right), so the enchanted/equipped card is on top.
 function permTile(p, attachedByHost) {
   const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
-    granted: p.granted, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness });
+    granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness });
   const attached = attachedByHost[p.uid] || [];
   if (!attached.length) return host;
   const wrap = el("div", { className: "perm-stack" });

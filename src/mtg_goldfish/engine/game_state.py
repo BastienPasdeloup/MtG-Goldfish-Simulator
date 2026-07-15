@@ -940,6 +940,10 @@ class GameState:
         # combat buff: shown as badges for as long as they last.
         if p.temp_keywords:
             view["granted"] = sorted(p.temp_keywords)
+        # "As it enters, choose ..." (Multiversal Passage's basic land type):
+        # shown as a badge on the tile.
+        if p.chosen:
+            view["chosen"] = p.chosen
         if p.is_token:
             # Tokens have no card image: ship what the tile needs to render a
             # composed card face (type, textbox, P/T).

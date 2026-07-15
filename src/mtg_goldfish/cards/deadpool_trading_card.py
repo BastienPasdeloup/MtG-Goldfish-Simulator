@@ -103,6 +103,9 @@ class DeadpoolTradingCard(Card):
                      or other.counters.get("_powered_up"))
             if spent:
                 me.counters["_powered_up"] = spent
+            # Board-viz marker: the chosen creature shows a "deadpool" badge
+            # (its text box is now Deadpool's).
+            other.counters["deadpool"] = 1
             st.emit(f"Deadpool enters: exchange text boxes with {other.name}")
 
         # Exchange targets first, declining last (nicer first-found replays).

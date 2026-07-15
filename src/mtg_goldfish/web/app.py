@@ -212,6 +212,33 @@ def delete_session(session_id: str) -> dict:
     return {"ok": True}
 
 
+@app.delete("/api/sessions/{session_id}/results")
+def delete_all_results(session_id: str) -> dict:
+    """Remove every stored run of the session."""
+    if runner.is_running(session_id):
+        raise HTTPException(status_code=409,
+                            detail="A simulation is running — stop it first.")
+    session = _load(session_id)
+    session.results = []
+    store.save(session)
+    return {"ok": True, "num_results": 0}
+
+
+@app.delete("/api/sessions/{session_id}/results/{result_id}")
+def delete_result(session_id: str, result_id: str) -> dict:
+    """Remove one stored run of the session."""
+    session = _load(session_id)
+    target = next((r for r in session.results if r.id == result_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if target.status == "running" and runner.is_running(session_id):
+        raise HTTPException(status_code=409,
+                            detail="This run is still in progress — stop it first.")
+    session.results = [r for r in session.results if r.id != result_id]
+    store.save(session)
+    return {"ok": True, "num_results": len(session.results)}
+
+
 @app.get("/api/sessions/{session_id}/deck-check")
 def deck_check(session_id: str) -> dict:
     """Compare the stored deck against its Moxfield source: has it changed
