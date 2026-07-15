@@ -83,7 +83,7 @@ a script or from tests.</p>
   <tr><td><code>formats</code></td><td><code>Format</code> rules (Duel Commander): starting life and hand, deck validation.</td></tr>
   <tr><td><code>cards</code></td><td>Runtime card <strong>behaviour</strong>. One file per card, auto-discovered; <code>build_card</code> returns the registered <code>Card</code> or an <code>UnimplementedCard</code> vanilla approximation.</td></tr>
   <tr><td><code>engine</code></td><td><code>GameState</code> (cloneable), turn <code>phases</code>, <code>mana</code> (+ payment planner), <code>actions</code>, and the exhaustive <code>simulator</code>.</td></tr>
-  <tr><td><code>properties</code></td><td><code>PropertySpec</code> model, LLM compiler (English → <code>check(state)</code>), sandboxed evaluator.</td></tr>
+  <tr><td><code>properties</code></td><td><code>PropertySpec</code> model, LLM compiler (English → <code>check(state)</code>, resolving approximate card names and reporting a confidence + clarification note), and the sandboxed evaluator with its documented, game-long event/state API.</td></tr>
   <tr><td><code>llm</code></td><td>Provider interface + Anthropic + local Ollama + deterministic offline stub; card auto-implementation (codegen).</td></tr>
   <tr><td><code>session</code></td><td><code>Session</code>/<code>SimResult</code> models and a JSON-file store.</td></tr>
   <tr><td><code>web</code></td><td>FastAPI routes, WebSocket <code>Hub</code>, threaded <code>SimulationRunner</code>, static frontend.</td></tr>
@@ -211,11 +211,18 @@ Wild Growth that add mana when the host is tapped, lands that sacrifice themselv
   <li>Each created state gets a node in a <strong>recorded search tree</strong> (with per-node
   property status), gzip-compressed into the stored result; the UI inflates it client-side with
   <code>DecompressionStream</code>.</li>
+  <li>A <strong>decision</strong> is returned at every priority window — the main phases
+  (sorcery-speed plays), declare-attackers (the attack option), and any other step where an
+  instant-speed play (instant, flash, or an instant-speed ability) is actually available.
+  <code>legal_actions(state, sorcery_speed_ok=…)</code> gates plays by speed.</li>
   <li>Checkpoints (<code>_check_due</code>) evaluate properties at each phase entry and after
-  every main-phase action; <code>_viable</code> prunes branches where an unsatisfied property is
-  no longer verifiable.</li>
+  every action at a priority window; <code>_viable</code> prunes branches where an unsatisfied
+  property is no longer verifiable.</li>
   <li>Per-game wall-clock timeout only — no node cap. The search runs until all properties are
   satisfied, no branch can satisfy them anymore (the frontier drains), or the timeout fires.</li>
+  <li>Exceptions raised while applying an action are caught, recorded (<code>ctx.record_bug</code>)
+  and shown as error leaves in the tree and a 🐛 count per game — never silently dropped, so a
+  buggy card can't hide viable lines. A crash in one game can't abort the whole run.</li>
 </ul>
 
 <h2 id="web">The web layer</h2>

@@ -55,8 +55,8 @@ cards — from a basic land to abilities that use the stack.</p>
   <tr><th>Output</th><th>Meaning</th></tr>
   <tr><td><strong>Success rate</strong></td><td>Games where one single line satisfied <em>all</em> properties at their moments.</td></tr>
   <tr><td><strong>Per property</strong></td><td>Games where each property was satisfiable in <em>any</em> viable line (can be higher than the joint rate).</td></tr>
-  <tr><td><strong>Runs table</strong></td><td>One row per game: ✓/✗ result (⏱ timed out, ▦ node-capped), opening hand on hover, steps of the winning line, states explored/considered, and the 🌳 full search tree.</td></tr>
-  <tr><td><strong>Board replay</strong></td><td>Click a successful game to replay its winning line step by step on an MTGO-like board — zones, stack, mana pool, counters.</td></tr>
+  <tr><td><strong>Runs table</strong></td><td>One row per game: ✓/✗ result (⏱ timed out), opening hand on hover, steps of the winning line, states explored/considered, the 🌳 full search tree, and a 🐛 count when any bug was hit (click for the tracebacks).</td></tr>
+  <tr><td><strong>Board replay</strong></td><td>Click a successful game to replay its winning line step by step on an MTGO-like board — zones, stack, mana pool, counters. Keyboard: <kbd>←</kbd>/<kbd>→</kbd> step through frames, <kbd>↑</kbd>/<kbd>↓</kbd> switch to the previous/next successful game.</td></tr>
   <tr><td><strong>Search tree</strong></td><td>Every state the search created, laid out left-to-right; per-node circles show each property's status (verified / pending / unreachable), the winning line in gold.</td></tr>
 </table></div>
 

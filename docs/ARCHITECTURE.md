@@ -33,13 +33,19 @@ domain logic have no web dependency and can be driven from a script or tests.
 
 ## The search
 
-`engine/simulator.py` does a depth-first search of a single game:
+`engine/simulator.py` runs an exhaustive search of a single game:
 
 - **Per game** = one random shuffle (seeded by game index).
 - **Mulligans (Y):** all ways to bottom `Y` of the opening 7 are tried.
-- **Lines of play:** in each main phase, every legal action (play a distinct
-  land, cast a distinct affordable spell, or pass) is a branch. Mana is *not* a
-  branch point — `actions.plan_payment` taps sources deterministically.
+- **Lines of play:** at every priority window, every legal action (play a
+  distinct land, cast a distinct affordable spell, activate an ability, declare
+  attackers, or pass) is a branch. Main phases allow sorcery-speed plays; other
+  steps (upkeep, combat sub-steps, end step) open an **instant-speed window**
+  where only instants, flash and instant-speed abilities are offered — and are
+  only stopped at when such a play is actually available. Mana is *not* a branch
+  point — `actions.plan_payment` taps sources deterministically. Actions that
+  raise mid-apply are recorded as **bugs** (surfaced per game in the runs table
+  via a 🐛 icon), never silently dropped.
 - A game **succeeds** if some single line satisfies *all* properties at their
   trigger moments; per-property "satisfied in any line" is tracked separately
   for statistics. Timing: "**at** X of turn N" is checked exactly there;
@@ -50,12 +56,12 @@ domain logic have no web dependency and can be driven from a script or tests.
   property can no longer be verified on it (its "at" moment is past, or its
   "before" deadline reached) — no descendant could make the game a success.
   Per-property statistics therefore count satisfaction in *viable* lines.
-- The **search strategy is selectable** (`SEARCH_MODES`): DFS with heuristic
-  move ordering (default: lands → commander → tutors → other spells →
-  abilities → pass, mulligan keeps closest to 3 lands first), DFS in natural
-  order, BFS, or greedy best-first on a board-progress score. Every mode
-  visits the same states — only the order differs — so winning lines are found
-  sooner and timeouts bite later.
+- The **search strategy is selectable** (`SEARCH_MODES`): greedy best-first on
+  a board-progress score (**default**), DFS with heuristic move ordering
+  (lands → commander → tutors → other spells → abilities → pass, mulligan keeps
+  closest to 3 lands first), DFS in natural order, or BFS. Every mode visits the
+  same states — only the order differs — so winning lines are found sooner and
+  timeouts bite later.
 - The search records a tree node for **every state created** (including
   passing priority), so the per-game graph shows all considered states; the
   winning line is marked bottom-up via parent links.
@@ -84,7 +90,11 @@ documented per-card):
   payment variants. Mana payment itself stays deterministic.
 - Exhaustive line-of-play + mulligan search with property checking, timeouts,
   live stats over WebSocket, session/result persistence.
-- English→code property compilation (Anthropic when keyed; a regex stub offline).
+- English→code property compilation (Anthropic when keyed; a regex stub
+  offline): resolves approximate card names against the deck, reports a
+  confidence + clarification note, and runs against a documented game-long
+  event/state API that distinguishes *playing/casting* a card from a permanent
+  *entering the battlefield* (`played_on`/`cast_on` vs `entered_battlefield`).
 
 Documented approximations (each card file's docstring states its own):
 - Opponent-facing text does nothing (no opponent): counterspells are never
