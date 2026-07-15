@@ -28,9 +28,10 @@ def _powerup_cost(state, perm) -> tuple[ManaCost, str]:
 
 
 def _power_up_spent(perm) -> bool:
-    """"Activate only once." — the marker follows the ability: "_powered_up"
-    is the hidden variant moved by Deadpool's text-box exchange."""
-    return bool(perm.counters.get("powered_up") or perm.counters.get("_powered_up"))
+    """"Activate only once." — tracked PER PERMANENT: a creature that gains
+    the power-up via Deadpool's text-box exchange may activate it even if the
+    original creature already used its own."""
+    return bool(perm.counters.get("powered_up"))
 
 
 def _is_puttable(card) -> bool:

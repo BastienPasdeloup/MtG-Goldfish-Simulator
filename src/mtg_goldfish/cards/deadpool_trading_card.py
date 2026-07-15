@@ -18,11 +18,11 @@ House rules of the exchange:
     active face's text and keywords move to Deadpool, and Deadpool's
     `transformed` view is aligned so the swapped impl keeps behaving as that
     face. The other creature keeps its own face (name/types/P&T unchanged).
-  * A spent power-up is COPIED with the text box: if the other creature had
-    already powered up, Deadpool's gained power-up is also spent — tracked as
-    the hidden "_powered_up" counter so no "powered_up" badge shows on
-    Deadpool (he never powered up himself), while the original creature keeps
-    its own badge.
+  * Power-up: "Activate only once" is tracked PER PERMANENT, so a gained
+    power-up is fresh — Deadpool may use it even when the other creature had
+    already powered up. The original creature keeps its "powered_up" badge;
+    Deadpool shows none until he powers up himself. The exchanged creature is
+    marked with a "deadpool" badge.
 """
 from __future__ import annotations
 
@@ -95,14 +95,14 @@ class DeadpoolTradingCard(Card):
             other.card = _with_swapped_text(other.card, other.transformed,
                                             other_text, other_kws)
             me.transformed = other.transformed
-            # A spent power-up is COPIED to Deadpool as the hidden marker: he
-            # can't use the gained (already-activated) power-up and shows no
-            # "powered_up" badge, while the original creature KEEPS its badge
-            # (it did power up — the marker is part of its history).
-            spent = (other.counters.get("powered_up")
-                     or other.counters.get("_powered_up"))
-            if spent:
-                me.counters["_powered_up"] = spent
+            # Power-up: "Activate only once" is tracked PER PERMANENT, so the
+            # gained power-up is fresh — Deadpool may activate it even if the
+            # other creature had already used its own. The original creature
+            # keeps its "powered_up" badge (part of its history); Deadpool
+            # only gets one once HE powers up. Enforce the entry invariant:
+            # Deadpool NEVER enters with a powered-up marker of his own.
+            me.counters.pop("powered_up", None)
+            me.counters.pop("_powered_up", None)
             # Board-viz marker: the chosen creature shows a "deadpool" badge
             # (its text box is now Deadpool's).
             other.counters["deadpool"] = 1

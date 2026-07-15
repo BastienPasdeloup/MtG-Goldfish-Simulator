@@ -1381,6 +1381,7 @@ const KW_SHORT = {
   "trample": "trmp", "lifelink": "life", "haste": "haste",
   "vigilance": "vigil", "deathtouch": "death", "reach": "reach",
   "menace": "menace", "hexproof": "hex", "indestructible": "indstr",
+  "unblockable": "unblk",
 };
 
 // A pile of cards stacked on top of each other, each revealing only the top
