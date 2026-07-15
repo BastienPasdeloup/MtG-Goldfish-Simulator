@@ -214,8 +214,8 @@ Wild Growth that add mana when the host is tapped, lands that sacrifice themselv
   <li>Checkpoints (<code>_check_due</code>) evaluate properties at each phase entry and after
   every main-phase action; <code>_viable</code> prunes branches where an unsatisfied property is
   no longer verifiable.</li>
-  <li>Per-game wall-clock timeout and node cap; a frontier size valve protects BFS/best-first
-  memory.</li>
+  <li>Per-game wall-clock timeout only — no node cap. The search runs until all properties are
+  satisfied, no branch can satisfy them anymore (the frontier drains), or the timeout fires.</li>
 </ul>
 
 <h2 id="web">The web layer</h2>

@@ -13,7 +13,7 @@ class ZuranOrb(Card):
     card_name = "Zuran Orb"
 
     def battlefield_actions(self, state, perm):
-        lands = [p for p in state.battlefield if "land" in p.type_line.lower()]
+        lands = [p for p in state.battlefield if p.is_land]
         if not lands:
             return []
         pick = next((p for p in lands if p.tapped), lands[0])
@@ -25,8 +25,8 @@ class ZuranOrb(Card):
             if p is None:
                 return False
             sac = st.find_permanent(pick.uid) or next(
-                (q for q in st.battlefield if "land" in q.type_line.lower()), None)
-            if sac is None or "land" not in sac.type_line.lower():
+                (q for q in st.battlefield if q.is_land), None)
+            if sac is None or not sac.is_land:
                 return False
             st.leaves_battlefield(sac, "graveyard")
             st.emit(f"Zuran Orb: sacrifice {sac.name}")

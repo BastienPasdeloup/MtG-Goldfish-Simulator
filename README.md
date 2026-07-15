@@ -28,8 +28,8 @@ what is stubbed vs. implemented.
 - Python ≥ 3.11 (3.13 recommended)
 - [uv](https://docs.astral.sh/uv/)
 - Optional: an `ANTHROPIC_API_KEY` in `.env` (copy from `.env.example`) to enable
-  the LLM-backed features (turning English properties into code, auto-coding
-  cards). Without a key the app falls back to a deterministic stub.
+  the LLM-backed property compiler (turning English properties into code).
+  Without a key the app falls back to a deterministic stub.
 
 ## Quick start
 

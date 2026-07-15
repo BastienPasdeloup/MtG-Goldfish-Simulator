@@ -14,10 +14,11 @@ from .registry import register
 def _fetch_two(state):
     lands = state.search_library(lambda c: c.is_land)
     names = [land.name for land in lands]
-    # Options: none, each single, each unordered pair (by name).
-    options: list[tuple] = [()]
+    # Options: each unordered pair (by name), each single, then none — the
+    # meaningful fetches first so the first-found replay line uses them.
+    options: list[tuple] = [tuple(sorted(pair)) for pair in combinations(names, 2)]
     options += [(n,) for n in names]
-    options += [tuple(sorted(pair)) for pair in combinations(names, 2)]
+    options += [()]
     # De-dupe.
     seen, uniq = set(), []
     for o in options:

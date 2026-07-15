@@ -250,7 +250,7 @@ def fast_land(name: str, colors: tuple[str, str]) -> type[Card]:
             return [ManaAbility(amount=1, choices=colors)]
 
         def etb_tapped(self, state):
-            other_lands = sum(1 for p in state.battlefield if "land" in p.type_line.lower())
+            other_lands = sum(1 for p in state.battlefield if p.is_land)
             return other_lands > 2
 
     _Fast.__name__ = name.replace(" ", "")
@@ -437,7 +437,7 @@ def controls_forest(state: "GameState") -> bool:
     (which makes every land a Forest)."""
     yavi = any(p.name == "Yavimaya, Cradle of Growth" for p in state.battlefield)
     return any(
-        "land" in p.type_line.lower() and (yavi or perm_has_subtype(p, ("Forest",)))
+        p.is_land and (yavi or perm_has_subtype(p, ("Forest",)))
         for p in state.battlefield
     )
 
@@ -446,7 +446,7 @@ def forest_count(state: "GameState") -> int:
     yavi = any(p.name == "Yavimaya, Cradle of Growth" for p in state.battlefield)
     return sum(
         1 for p in state.battlefield
-        if "land" in p.type_line.lower() and (yavi or perm_has_subtype(p, ("Forest",)))
+        if p.is_land and (yavi or perm_has_subtype(p, ("Forest",)))
     )
 
 
@@ -463,7 +463,7 @@ def aura_on_land_cast_actions(
 
     hosts = {}
     for p in state.battlefield:
-        if "land" not in p.type_line.lower():
+        if not p.is_land:
             continue
         if forests_only and not (perm_has_subtype(p, ("Forest",))
                                  or any(q.name == "Yavimaya, Cradle of Growth"

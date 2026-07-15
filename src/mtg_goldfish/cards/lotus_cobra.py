@@ -13,7 +13,7 @@ class LotusCobra(Card):
     card_name = "Lotus Cobra"
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return []
         color = any_identity_color(state)[0]
 
@@ -33,7 +33,7 @@ class LotusCobra(Card):
         )]
 
     def on_other_etb(self, state, perm, entering):
-        if "land" in entering.type_line.lower():
+        if entering.is_land:
             color = any_identity_color(state)[0]
             state.mana_pool.add(color, 1)
             state.emit(f"Lotus Cobra: landfall — add {{{color}}}")

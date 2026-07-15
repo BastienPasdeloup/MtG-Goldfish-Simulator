@@ -188,8 +188,9 @@ games where each property was satisfiable in <em>any</em> line.</p>
   no descendant could make the game a success.</li>
   <li><strong>Sticky satisfaction:</strong> once a property holds at one of its checkpoints on a
   line, it stays satisfied on that line; the search stops as soon as every property is verified.</li>
-  <li><strong>Budgets:</strong> each game is bounded by a wall-clock timeout and a node cap.
-  Cut-off games are reported as such (⏱ / ▦ in the runs table).</li>
+  <li><strong>Budget:</strong> each game runs until every property is satisfied, no branch can
+  satisfy them anymore, or a wall-clock timeout — there is no node cap. Timed-out games are
+  reported as such (⏱ in the runs table).</li>
 </ul>
 
 <h3>Search strategies</h3>
@@ -242,8 +243,8 @@ uv run mtg-goldfish        <span class="comment"># starts the web UI on http://1
 <div class="panel callout blue">
   <div class="title">Optional: LLM features</div>
   <p style="margin:0">With an <code>ANTHROPIC_API_KEY</code> (or a local model via Ollama), the
-  simulator compiles English properties into code and can auto-implement missing cards from
-  their oracle text. Without one, a deterministic offline stub handles simple conditions.</p>
+  simulator compiles English properties into code. Without one, a deterministic offline
+  stub handles simple conditions.</p>
 </div>
 
 </main>

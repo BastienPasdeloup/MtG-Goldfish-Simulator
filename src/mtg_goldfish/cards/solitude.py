@@ -13,7 +13,8 @@ from .registry import register
 def _etb_options(state, permanent):
     others = [p.uid for p in state.battlefield
               if p.is_creature_now and p.uid != permanent.uid]
-    return [None] + others
+    # Exile choices first, declining last (nicer first-found replay lines).
+    return others + [None]
 
 
 def _etb_apply(st, uid):

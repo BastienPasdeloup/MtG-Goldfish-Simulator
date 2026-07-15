@@ -84,6 +84,19 @@ def _iter_board_cards(boards: dict) -> list[tuple[DeckBoard, str, int]]:
     return out
 
 
+def deck_signature(deck: Deck) -> list[tuple[str, str, int]]:
+    """Order-independent content signature of a deck: sorted (board, name, qty)."""
+    return sorted((e.board.value, e.card.name, e.quantity) for e in deck.entries)
+
+
+def fetch_deck_signature(url: str) -> list[tuple[str, str, int]]:
+    """Fetch the deck's CURRENT content signature from Moxfield (same shape as
+    `deck_signature`), to detect whether it changed since it was imported."""
+    raw = _fetch_moxfield_json(extract_public_id(url))
+    boards = raw.get("boards") or {}
+    return sorted((b.value, name, qty) for b, name, qty in _iter_board_cards(boards))
+
+
 def import_moxfield_deck(
     url: str,
     name: str,

@@ -27,7 +27,7 @@ class SpringheartNantuko(Card):
         return (1, 1) if perm.counters.get("bestowed") else (0, 0)
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower() or perm.attached_to is not None:
+        if not entering.is_land or perm.attached_to is not None:
             return []
 
         def resolve(st, uid=perm.uid, entering_uid=entering.uid):
@@ -46,7 +46,7 @@ class SpringheartNantuko(Card):
         )]
 
     def on_other_etb(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return
         if perm.attached_to is None:
             state.make_token("Insect", 1, 1, "Token Creature — Insect")

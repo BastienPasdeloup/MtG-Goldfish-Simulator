@@ -180,19 +180,36 @@ def resolve_to_battlefield(
     permanent before ETB triggers fire (e.g. {'escaped': 1})."""
     if card in state.stack:
         state.stack.remove(card)
+    state.note_event("spell_resolved", card.name)
+    # Effects until control returns to the search (its own entry included) are
+    # attributed to this spell; ETB triggers override with their own context.
+    state.resolving = ("spell", card.name)
     perm = state.put_on_battlefield(card, is_commander=is_commander, fire_etb=False)
     if marks:
         perm.counters.update(marks)
     # Announce the enter BEFORE ETB triggers fire (Amulet / Tezzeret / landfall)
     # so the replay shows the permanent entering first, effects after.
     state.emit(f"{card.name} resolves — enters the battlefield")
-    state.queue_entry_triggers([perm])
-    return None
+    # "As it enters" choices that fan out (Deadpool's text-box exchange) apply
+    # BEFORE the ETB triggers are queued, so the queued ETBs reflect the choice.
+    branches = perm.impl.enter_choices(state, perm)
+    if branches is None:
+        state.queue_entry_triggers([perm])
+        return None
+    for b in branches:
+        live = b.find_permanent(perm.uid)
+        if live is not None:
+            b.queue_entry_triggers([live])
+    return branches
 
 
 def resolve_to_graveyard(state: GameState, card) -> None:
     if card in state.stack:
         state.stack.remove(card)
+    state.note_event("spell_resolved", card.name)
+    # The spell's `on_resolve` effects run right after this; attribute them to
+    # the spell ("Cultivate put 2 lands into play") until settle() clears it.
+    state.resolving = ("spell", card.name)
     state.to_graveyard(card)
     state.emit(f"{card.name} resolves")
 
@@ -232,9 +249,16 @@ class PlayLand(Action):
         card = _find_in_zone(src, self.card_name)
         src.remove(card)
         state.lands_played_this_turn += 1
+        state.resolving = ("land_drop", card.name)  # cleared by the final settle
         perm = state.put_on_battlefield(card, fire_etb=False)
         perm.turn_flags["played_as_land"] = 1
         _apply_etb_mode(state, perm, self.mode)
+        # "As it enters" replacements that depend on the chosen mode (Vesuva
+        # entering as a copy) — applied before the frame, never on the stack.
+        perm.impl.on_enter_choice(state, perm)
+        # The mode may have chosen "enters tapped" (e.g. a shockland); re-apply
+        # the "enters untapped" replacements so the announced frame reflects it.
+        state.apply_entry_statics(perm)
         state.emit(self.label)  # announce the land entering BEFORE its triggers
         state.queue_entry_triggers([perm])  # landfall / Amulet, after the enter mode
         return state.settle()
@@ -287,8 +311,8 @@ class CastCommander(Action):
                           tag=f"commander, tax {tax}"):
             return
         state.commander_cast_count[card.name] = state.commander_cast_count.get(card.name, 0) + 1
-        resolve_to_battlefield(state, card, is_commander=True)
-        return state.settle()
+        result = resolve_to_battlefield(state, card, is_commander=True)
+        return state.settle(result)
 
 
 # --------------------------------------------------------------------------

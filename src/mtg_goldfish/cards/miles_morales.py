@@ -18,9 +18,12 @@ class MilesMorales(Card):
 
     def on_etb(self, state, permanent):
         creatures = [p.uid for p in state.battlefield if p.is_creature_now]
-        options: list[tuple[int, ...]] = [()]
+        # Meaningful choices first (pairs, then singles), declining LAST: the
+        # search is exhaustive either way, but the first satisfying line found
+        # (the one shown in the replay) then actually uses the ability.
+        options: list[tuple[int, ...]] = list(itertools.combinations(creatures, 2))
         options += [(u,) for u in creatures]
-        options += [pair for pair in itertools.combinations(creatures, 2)]
+        options += [()]
 
         def apply(st, uids):
             for uid in uids:

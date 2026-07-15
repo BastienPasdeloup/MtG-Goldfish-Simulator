@@ -22,7 +22,7 @@ class GuildlessCommons(Card):
     def on_etb(self, state, permanent):
         lands = {}
         for p in state.battlefield:
-            if "land" in p.type_line.lower() and p.name not in lands:
+            if p.is_land and p.name not in lands:
                 lands[p.name] = p.uid
         if not lands:
             return None

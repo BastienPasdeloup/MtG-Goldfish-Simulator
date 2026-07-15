@@ -20,7 +20,11 @@ const state = {
   vizRuns: [],     // per-game run metadata (hand, branch counts, tree, frames)
   vizIdx: 0,
   vizStep: 0,
+  simMode: "sim",  // "sim" (random hands + mulligans) | "fixed" (chosen hand)
+  fixedHand: [],   // fixed-hand mode: chosen card names (with duplicates)
 };
+
+const MAX_FIXED_HAND = 7;
 
 const PIP_COLORS = { W: 0, U: 1, B: 2, R: 3, G: 4 };
 
@@ -105,11 +109,30 @@ async function init() {
   $("load-run-btn").onclick = openRunsModal;
   $("run-modal-close").onclick = closeRunsModal;
   $("run-modal").onclick = (e) => { if (e.target.id === "run-modal") closeRunsModal(); };
-  $("impl-all").onclick = implementAll;
+  $("bug-btn").onclick = openBugModal;
+  $("bug-download").onclick = downloadBugFile;
+  $("bug-modal-close").onclick = () => $("bug-modal").classList.add("hidden");
+  $("bug-modal").onclick = (e) => { if (e.target.id === "bug-modal") $("bug-modal").classList.add("hidden"); };
   $("model-btn").onclick = openModelModal;
   $("model-modal-close").onclick = () => $("model-modal").classList.add("hidden");
   $("model-modal").onclick = (e) => { if (e.target.id === "model-modal") $("model-modal").classList.add("hidden"); };
   $("sort-select").onchange = renderDeck;
+  $("tab-sim").onclick = () => setSimMode("sim");
+  $("tab-fixed").onclick = () => setSimMode("fixed");
+  $("fixed-pad").onchange = renderFixedBuilder;
+  $("fixed-pad-size").oninput = renderFixedBuilder; // slot count follows the size
+
+  // ← / → step through the game being visualized (like Prev / Next), unless
+  // the user is typing in a field (or focusing the range slider, which
+  // handles arrows natively).
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+    if (!state.vizNav) return;
+    e.preventDefault();
+    state.vizNav(e.key === "ArrowLeft" ? -1 : 1);
+  });
 
   await loadSessionList();
   showHome();
@@ -119,6 +142,7 @@ function showHome() {
   closeWs();
   $("home-view").classList.remove("hidden");
   $("session-view").classList.add("hidden");
+  $("bug-btn").classList.add("hidden"); // reports attach a session + run
   loadSessionList();
 }
 
@@ -163,6 +187,7 @@ async function openSession(id) {
 function enterSession(payload) {
   state.session = payload.session;
   state.cards = payload.cards;
+  state.deckFlags = payload.deck_flags || {};
   // Always open with a single uninitialized property (a previous run's
   // properties can be restored explicitly via "Load previous run").
   state.props = [];
@@ -173,9 +198,27 @@ function enterSession(payload) {
   }
   $("home-view").classList.add("hidden");
   $("session-view").classList.remove("hidden");
+  $("bug-btn").classList.remove("hidden");
   $("s-name").textContent = state.session.name;
   $("s-commanders").textContent = "⚔ " + (state.cards.filter((c) => c.board === "commander").map((c) => c.name).join(", ") || "none");
   $("s-format").textContent = state.session.format_id;
+  $("s-date").textContent = "📅 " + fmtDate(state.session.created_at).slice(0, 10);
+  const srcLink = $("s-source");
+  const srcUrl = state.session.deck && state.session.deck.source_url;
+  srcLink.classList.toggle("hidden", !srcUrl);
+  if (srcUrl) {
+    srcLink.href = srcUrl;
+    srcLink.textContent = "Moxfield ↗";
+    srcLink.title = srcUrl;
+    // Async: has the Moxfield list changed since this session imported it?
+    api(`/api/sessions/${state.session.id}/deck-check`).then((r) => {
+      if (r.checked && r.changed) {
+        srcLink.textContent = "⚠ Moxfield ↗";
+        srcLink.classList.add("warn");
+        srcLink.title = "The Moxfield deck has changed since this session was imported";
+      }
+    }).catch(() => {});
+  }
   $("s-warnings").textContent = (payload.warnings || []).join("  •  ");
   $("mulligans").value = state.session.mulligans || 0;
   renderDeck();
@@ -183,7 +226,11 @@ function enterSession(payload) {
   renderProps();
   $("sim-stats").innerHTML = "";
   $("sim-seed").textContent = "";
+  $("progress-box").classList.add("hidden");
   $("viz-box").classList.add("hidden");
+  state.vizNav = null;
+  state.fixedHand = [];
+  setSimMode("sim");
   $("load-run-btn").disabled = !(state.session.results || []).length;
   openWs();
 }
@@ -195,17 +242,33 @@ function propText(p) {
   return p.description || `${timingLabel(p.timing)} ${p.phase} of turn ${p.turn}: ${p.english}`;
 }
 
-function openRunsModal() {
+async function openRunsModal() {
+  // Fetch fresh: a run in progress already has its (live-updated) entry.
+  try {
+    const payload = await api(`/api/sessions/${state.session.id}`);
+    state.session.results = payload.session.results || [];
+  } catch {}
   const results = state.session.results || [];
   const body = $("run-modal-body");
   if (!results.length) {
     body.replaceChildren(el("div", { className: "muted", textContent: "No runs yet." }));
   } else {
     const thead = el("thead", {}, el("tr", {},
-      ...["Date", "Properties", "Success", "Games", "Mulligans", "Start", "Seed"].map((h) => el("th", { textContent: h }))));
+      ...["Date", "Properties", "Success", "Games", "Hand", "Mulligans", "Start", "Seed"].map((h) => el("th", { textContent: h }))));
     const tbody = el("tbody");
     results.slice().reverse().forEach((r) => {
       const st = r.stats || {}, cfg = r.config || {}, gr = st.games_run || 0;
+      // Hand mode: fixed hands show a ✋ that previews the chosen cards.
+      const fh = cfg.fixed_hand || [];
+      let handCell;
+      if (fh.length) {
+        const icon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the fixed hand" });
+        const backs = cfg.fixed_hand_pad_to != null ? Math.max(0, cfg.fixed_hand_pad_to - fh.length) : 0;
+        hoverGrid(icon, fh, backs);
+        handCell = el("td", {}, el("span", { textContent: "fixed " }), icon);
+      } else {
+        handCell = el("td", { textContent: "random" });
+      }
       const propCells = (r.properties || []).map((p) => {
         const cnt = (st.per_property || {})[p.id] ?? 0;
         const rate = gr ? (100 * cnt / gr).toFixed(0) : "0";
@@ -213,13 +276,20 @@ function openRunsModal() {
           el("div", { className: "prop-line", textContent: propText(p) }),
           el("div", { className: "pp", textContent: `↳ ${cnt}/${gr} (${rate}%)` }));
       });
+      const dateCell = el("td", { textContent: fmtDate(r.created_at) });
+      if (r.status === "running") {
+        dateCell.append(el("div", {}, el("span", { className: "pill warn", textContent: "⏳ running…" })));
+      } else if (r.status === "stopped") {
+        dateCell.append(el("div", {}, el("span", { className: "pill", textContent: "stopped" })));
+      }
       const tr = el("tr", {},
-        el("td", { textContent: fmtDate(r.created_at) }),
+        dateCell,
         el("td", {}, ...(propCells.length ? propCells : [el("span", { className: "muted", textContent: "—" })])),
         el("td", {},
           el("span", { className: "big", textContent: `${((st.success_rate || 0) * 100).toFixed(1)}%` }),
           el("div", { className: "pp", textContent: `${st.successes || 0}/${gr}` })),
         el("td", { textContent: String(cfg.num_games ?? "") }),
+        handCell,
         el("td", { textContent: String(cfg.mulligans ?? 0) }),
         el("td", { textContent: cfg.on_the_play === false ? "draw" : "play" }),
         el("td", { textContent: String(cfg.base_seed ?? "") }));
@@ -235,15 +305,24 @@ function closeRunsModal() { $("run-modal").classList.add("hidden"); }
 
 function loadRun(r) {
   closeRunsModal();
+  state.currentResultId = r.id; // bug reports attach the run being shown
   const cfg = r.config || {};
   $("num-games").value = cfg.num_games ?? 100;
   $("mulligans").value = cfg.mulligans ?? 0;
   $("timeout").value = cfg.timeout_per_game_s ?? 5;
   $("seed").value = cfg.base_seed ?? "";
-  $("search-mode").value = cfg.search_mode ?? "dfs_heuristic";
+  $("search-mode").value = cfg.search_mode ?? "best_first";
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
+  if (cfg.fixed_hand && cfg.fixed_hand.length) {
+    state.fixedHand = cfg.fixed_hand.slice();
+    $("fixed-pad").checked = cfg.fixed_hand_pad_to != null;
+    if (cfg.fixed_hand_pad_to != null) $("fixed-pad-size").value = cfg.fixed_hand_pad_to;
+    setSimMode("fixed");
+  } else {
+    setSimMode("sim");
+  }
   if (r.properties && r.properties.length) {
     state.props = r.properties.map((p) => ({ ...p }));
     renderProps();
@@ -291,10 +370,9 @@ function renderDeck() {
   const container = $("deck-cards");
   container.replaceChildren();
   const total = state.cards.reduce((n, c) => n + c.quantity, 0);
-  const impl = state.cards.filter((c) => c.implemented).length;
-  $("deck-summary").textContent = `${total} cards · ${impl}/${state.cards.length} distinct implemented`;
-  // Global implement-all wrench appears only when something is unimplemented.
-  $("impl-all").classList.toggle("hidden", impl >= state.cards.length);
+  const approx = state.cards.filter((c) => !c.implemented).length;
+  $("deck-summary").textContent = `${total} cards` +
+    (approx ? ` · ${approx} with approximated rules (in red)` : "");
 
   const order = Object.keys(groups).sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
@@ -331,61 +409,32 @@ function cardRow(c) {
     hoverable(nameWrap, c.image);
   }
   row.append(nameWrap);
-
-  if (!c.implemented) {
-    const w = el("span", { className: "wrench", title: "Ask a model to code this card", textContent: "🔧" });
-    w.onclick = (e) => { e.stopPropagation(); askImplement(c.name, w); };
-    row.append(w);
-  }
   row.append(costEnd(c)); // mana cost at the far right
   return row;
 }
 
-// Refresh the deck's implemented flags after code generation.
-async function refreshDeck() {
-  const payload = await api(`/api/sessions/${state.session.id}`);
-  state.cards = payload.cards;
-  renderDeck();
+// ---- bug report: download the session file + how-to for a GitHub issue ----
+function openBugModal() {
+  $("bug-github").href = (state.meta && state.meta.github_issues_url) || "#";
+  $("bug-file-note").textContent = state.currentResultId
+    ? "" : "(no run yet — the file will contain the session only)";
+  $("bug-modal").classList.remove("hidden");
 }
 
-async function askImplement(name, el0) {
-  if (el0) { el0.textContent = "⏳"; el0.style.pointerEvents = "none"; }
-  try {
-    await api(`/api/sessions/${state.session.id}/cards/${encodeURIComponent(name)}/implement`,
-      { method: "POST" });
-    await refreshDeck();
-  } catch (e) {
-    alert(`${name}: ${e.message}`);
-    if (el0) { el0.textContent = "🔧"; el0.style.pointerEvents = ""; }
-  }
-}
-
-async function implementAll() {
-  const btn = $("impl-all");
-  const n = state.cards.filter((c) => !c.implemented).length;
-  if (!n) return;
-  if (!confirm(`Ask the selected model to implement ${n} unimplemented card(s)?\n` +
-    `Quality depends on the model; failures keep their vanilla approximation.`)) return;
-  btn.textContent = " ⏳";
-  try {
-    const r = await api(`/api/sessions/${state.session.id}/cards/implement-all`, { method: "POST" });
-    await refreshDeck();
-    const failed = (r.results || []).filter((x) => !x.ok);
-    let msg = `Implemented ${r.implemented}/${r.total} cards.`;
-    if (failed.length) msg += `\n\nStill unimplemented:\n` +
-      failed.slice(0, 12).map((x) => `• ${x.name}: ${x.error}`).join("\n");
-    alert(msg);
-  } catch (e) {
-    alert("Implement-all failed: " + e.message);
-  } finally {
-    btn.textContent = " 🔧";
-  }
+function downloadBugFile() {
+  const q = state.currentResultId ? `?result_id=${encodeURIComponent(state.currentResultId)}` : "";
+  // A plain anchor click keeps the Content-Disposition download behaviour.
+  const a = el("a", { href: `/api/sessions/${state.session.id}/bug-report-file${q}` });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  $("bug-file-note").textContent = "downloaded — attach it to the issue (step 4)";
 }
 
 // ---- model picker ----
 // Reflect the currently selected LLM everywhere it's shown: the top pill, the
-// Properties-section model button, and the note under it. The provider is
-// shared — the same model compiles properties and implements cards.
+// Properties-section model button, and the note under it (the model compiles
+// English properties into code).
 function updateLlmUi() {
   const m = state.meta || {};
   const pill = $("llm-pill");
@@ -562,44 +611,143 @@ function openWs() {
 }
 function closeWs() { if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; } }
 
+// ---- fixed-hand mode ----
+function setSimMode(mode) {
+  state.simMode = mode;
+  $("tab-sim").classList.toggle("active", mode === "sim");
+  $("tab-fixed").classList.toggle("active", mode === "fixed");
+  $("fixed-builder").classList.toggle("hidden", mode !== "fixed");
+  $("mull-field").classList.toggle("hidden", mode === "fixed");
+  if (mode === "fixed") renderFixedBuilder();
+}
+
+// Only mainboard cards are drawable into an opening hand (commanders live in
+// the command zone, sideboard/companions aren't in the library).
+function mainboardCards() {
+  return state.cards.filter((c) => c.board === "mainboard");
+}
+const fixedHandCount = (name) => state.fixedHand.filter((n) => n === name).length;
+
+function addToFixedHand(name) {
+  const card = mainboardCards().find((c) => c.name === name);
+  if (!card || state.fixedHand.length >= MAX_FIXED_HAND || fixedHandCount(name) >= card.quantity) return;
+  state.fixedHand.push(name);
+  renderFixedBuilder();
+}
+function removeFromFixedHand(name) {
+  const i = state.fixedHand.lastIndexOf(name);
+  if (i >= 0) state.fixedHand.splice(i, 1);
+  renderFixedBuilder();
+}
+
+function renderFixedBuilder() {
+  const total = state.fixedHand.length;
+  // Padding option: the size input appears only when ticked, and can't ask
+  // for fewer cards than are already chosen.
+  const padding = $("fixed-pad").checked;
+  $("fixed-pad-size-wrap").classList.toggle("hidden", !padding);
+  const size = $("fixed-pad-size");
+  size.min = Math.max(1, total);
+  if (+size.value < +size.min) size.value = size.min;
+
+  // The hand shows as many miniatures as the final hand will hold: the
+  // chosen cards, then card backs up to the padded size (no padding = just
+  // the chosen cards). Clicking a card removes it.
+  const slots = padding ? Math.max(total, parseInt(size.value) || MAX_FIXED_HAND) : total;
+  $("fixed-count").textContent = padding ? `(${total}/${slots})` : `(${total})`;
+  const minis = $("fixed-hand-minis");
+  minis.replaceChildren();
+  if (!slots) minis.append(el("span", { className: "muted", textContent: "empty — add cards below" }));
+  for (let i = 0; i < slots; i++) {
+    const name = state.fixedHand[i];
+    if (!name) {
+      minis.append(el("div", { className: "mini back", title: "random card — added when the game starts" }));
+      continue;
+    }
+    const m = el("div", { className: "mini", title: `${name} — click to remove` });
+    const img = state.imageMap[name];
+    if (img) m.append(el("img", { src: img, alt: name, loading: "lazy" }));
+    else m.append(el("div", { className: "fallback", textContent: name }));
+    m.onclick = () => { state.fixedHand.splice(i, 1); renderFixedBuilder(); };
+    hoverable(m, img);
+    minis.append(m);
+  }
+
+  // Picker: one stepper row per distinct mainboard card.
+  const picker = $("fixed-card-picker");
+  picker.replaceChildren();
+  const full = total >= MAX_FIXED_HAND;
+  mainboardCards().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
+    const n = fixedHandCount(c.name);
+    const minus = el("button", { className: "step", textContent: "−" });
+    minus.disabled = n <= 0;
+    minus.onclick = () => removeFromFixedHand(c.name);
+    const plus = el("button", { className: "step", textContent: "+" });
+    plus.disabled = full || n >= c.quantity;
+    plus.onclick = () => addToFixedHand(c.name);
+    const nm = el("span", { className: "picker-name" }, c.name);
+    hoverable(nm, c.image);
+    picker.append(el("div", { className: "picker-row" + (n ? " chosen" : "") },
+      minus, el("span", { className: "picker-count", textContent: String(n) }), plus,
+      nm, el("span", { className: "muted picker-qty", textContent: `/${c.quantity}` })));
+  });
+}
+
 async function runSim() {
+  const fixed = state.simMode === "fixed";
+  if (fixed && !state.fixedHand.length) { alert("Add at least one card to the fixed hand first."); return; }
   await compileProps();
   const seedField = $("seed").value.trim();
   const body = JSON.stringify({
     num_games: parseInt($("num-games").value) || 100,
     timeout_per_game_s: parseFloat($("timeout").value) || 5,
-    mulligans: parseInt($("mulligans").value) || 0,
+    mulligans: fixed ? 0 : (parseInt($("mulligans").value) || 0),
     on_the_play: $("play-draw-toggle").dataset.play === "1",
     base_seed: seedField === "" ? null : parseInt(seedField),
     search_mode: $("search-mode").value,
+    fixed_hand: fixed ? state.fixedHand.slice() : null,
+    fixed_hand_pad_to: fixed && $("fixed-pad").checked
+      ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)
+      : null,
   });
   try {
     const r = await api(`/api/sessions/${state.session.id}/simulate`, { method: "POST", body });
     state.currentResultId = r.result_id;
     $("sim-seed").textContent = `seed: ${r.seed}` + (seedField === "" ? " (random)" : "");
     $("run-btn").disabled = true; $("stop-btn").disabled = false;
-    $("viz-box").classList.add("hidden");
+    // The run's entry exists (and updates) in "previous runs" from this moment.
+    $("load-run-btn").disabled = false;
+    resetViz();
     renderStats({ total_games: parseInt($("num-games").value) || 100, games_run: 0, successes: 0, timeouts: 0, success_rate: 0, per_property: {} });
   } catch (e) { alert("Cannot start: " + e.message); }
 }
 
 function onSimEvent(msg) {
-  if (msg.type === "progress") renderStats(msg.stats);
-  else if (msg.type === "done") {
+  if (msg.type === "progress") {
+    renderStats(msg.stats);
+    if (msg.run) appendLiveRun(msg.run); // populate the games table on the fly
+  } else if (msg.type === "done") {
     $("run-btn").disabled = false; $("stop-btn").disabled = true;
-    state.session.results = state.session.results || [];
-    state.session.results.push(msg.result);
+    // Replace the (possibly fetched mid-run) entry rather than duplicating it.
+    const rs = state.session.results = state.session.results || [];
+    const at = rs.findIndex((x) => x.id === msg.result.id);
+    if (at >= 0) rs[at] = msg.result; else rs.push(msg.result);
     $("load-run-btn").disabled = false;
     $("sim-seed").textContent = `seed: ${msg.result.config?.base_seed}`;
     renderStats(msg.result.stats);
-    renderViz(msg.result); // show this run's successful games
+    // Final table render; keep the board the user is already watching.
+    renderViz(msg.result, { keepOpenBoard: state.vizLiveOpened });
   }
 }
 
 function renderStats(stats) {
+  $("progress-box").classList.remove("hidden");
   const box = $("sim-stats");
   const pct = (stats.success_rate * 100).toFixed(1);
   const progress = stats.total_games ? (stats.games_run / stats.total_games) * 100 : 0;
+  // Failures = games that finished the search without success and without
+  // timing out (a genuine "no line exists"), kept separate from timeouts.
+  const failures = Math.max(0, (stats.games_run || 0) - (stats.successes || 0) - (stats.timeouts || 0));
   const propNames = {};
   state.props.forEach((p) => {
     const phase = (p.phase || "").replace(/_/g, " ");
@@ -613,8 +761,9 @@ function renderStats(stats) {
     el("div", { className: "stat-grid" },
       stat("Success rate", pct + "%"),
       stat("Successes", stats.successes),
-      stat("Games run", stats.games_run),
-      stat("Timeouts", stats.timeouts)),
+      stat("Failures", failures),
+      stat("Timeouts", stats.timeouts),
+      stat("Games run", stats.games_run)),
     el("div", { style: "margin-top:.7rem" },
       el("div", { className: "muted", style: "font-size:11px;text-transform:uppercase", textContent: "Per property (any line)" }),
       ...Object.entries(stats.per_property || {}).map(([id, n]) =>
@@ -633,33 +782,73 @@ function stat(k, v) {
 function normalizeRuns(result) {
   if (result.sample_runs && result.sample_runs.length) return result.sample_runs;
   return (result.sample_success_logs || []).map((log, i) => ({
-    game_index: i, success: true, timed_out: false, node_capped: false,
+    game_index: i, success: true, timed_out: false,
     hand: (log[0] && log[0].hand) || [],
     branches_explored: null, branches_considered: null,
     tree: null, tree_truncated: false, log,
   }));
 }
 
-function renderViz(result) {
-  // One row per game, in game order. Replay frames drop "pass"/"pay" steps.
-  const runs = normalizeRuns(result).map((r, i) => ({
+// Turn one raw run (from a result or a live progress event) into a viz row.
+// `_i` is the original game index — openBoard/highlightGame/vizGames key on it.
+function normalizeRun(r, i) {
+  return {
     ...r,
-    _i: i, // original game index — openBoard/highlightGame key on this
+    _i: i,
+    // Replay frames drop "pass"/"pay" steps.
     frames: (r.log || []).filter((f) => {
       const d = f.desc || "";
       return !d.startsWith("pass") && !d.startsWith("pay ");
     }),
-  }));
+  };
+}
+
+// Clear the games viewer at the start of a run so live rows can stream in.
+function resetViz() {
+  state.vizRuns = [];
+  state.vizGames = [];
+  state.vizProps = state.props || []; // working props → tree status circles
+  state.runsSort = { key: "#", dir: 1 };
+  state.vizIdx = 0;
+  state.vizLiveOpened = false;
+  state.vizNav = null; // no board open — arrow keys do nothing
+  $("viz-box").classList.add("hidden");
+  $("viz-log").replaceChildren();
+}
+
+// Append (or replace) a single game's row as it finishes, live.
+function appendLiveRun(raw) {
+  const nr = normalizeRun(raw, raw.game_index ?? state.vizRuns.length);
+  const at = state.vizRuns.findIndex((r) => r._i === nr._i);
+  if (at >= 0) state.vizRuns[at] = nr; else state.vizRuns.push(nr);
+  state.vizGames[nr._i] = nr.frames;
+  $("viz-box").classList.remove("hidden");
+  renderRunsTable();
+  // Open the first replayable game once, so a line can be watched while the
+  // rest keep running; don't yank the view around on later games.
+  if (!state.vizLiveOpened) {
+    const first = state.vizRuns.find((r) => r.frames.length);
+    if (first) { state.vizLiveOpened = true; highlightGame(first._i); openBoard(first._i); }
+  }
+}
+
+function renderViz(result, opts = {}) {
+  // One row per game, in game order.
+  const runs = normalizeRuns(result).map((r, i) => normalizeRun(r, i));
 
   state.vizRuns = runs;
   state.vizProps = result.properties || []; // for the tree's status circles
-  state.vizGames = runs.map((r) => r.frames); // openBoard indexes into this
+  state.vizGames = [];
+  runs.forEach((r) => (state.vizGames[r._i] = r.frames)); // openBoard indexes into this
   state.runsSort = { key: "#", dir: 1 };
 
   const box = $("viz-box");
-  if (!runs.length) { box.classList.add("hidden"); return; }
+  if (!runs.length) { box.classList.add("hidden"); state.vizNav = null; return; }
   box.classList.remove("hidden");
   renderRunsTable();
+  // A board opened during the live run stays as-is — don't yank the view.
+  if (opts.keepOpenBoard) return;
+  state.vizNav = null; // reset until a board is (re)opened below
   // Open the first replayable (successful) game, if any.
   const first = runs.findIndex((r) => r.frames.length);
   $("viz-log").replaceChildren();
@@ -676,7 +865,7 @@ function renderRunsTable() {
 // Sort accessors per column; null = "no value" (always sorted last).
 const RUN_SORTS = {
   "#": (r) => r._i,
-  Result: (r) => (r.success ? 0 : r.timed_out || r.node_capped ? 1 : 2),
+  Result: (r) => (r.success ? 0 : r.timed_out ? 1 : 2),
   Steps: (r) => (r.frames.length ? r.frames.length : null),
   Explored: (r) => r.branches_explored,
   Considered: (r) => r.branches_considered,
@@ -726,7 +915,6 @@ function runsTable(runs) {
       : "no line satisfying all properties was found";
     let suffix = "";
     if (run.timed_out) { suffix = " ⏱"; title += " — timed out before the search completed"; }
-    else if (run.node_capped) { suffix = " ▦"; title += " — node cap reached before the search completed"; }
 
     const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the opening hand" });
     hoverGrid(handIcon, run.hand || []);
@@ -767,18 +955,23 @@ function highlightGame(gi) {
 
 // Floating grid of card images shown while hovering a hand icon.
 let hoverGridEl = null;
-function hoverGrid(node, names) {
+function hoverGrid(node, names, backs = 0) {
   const show = () => {
     if (!hoverGridEl) { hoverGridEl = el("div", { id: "hover-grid" }); document.body.append(hoverGridEl); }
     const g = hoverGridEl;
-    if (!names || !names.length) {
+    if ((!names || !names.length) && !backs) {
       g.replaceChildren(el("div", { className: "gfallback", textContent: "hand not recorded" }));
     } else {
-      g.replaceChildren(...names.map((n) => {
-        const img = state.imageMap[n];
-        return img ? el("img", { src: img, alt: n, title: n })
-                   : el("div", { className: "gfallback", textContent: n });
-      }));
+      g.replaceChildren(
+        ...(names || []).map((n) => {
+          const img = state.imageMap[n];
+          return img ? el("img", { src: img, alt: n, title: n })
+                     : el("div", { className: "gfallback", textContent: n });
+        }),
+        // Card backs for the random-padding slots of a fixed hand.
+        ...Array.from({ length: backs }, () =>
+          el("div", { className: "gback", title: "random card (padding)" })),
+      );
     }
     g.style.display = "grid";
   };
@@ -888,7 +1081,7 @@ const PROPS = DATA.props || [];
 const K = Math.max(1, PROPS.length);       // circles per node (one per property)
 const CGAP = 13;                           // spacing between a node's circles
 const R = 5, Y_GAP = 24, MX = 28, MY = 20;
-const X_GAP = 260 + (K - 1) * CGAP;
+const X_GAP = 340 + (K - 1) * CGAP;
 // Turn order, to decide whether a property's moment is already past.
 const PHASES = ["untap","upkeep","draw","precombat_main","begin_combat","declare_attackers",
   "declare_blockers","combat_damage","end_combat","postcombat_main","end_step","cleanup"];
@@ -988,7 +1181,7 @@ function drawNode(n) {
   const t = document.createElementNS(NS, "text");
   t.setAttribute("x", px(n) + (K - 1) * CGAP + R + 4); t.setAttribute("y", py(n) + 4);
   let lbl = n.label || "";
-  if (lbl.length > 36) lbl = lbl.slice(0, 35) + "…";
+  if (lbl.length > 56) lbl = lbl.slice(0, 55) + "…";
   // ▸N = N hidden subbranches (click to show); ▾ = expanded (click to hide).
   const marker = kids.length ? (n._open ? " ▾" : " ▸" + kids.length) : "";
   t.textContent = (n.turn ? "T" + n.turn + " " : "") + lbl + marker;
@@ -1079,8 +1272,20 @@ function tile(name, opts = {}) {
       (opts.commander ? " commander" : "") + (opts.attacking ? " attacking" : ""),
     title: name + (opts.tapped ? " (tapped)" : "") + (opts.attacking ? " (attacking)" : ""),
   });
-  const img = state.imageMap[name];
-  if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
+  const img = opts.token ? null : state.imageMap[name];
+  if (opts.token) {
+    // Tokens have no card image: compose a card face with name, type line,
+    // textbox and P/T (for creatures).
+    t.classList.add("token-card");
+    const face = el("div", { className: "tok-face" },
+      el("div", { className: "tok-name", textContent: name }),
+      el("div", { className: "tok-type", textContent: opts.typeLine || "Token" }),
+      el("div", { className: "tok-text", textContent: opts.text || "" }));
+    if (opts.power != null && opts.toughness != null) {
+      face.append(el("div", { className: "tok-pt", textContent: `${opts.power}/${opts.toughness}` }));
+    }
+    t.append(face);
+  } else if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
   else t.append(el("div", { className: "fallback", textContent: name }));
   if (opts.commander) t.append(el("div", { className: "badge", textContent: "CMD" }));
   // Markers: render every counter kind present on the permanent, not just a
@@ -1159,10 +1364,20 @@ function poolPips(pool) {
   return span;
 }
 
+// Energy counters rendered like a mana pool (one pip per {E}).
+function energyPips(n) {
+  const span = el("span", { className: "pool-pips" });
+  for (let k = 0; k < Math.min(n, 12); k++) span.append(el("span", { className: "pip E", textContent: "E" }));
+  if (n > 12) span.append(el("span", { className: "muted", textContent: ` ×${n}` }));
+  if (!n) span.append(el("span", { className: "muted", textContent: "—" }));
+  return span;
+}
+
 // A permanent tile with any auras/equipment attached to it stacked BEHIND it
 // (peeking out from the top-right), so the enchanted/equipped card is on top.
 function permTile(p, attachedByHost) {
-  const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters });
+  const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
+    token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness });
   const attached = attachedByHost[p.uid] || [];
   if (!attached.length) return host;
   const wrap = el("div", { className: "perm-stack" });
@@ -1191,19 +1406,33 @@ function renderBoard(f) {
   }
   const isAttached = (p) => p.attached_to != null && hostUids.has(p.attached_to);
   const mkPerm = (p) => permTile(p, attachedByHost);
-  const lands = bf.filter((p) => p.is_land && !isAttached(p)).map(mkPerm);
-  const nonlands = bf.filter((p) => !p.is_land && !isAttached(p)).map(mkPerm);
+  // Bottom row: lands and Lander tokens (they fetch lands, so they live with
+  // them). Top row: everything else, including all other tokens.
+  const isBottom = (p) => p.is_land || p.is_lander;
+  const lands = bf.filter((p) => isBottom(p) && !isAttached(p)).map(mkPerm);
+  const nonlands = bf.filter((p) => !isBottom(p) && !isAttached(p)).map(mkPerm);
   const c = f.counters || {};
+  const flags = state.deckFlags || {};
 
-  const header = el("div", { className: "board-header" },
+  // Header on three lines: 1) current phase + current action, 2) integer
+  // entries, 3) pool-like entries (mana, energy). Storm shows only when the
+  // deck plays Storm cards; Energy only when it manages energy counters.
+  const line1 = el("div", { className: "board-header step-line" },
     el("span", { className: "turn", textContent: `Turn ${f.turn} · ${f.phase}` }),
+    el("span", { className: "action", textContent: f.desc || "" }));
+  const ints = el("div", { className: "board-header" },
     el("span", {}, el("span", { className: "k", textContent: "life " }), String(f.life)),
     el("span", {}, el("span", { className: "k", textContent: "opp " }), String(f.opponent_life ?? 20)),
-    el("span", {}, el("span", { className: "k", textContent: "library " }), String(f.library)),
-    el("span", {}, el("span", { className: "k", textContent: "pool " }), poolPips(f.mana_pool)),
-    el("span", { className: "counter-chip", textContent: `spells ${c.spells || 0}` }),
-    el("span", { className: "counter-chip", textContent: `noncreature ${c.noncreature || 0}` }),
-    el("span", { className: "counter-chip", textContent: `drawn ${c.drawn || 0}` }));
+    el("span", {}, el("span", { className: "k", textContent: "library " }), String(f.library)));
+  if (flags.storm) {
+    ints.append(el("span", {}, el("span", { className: "k", textContent: "storm " }), String(c.storm || 0)));
+  }
+  const pools = el("div", { className: "board-header pools" },
+    el("span", {}, el("span", { className: "k", textContent: "pool " }), poolPips(f.mana_pool)));
+  if (flags.energy) {
+    pools.append(el("span", {}, el("span", { className: "k", textContent: "energy " }), energyPips(f.energy || 0)));
+  }
+  const header = el("div", {}, line1, ints, pools);
 
   // MTGO-like layout: exile + graveyard piles on the left, the field in the
   // middle (lands under the other permanents), command zone + stack on the
@@ -1250,24 +1479,23 @@ function openBoard(gi) {
   const prev = el("button", { textContent: "◀ Prev" });
   const next = el("button", { textContent: "Next ▶" });
   const counter = el("span", { className: "muted" });
-  const desc = el("span", { className: "desc" });
   const range = el("input", { type: "range", min: 0, max: frames.length - 1, value: 0, style: "flex:1" });
 
   const draw = () => {
     const f = frames[state.vizStep];
     counter.textContent = `step ${state.vizStep + 1} / ${frames.length}`;
-    desc.textContent = f.desc || "";
     range.value = state.vizStep;
-    board.replaceChildren(renderBoard(f));
+    board.replaceChildren(renderBoard(f)); // the action shows in the header
   };
-  prev.onclick = () => { state.vizStep = Math.max(0, state.vizStep - 1); draw(); };
-  next.onclick = () => { state.vizStep = Math.min(frames.length - 1, state.vizStep + 1); draw(); };
+  const step = (d) => { state.vizStep = Math.min(frames.length - 1, Math.max(0, state.vizStep + d)); draw(); };
+  prev.onclick = () => step(-1);
+  next.onclick = () => step(1);
   range.oninput = () => { state.vizStep = +range.value; draw(); };
+  state.vizNav = step; // ← / → keyboard navigation targets the open board
 
   const board = el("div", { className: "board" });
   host.append(
     board,
-    el("div", { className: "board-toolbar" }, desc),
     el("div", { className: "board-toolbar" }, prev, next, counter, range),
   );
   draw();

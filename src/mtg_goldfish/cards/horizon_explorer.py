@@ -13,9 +13,10 @@ class HorizonExplorer(Card):
     card_name = "Horizon Explorer"
 
     def on_other_etb_immediate(self, state, perm, entering):
-        if "land" in entering.type_line.lower() and entering.tapped:
+        # Replacement effect: untap silently so the land is shown untapped in the
+        # very frame it enters, rather than flashing tapped first.
+        if entering.is_land and entering.tapped:
             entering.tapped = False
-            state.emit(f"Horizon Explorer: {entering.name} enters untapped")
 
     def on_attack(self, state, perm):
         state.make_token("Lander", 0, 0, "Token Artifact — Lander")

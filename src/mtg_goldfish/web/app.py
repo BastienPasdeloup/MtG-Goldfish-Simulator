@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import random
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -18,7 +20,7 @@ from ..engine.phases import phase_labels
 from ..formats import get_format, list_formats
 from ..llm import get_provider
 from ..properties import STATE_API_DOC, PropertySpec, compile_condition
-from ..session import Session, SessionStore, SimConfig, new_id, now_iso
+from ..session import Session, SessionCorrupt, SessionStore, SimConfig, new_id, now_iso
 from .hub import HUB
 from .sim_runner import SimulationRunner
 
@@ -53,7 +55,11 @@ class SimulateRequest(BaseModel):
     mulligans: int = 0
     on_the_play: bool = True
     base_seed: int | None = None  # random when omitted
-    search_mode: str = "dfs_heuristic"  # see engine.simulator.SEARCH_MODES
+    search_mode: str = "best_first"  # see engine.simulator.SEARCH_MODES
+    # Fixed-hand mode: force this exact opening hand (card names); None = normal.
+    fixed_hand: list[str] | None = None
+    # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
+    fixed_hand_pad_to: int | None = None
 
 
 # --------------------------------------------------------------------------
@@ -96,10 +102,31 @@ def card_view(deck: Deck) -> list[dict]:
     return list(agg.values())
 
 
+def deck_flags(deck: Deck) -> dict:
+    """Deck-level mechanics the board header adapts to: whether any card has
+    the Storm keyword or produces/spends energy counters ({E})."""
+    import re as _re
+
+    storm = energy = False
+    for e in deck.entries:
+        text = e.card.oracle_text or ""
+        # The Storm keyword appears as its own (reminder-texted) line; a plain
+        # word-boundary match also catches it without matching names like
+        # "Brainstorm" (names aren't in oracle_text).
+        if not storm and _re.search(r"\bstorm\b", text, _re.I):
+            storm = True
+        if not energy and "{E}" in text:
+            energy = True
+        if storm and energy:
+            break
+    return {"storm": storm, "energy": energy}
+
+
 def session_payload(session: Session) -> dict:
     return {
         "session": session.model_dump(),
         "cards": card_view(session.deck),
+        "deck_flags": deck_flags(session.deck),
     }
 
 
@@ -119,6 +146,7 @@ def meta() -> dict:
         "property_api_doc": STATE_API_DOC,
         "llm_provider": get_provider().name,
         "llm_is_real": get_provider().is_real,
+        "github_issues_url": f"https://github.com/{_GITHUB_REPO}/issues/new",
     }
 
 
@@ -166,10 +194,15 @@ def list_sessions() -> dict:
 
 @app.get("/api/sessions/{session_id}")
 def get_session(session_id: str) -> dict:
-    try:
-        session = store.load(session_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
+    session = _load(session_id)
+    # A result still marked "running" while no simulation is live is a FAILED
+    # run (the app or the run crashed mid-flight): drop it so the session
+    # always loads clean instead of showing a ghost run forever.
+    if not runner.is_running(session_id):
+        alive = [r for r in session.results if r.status != "running"]
+        if len(alive) != len(session.results):
+            session.results = alive
+            store.save(session)
     return session_payload(session)
 
 
@@ -177,6 +210,23 @@ def get_session(session_id: str) -> dict:
 def delete_session(session_id: str) -> dict:
     store.delete(session_id)
     return {"ok": True}
+
+
+@app.get("/api/sessions/{session_id}/deck-check")
+def deck_check(session_id: str) -> dict:
+    """Compare the stored deck against its Moxfield source: has it changed
+    since it was imported? Called asynchronously by the UI (network-bound)."""
+    from ..deck.moxfield import deck_signature, fetch_deck_signature
+
+    session = _load(session_id)
+    url = session.deck.source_url
+    if not url:
+        return {"checked": False}
+    try:
+        current = fetch_deck_signature(url)
+    except MoxfieldError as exc:
+        return {"checked": False, "error": str(exc)}
+    return {"checked": True, "changed": current != deck_signature(session.deck)}
 
 
 # --------------------------------------------------------------------------
@@ -267,58 +317,42 @@ def _existing_key() -> bool:
 
 
 # --------------------------------------------------------------------------
-# cards — auto-implementation via the selected model
+# bug reports -> GitHub issues
 # --------------------------------------------------------------------------
-def _card_data(session: Session, card_name: str):
-    for e in session.deck.entries:
-        if e.card.name == card_name:
-            return e.card
-    return None
+_GITHUB_REPO = os.environ.get("MTG_GITHUB_REPO", "BastienPasdeloup/MtG-Goldfish-Simulator")
 
 
-def _implement_one(session: Session, card_name: str) -> dict:
-    from ..llm.card_codegen import CodegenError, generate_card
-
-    card = _card_data(session, card_name)
-    if card is None:
-        raise HTTPException(status_code=404, detail=f"{card_name!r} is not in this deck.")
-    if is_implemented(card_name):
-        return {"name": card_name, "ok": True, "already": True}
-    try:
-        module = generate_card(card)
-        return {"name": card_name, "ok": True, "module": module}
-    except CodegenError as exc:
-        return {"name": card_name, "ok": False, "error": str(exc)}
-
-
-@app.post("/api/sessions/{session_id}/cards/{card_name}/implement")
-def implement_card(session_id: str, card_name: str) -> dict:
-    """Ask the selected model to write and register this card's behaviour."""
-    result = _implement_one(_load(session_id), card_name)
-    if not result["ok"]:
-        raise HTTPException(status_code=502, detail=result["error"])
-    return result
-
-
-@app.post("/api/sessions/{session_id}/cards/implement-all")
-def implement_all_cards(session_id: str) -> dict:
-    """Ask the selected model to implement every unimplemented card in the
-    deck. Returns a per-card report (some may fail — those stay unimplemented
-    and keep their vanilla approximation)."""
+@app.get("/api/sessions/{session_id}/bug-report-file")
+def bug_report_file(session_id: str, result_id: str | None = None) -> Response:
+    """Download a bug-report file: the session (deck + properties) and the
+    current run in full (search trees stripped — they can reach tens of MB).
+    Served as .txt so it can be dragged straight into a GitHub issue."""
     session = _load(session_id)
-    names = []
-    seen = set()
-    for e in session.deck.entries:
-        if e.card.name in seen or is_implemented(e.card.name):
-            continue
-        seen.add(e.card.name)
-        names.append(e.card.name)
-    results = [_implement_one(session, n) for n in names]
-    return {
-        "total": len(results),
-        "implemented": sum(1 for r in results if r["ok"]),
-        "results": results,
+    result = next((r for r in session.results if r.id == result_id), None)
+    run = None
+    if result is not None:
+        run = result.model_dump(exclude={"sample_success_logs"})
+        for r in run.get("sample_runs", []):
+            r.pop("tree_gz", None)
+    payload = {
+        "generated_at": now_iso(),
+        "session": {
+            "name": session.name,
+            "format": session.format_id,
+            "created_at": session.created_at,
+            "deck_url": session.deck.source_url,
+            "deck": [f"{e.quantity}x {e.card.name} [{e.board.value}]"
+                     for e in session.deck.entries],
+            "properties": [p.model_dump() for p in session.properties],
+        },
+        "run": run,
     }
+    fname = f"mtg-goldfish-bug-report-{session.id}-{result_id or 'no-run'}.txt"
+    return Response(
+        content=json.dumps(payload, indent=1, ensure_ascii=False),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -342,6 +376,8 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
         on_the_play=req.on_the_play,
         base_seed=seed,
         search_mode=req.search_mode,
+        fixed_hand=(req.fixed_hand or None),
+        fixed_hand_pad_to=(req.fixed_hand_pad_to if req.fixed_hand else None),
     )
     try:
         result_id = runner.start(session, config, loop)
@@ -372,6 +408,8 @@ def _load(session_id: str) -> Session:
         return store.load(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
+    except SessionCorrupt as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 class _NoCacheStaticFiles(StaticFiles):

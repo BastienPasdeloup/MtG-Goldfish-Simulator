@@ -15,7 +15,7 @@ class BaSingSe(Card):
 
     def etb_tapped(self, state):
         return not any(
-            "basic" in p.type_line.lower() and "land" in p.type_line.lower()
+            "basic" in p.type_line.lower() and p.is_land
             for p in state.battlefield
         )
 

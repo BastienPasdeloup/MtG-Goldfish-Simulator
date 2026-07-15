@@ -15,7 +15,7 @@ class NissaResurgentAnimist(Card):
     card_name = "Nissa, Resurgent Animist"
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return []
         color = any_identity_color(state)[0]
 
@@ -35,7 +35,7 @@ class NissaResurgentAnimist(Card):
         )]
 
     def on_other_etb(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return
         color = any_identity_color(state)[0]
         state.mana_pool.add(color, 1)

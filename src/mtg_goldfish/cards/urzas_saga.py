@@ -1,6 +1,6 @@
 """Urza's Saga — Enchantment Land — Urza's Saga.
-Enters with lore counter I (a replacement effect — the counter is on it from
-the moment it enters); adds one after each of your draw steps.
+Lore counters arrive via chapter triggers ON THE STACK: the first when the
+Saga enters, the next at the beginning of each of your draw steps.
 I: gains "{T}: Add {C}" (modelled as always-on from chapter I).
 II: gains "{2}, {T}: create a 0/0 Construct with +1/+1 per artifact".
 III (at the chapter-3 lore bump): search your library for an artifact card
@@ -11,7 +11,6 @@ from __future__ import annotations
 from ..engine.actions import can_afford, pay_cost
 from ..engine.mana import ManaAbility, ManaCost
 from ..engine.phases import Phase
-from ._common import branch_over
 from .base import Card, CardAction
 from .registry import register
 
@@ -20,10 +19,24 @@ from .registry import register
 class UrzasSaga(Card):
     card_name = "Urza's Saga"
 
-    def enters_with_counters(self, state):
-        # "Enters with a lore counter" — a replacement effect: the counter is
-        # on the Saga from the moment it enters; nothing goes on the stack.
-        return {"lore": 1}
+    def etb_stack_items(self, state, permanent):
+        # The first lore counter arrives via a chapter trigger when the Saga
+        # enters: it goes on the stack like every later counter.
+        def resolve(st, uid=permanent.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            live.counters["lore"] = live.counters.get("lore", 0) + 1
+            st.emit(f"Urza's Saga: lore counter added (now at {live.counters['lore']})")
+            return None
+
+        return [self.stack_ability(
+            source_name=permanent.name,
+            label="Urza's Saga: lore counter → chapter I",
+            resolve=resolve,
+            trigger_text="Urza's Saga entered the battlefield",
+            ability_text="Chapter I — {T}: Add {C}",
+        )]
 
     def mana_abilities_perm(self, state, perm):
         if perm.counters.get("lore", 0) >= 1:
@@ -31,8 +44,16 @@ class UrzasSaga(Card):
         return []
 
     def phase_stack_items(self, state, perm, phase):
-        if phase != Phase.DRAW or state.turn == 0 or perm.counters.get("lore", 0) + 1 < 3:
+        # After each of your draw steps, a lore counter is put on the Saga. That
+        # addition is a triggered (chapter) ability — it goes on the stack, then
+        # resolves the reached chapter (I is the entering counter; II grants the
+        # Construct ability; III fetches an artifact and sacrifices the Saga).
+        if phase != Phase.DRAW or state.turn == 0:
             return []
+        lore = perm.counters.get("lore", 0)
+        if lore >= 3:
+            return []  # completed (the Saga has already left)
+        roman = {1: "I", 2: "II", 3: "III"}[lore + 1]
 
         def resolve(st, uid=perm.uid):
             live = st.find_permanent(uid)
@@ -42,10 +63,14 @@ class UrzasSaga(Card):
 
         return [self.stack_ability(
             source_name=perm.name,
-            label="Urza's Saga: chapter III",
+            label=f"Urza's Saga: lore counter → chapter {roman}",
             resolve=resolve,
-            trigger_text="Draw step lore counter reached chapter III",
-            ability_text="Search your library for a {0} or {1} artifact, put it onto the battlefield, then sacrifice Urza's Saga",
+            trigger_text="A lore counter is put on Urza's Saga",
+            ability_text=(
+                "Chapter III — search your library for a {0} or {1} artifact, "
+                "put it onto the battlefield, then sacrifice Urza's Saga"
+                if lore + 1 == 3 else f"Chapter {roman}"
+            ),
         )]
 
     def battlefield_actions(self, state, perm):
@@ -79,7 +104,12 @@ class UrzasSaga(Card):
         if phase != Phase.DRAW or state.turn == 0:
             return
         perm.counters["lore"] = perm.counters.get("lore", 0) + 1
-        if perm.counters["lore"] < 3:
+        lore = perm.counters["lore"]
+        if lore < 3:
+            # Chapters I & II are modelled as always-on statics gated on the
+            # lore count (mana ability at ≥1, the Construct ability at ≥2), so
+            # the counter addition itself is the whole effect here.
+            state.emit(f"Urza's Saga: lore counter added (now at {lore})")
             return
         # Chapter III: fetch a {0}/{1} artifact, then the Saga is sacrificed.
         state.emit("Urza's Saga: chapter III")

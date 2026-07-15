@@ -12,7 +12,7 @@ from .registry import register
 
 
 def _sac_pick(state):
-    lands = [p for p in state.battlefield if "land" in p.type_line.lower()]
+    lands = [p for p in state.battlefield if p.is_land]
     tapped = [p for p in lands if p.tapped]
     basics = [p for p in lands if "basic" in p.type_line.lower()]
     return (tapped or basics or lands or [None])[0]

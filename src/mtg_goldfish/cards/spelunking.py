@@ -14,9 +14,10 @@ class Spelunking(Card):
     card_name = "Spelunking"
 
     def on_other_etb_immediate(self, state, perm, entering):
-        if "land" in entering.type_line.lower() and entering.tapped:
+        # Replacement effect: untap silently so the land is shown untapped in the
+        # very frame it enters, rather than flashing tapped first.
+        if entering.is_land and entering.tapped:
             entering.tapped = False
-            state.emit(f"Spelunking: {entering.name} enters untapped")
 
     def on_etb(self, state, permanent):
         state.draw(1)

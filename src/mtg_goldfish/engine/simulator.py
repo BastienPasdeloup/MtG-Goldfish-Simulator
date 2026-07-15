@@ -12,11 +12,15 @@ in *any* line (for per-property statistics).
 
 The search order is configurable (`SimulationConfig.search_mode`) — DFS with
 or without heuristic move ordering, BFS, or greedy best-first on a progress
-score. Every mode visits the same states (the search stays exhaustive until
-success, timeout or the node cap); only the visit order differs.
+score. Every mode visits the same states; only the visit order differs.
+
+The search is exhaustive and runs until whichever comes first: the per-game
+wall-clock timeout expires, every property has been satisfied on some line, or
+no live branch can satisfy the remaining properties anymore (the frontier
+drains). There is deliberately no node cap.
 
 Mana is solved deterministically (see `actions.plan_payment`) so it is not a
-branch point. Search is bounded by a per-game wall-clock timeout and a node cap.
+branch point.
 """
 from __future__ import annotations
 
@@ -48,10 +52,10 @@ class CompiledProperty(Protocol):
 #: Available search strategies (value -> user-facing label). All are
 #: exhaustive; they differ only in the order states are visited.
 SEARCH_MODES: dict[str, str] = {
-    "dfs_heuristic": "DFS · heuristic move ordering (default)",
+    "best_first": "Best-first · greedy on board progress (default)",
+    "dfs_heuristic": "DFS · heuristic move ordering",
     "dfs": "DFS · natural move order",
     "bfs": "BFS · breadth-first (shallowest lines first)",
-    "best_first": "Best-first · greedy on board progress",
 }
 
 
@@ -61,10 +65,15 @@ class SimulationConfig:
     timeout_per_game_s: float = 5.0
     mulligans: int = 0
     on_the_play: bool = True
-    max_nodes_per_game: int = 200_000
     base_seed: int = 12345
     keep_success_logs: int = 25  # how many successful game logs to retain
-    search_mode: str = "dfs_heuristic"  # see SEARCH_MODES
+    search_mode: str = "best_first"  # see SEARCH_MODES
+    #: Fixed-hand mode: force this exact opening hand (card names) and shuffle
+    #: only the rest of the library. None = normal random hands + mulligans.
+    fixed_hand: list[str] | None = None
+    #: Fixed-hand mode: if set, pad the forced hand with random cards from the
+    #: (shuffled) rest of the library up to this total hand size.
+    fixed_hand_pad_to: int | None = None
 
 
 @dataclass
@@ -73,7 +82,6 @@ class GameOutcome:
     success: bool
     satisfied: set[str] = field(default_factory=set)  # props hit in any line
     timed_out: bool = False
-    node_capped: bool = False
     sample_log: list[str] = field(default_factory=list)
     # Per-game search shape (populated for the runs table + tree view).
     opening_hand: list[str] = field(default_factory=list)  # the kept (winning) hand
@@ -107,15 +115,11 @@ class _SearchContext:
         self,
         properties: list[CompiledProperty],
         deadline: float,
-        max_nodes: int,
         tree_cap: int | None = None,  # None = record the FULL explored tree
     ) -> None:
         self.properties = properties
         self.deadline = deadline
-        self.max_nodes = max_nodes
-        self.nodes = 0
         self.timed_out = False
-        self.node_capped = False
         self.ever_satisfied: set[str] = set()  # any line, this game
         self.success_log: list[str] | None = None
         self.max_rank = max(
@@ -158,11 +162,7 @@ class _SearchContext:
         return node
 
     def budget_exceeded(self) -> bool:
-        if self.node_capped or self.timed_out:
-            return True
-        self.nodes += 1
-        if self.nodes > self.max_nodes:
-            self.node_capped = True
+        if self.timed_out:
             return True
         if time.monotonic() > self.deadline:
             self.timed_out = True
@@ -195,6 +195,7 @@ def _apply_step_entry(state: GameState) -> None:
         for perm in state.battlefield:
             perm.temp_power = 0
             perm.temp_toughness = 0
+            perm.temp_keywords.clear()
             perm.damage = 0
         state.check_deaths()
 
@@ -330,6 +331,19 @@ def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
         _goto_next_phase(state)
 
 
+def _option_details(blist: list[GameState], base_len: int) -> list[str | None]:
+    """When one action fans out into several branches, describe what makes each
+    branch different: the first log message (past the parent's `base_len`) at
+    which the branches diverge — e.g. "exchange text boxes with X" vs "... Y",
+    or two different fetch targets. Returns one detail per branch (None when
+    the branches' logs never diverge)."""
+    seqs = [[fr.get("desc", "") for fr in b.log[base_len:]] for b in blist]
+    for i in range(max((len(s) for s in seqs), default=0)):
+        if len({s[i] if i < len(s) else None for s in seqs}) > 1:
+            return [s[i] if i < len(s) else None for s in seqs]
+    return [None] * len(blist)
+
+
 def _mark_success(node: dict | None) -> None:
     """Mark the winning line bottom-up via the transient parent references."""
     while node is not None:
@@ -356,11 +370,6 @@ def _strip_parents(node: dict) -> None:
         n = stack.pop()
         n.pop("_p", None)
         stack.extend(n["children"])
-
-
-#: Frontier safety valve: BFS/best-first keep many live states in memory, so
-#: cap the frontier (each entry holds a full GameState clone).
-_MAX_FRONTIER = 150_000
 
 
 def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
@@ -393,10 +402,7 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         push = frontier.append
 
     while frontier:
-        if ctx.timed_out or ctx.node_capped:
-            return False
-        if len(frontier) > _MAX_FRONTIER:
-            ctx.node_capped = True
+        if ctx.timed_out:
             return False
         state, satisfied, node, kind, own = pop()
         if ctx.budget_exceeded():
@@ -462,9 +468,16 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             # piles...) yields several candidate branches: count the extras as
             # considered so `explored <= considered` always holds.
             ctx.branches_considered += max(0, len(blist) - 1)
+            # Branching plays (targets, modes...) get their distinguishing
+            # detail in the label so the tree shows WHAT each option does.
+            details = _option_details(blist, len(state.log)) if len(blist) > 1 else [None]
             for k, branch in enumerate(blist):
                 branch.check_deaths()
-                label = action.label + (f" · option {k + 1}/{len(blist)}" if len(blist) > 1 else "")
+                label = action.label
+                if len(blist) > 1:
+                    label += f" · option {k + 1}/{len(blist)}"
+                    if details[k]:
+                        label += f" — {details[k]}"
                 if isinstance(action, PassPhase) or once:
                     _goto_next_phase(branch)
                     ckind = "advance"
@@ -507,6 +520,28 @@ def _opening_hands(
     return variants
 
 
+def _fixed_opening_hand(
+    library: list, names: list[str], pad_to: int | None = None
+) -> list[tuple[list, list, list]]:
+    """Fixed-hand mode: pull the requested cards (by name, honouring copies)
+    out of the shuffled library into the opening hand; the remainder stays in
+    shuffled order as the library. With `pad_to`, top up the hand with random
+    cards (the top of the already-shuffled remainder) to that total size.
+    A single keep, no mulligans."""
+    lib = list(library)
+    hand: list = []
+    for name in names:
+        card = next((c for c in lib if c.name == name), None)
+        if card is None:
+            continue  # not available in this many copies — skip it
+        lib.remove(card)
+        hand.append(card)
+    if pad_to is not None:
+        while len(hand) < pad_to and lib:
+            hand.append(lib.pop(0))  # lib is shuffled — its top is random
+    return [(hand, lib, [])]
+
+
 def simulate_game(
     base_state: GameState,
     properties: list[CompiledProperty],
@@ -519,21 +554,27 @@ def simulate_game(
 
     hand_size = 7
     deadline = time.monotonic() + config.timeout_per_game_s
-    ctx = _SearchContext(properties, deadline, config.max_nodes_per_game)
+    ctx = _SearchContext(properties, deadline)
     # Root of the recorded search tree: the game before any hand is kept.
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root
     ctx.tree_count = 1
 
-    keeps = _opening_hands(shuffled, hand_size, config.mulligans)
-    if config.search_mode in ("dfs_heuristic", "best_first"):
-        # Heuristic keep ordering: try hands whose land count is closest to 3
-        # first (all keeps are still searched — this only changes the order).
-        def _keep_score(variant: tuple) -> int:
-            lands = sum(1 for c in variant[0] if "land" in (c.type_line or "").lower())
-            return abs(lands - 3)
+    if config.fixed_hand:
+        # Fixed-hand mode: the opening hand is chosen by the user (optionally
+        # padded with random cards up to a chosen size); only the rest of the
+        # library varies (per game seed). No mulligan branching.
+        keeps = _fixed_opening_hand(shuffled, config.fixed_hand, config.fixed_hand_pad_to)
+    else:
+        keeps = _opening_hands(shuffled, hand_size, config.mulligans)
+        if config.search_mode in ("dfs_heuristic", "best_first"):
+            # Heuristic keep ordering: try hands whose land count is closest to
+            # 3 first (all keeps are still searched — this only changes order).
+            def _keep_score(variant: tuple) -> int:
+                lands = sum(1 for c in variant[0] if c.is_land)
+                return abs(lands - 3)
 
-        keeps = sorted(keeps, key=_keep_score)
+            keeps = sorted(keeps, key=_keep_score)
 
     items: list[tuple] = []
     keep_nodes: list[tuple[dict | None, list[str]]] = []
@@ -545,7 +586,9 @@ def simulate_game(
         variant.phase = Phase.UNTAP
         variant.rng_seed = config.base_seed + game_index  # mid-game shuffles
         play_draw = "on the play" if variant.on_the_play else "on the draw"
-        if bottomed:
+        if config.fixed_hand:
+            variant.emit(f"fixed opening hand ({play_draw}): {[c.name for c in hand]}")
+        elif bottomed:
             variant.emit(
                 f"mulligan {config.mulligans} ({play_draw}) — keep "
                 f"{[c.name for c in hand]}, bottom {[c.name for c in bottomed]}"
@@ -564,8 +607,9 @@ def simulate_game(
     root["success"] = success
     _strip_parents(root)
 
-    # For failed games there is no single "kept" hand — report the 7 drawn.
-    winning_hand = [c.name for c in shuffled[:hand_size]]
+    # For failed games there is no single "kept" hand — report the 7 drawn
+    # (or the fixed hand in fixed-hand mode).
+    winning_hand = keep_nodes[0][1] if config.fixed_hand else [c.name for c in shuffled[:hand_size]]
     if success:
         for hand_node, hand_names in keep_nodes:
             if hand_node is not None and hand_node["success"]:
@@ -577,7 +621,6 @@ def simulate_game(
         success=success,
         satisfied=set(ctx.ever_satisfied),
         timed_out=ctx.timed_out,
-        node_capped=ctx.node_capped,
         sample_log=ctx.success_log or [],
         opening_hand=winning_hand,
         branches_explored=ctx.branches_explored,

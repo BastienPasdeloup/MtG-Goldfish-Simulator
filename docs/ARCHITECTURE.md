@@ -59,8 +59,10 @@ domain logic have no web dependency and can be driven from a script or tests.
 - The search records a tree node for **every state created** (including
   passing priority), so the per-game graph shows all considered states; the
   winning line is marked bottom-up via parent links.
-- Bounded by a per-game wall-clock **timeout** and a node cap; the search stops
-  as soon as all properties are met.
+- Exhaustive with no node cap: a game's search runs until whichever comes
+  first — the per-game wall-clock **timeout**, every property satisfied on some
+  line, or no remaining branch able to satisfy the properties (the frontier
+  drains).
 
 ## What is real vs. approximate
 

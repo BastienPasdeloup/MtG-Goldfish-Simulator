@@ -35,7 +35,7 @@ class FabledPassage(Card):
                     return None
                 st.take_from_library(card)
                 st.shuffle_library()
-                lands = sum(1 for q in st.battlefield if "land" in q.type_line.lower())
+                lands = sum(1 for q in st.battlefield if q.is_land)
                 tapped = lands + 1 < 4  # counting the fetched land itself
                 enter_battlefield(
                     st,

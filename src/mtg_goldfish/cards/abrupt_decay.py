@@ -14,7 +14,7 @@ class AbruptDecay(Card):
     def cast_actions(self, state):
         targets = [
             p.uid for p in state.battlefield
-            if "land" not in p.type_line.lower() and p.card.cmc <= 3
+            if not p.is_land and p.card.cmc <= 3
         ]
 
         def effect(st, perm):

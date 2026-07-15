@@ -17,7 +17,7 @@ class CityOfTraitors(Card):
         return [ManaAbility(amount=2, choices=("C",))]
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower() or not entering.turn_flags.get("played_as_land"):
+        if not entering.is_land or not entering.turn_flags.get("played_as_land"):
             return []
 
         def resolve(st, uid=perm.uid, entering_uid=entering.uid):
@@ -36,6 +36,6 @@ class CityOfTraitors(Card):
         )]
 
     def on_other_etb(self, state, perm, entering):
-        if "land" in entering.type_line.lower() and entering.turn_flags.get("played_as_land"):
+        if entering.is_land and entering.turn_flags.get("played_as_land"):
             state.emit("City of Traitors: another land was played — sacrifice")
             state.leaves_battlefield(perm, "graveyard")

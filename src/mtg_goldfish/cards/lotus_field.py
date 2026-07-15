@@ -28,8 +28,8 @@ class LotusField(Card):
 
     def on_etb(self, state, permanent):
         others = [p for p in state.battlefield
-                  if p.uid != permanent.uid and "land" in p.type_line.lower()]
-        lands = [p for p in state.battlefield if "land" in p.type_line.lower()]
+                  if p.uid != permanent.uid and p.is_land]
+        lands = [p for p in state.battlefield if p.is_land]
         if len(lands) <= 2:
             victims = lands  # two or fewer total lands: sacrifice all of them
         else:

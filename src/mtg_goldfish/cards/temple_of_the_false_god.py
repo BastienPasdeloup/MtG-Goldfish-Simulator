@@ -12,7 +12,7 @@ class TempleOfTheFalseGod(Card):
     card_name = "Temple of the False God"
 
     def mana_abilities(self, state):
-        lands = sum(1 for p in state.battlefield if "land" in p.type_line.lower())
+        lands = sum(1 for p in state.battlefield if p.is_land)
         if lands < 5:
             return []
         return [ManaAbility(amount=2, choices=("C",))]

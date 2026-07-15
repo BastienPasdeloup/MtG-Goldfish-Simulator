@@ -12,12 +12,12 @@ class TillerEngine(Card):
     card_name = "Tiller Engine"
 
     def on_other_etb(self, state, perm, entering):
-        if "land" in entering.type_line.lower() and entering.tapped:
+        if entering.is_land and entering.tapped:
             entering.tapped = False
             state.emit(f"Tiller Engine: untap {entering.name}")
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower() or not entering.tapped:
+        if not entering.is_land or not entering.tapped:
             return []
 
         def resolve(st, uid=perm.uid, entering_uid=entering.uid, name=entering.name):

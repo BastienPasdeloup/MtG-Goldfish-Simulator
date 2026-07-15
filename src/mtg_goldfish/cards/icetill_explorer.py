@@ -17,7 +17,7 @@ class IcetillExplorer(Card):
         return 1
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return []
 
         def resolve(st, uid=perm.uid, entering_uid=entering.uid):
@@ -36,5 +36,5 @@ class IcetillExplorer(Card):
         )]
 
     def on_other_etb(self, state, perm, entering):
-        if "land" in entering.type_line.lower():
+        if entering.is_land:
             state.mill(1)

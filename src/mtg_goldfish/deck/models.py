@@ -86,6 +86,11 @@ class CardData(BaseModel):
         return "legendary" in self._types()
 
     @property
+    def is_double_faced(self) -> bool:
+        """Two faces (transforming or modal DFC)."""
+        return len(self.faces) >= 2
+
+    @property
     def can_be_commander(self) -> bool:
         """A legendary creature, or a card whose text grants commander status."""
         text = self.oracle_text.lower()

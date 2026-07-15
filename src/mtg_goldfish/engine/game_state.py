@@ -12,6 +12,7 @@ code runs against** — keep them backwards compatible.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
@@ -31,6 +32,23 @@ def _pt(value: str | None) -> int:
         return 0
 
 
+#: Rules text for the standard predefined tokens, so token tiles can show a
+#: textbox without every `make_token` call site having to spell it out.
+#: Call sites may still pass an explicit `text=` to override.
+_TOKEN_TEXT: dict[str, str] = {
+    "Treasure": "{T}, Sacrifice this token: Add one mana of any color.",
+    "Food": "{2}, {T}, Sacrifice this token: You gain 3 life.",
+    "Clue": "{2}, Sacrifice this token: Draw a card.",
+    "Blood": "{1}, {T}, Discard a card, Sacrifice this token: Draw a card.",
+    "Map": "{1}, {T}, Sacrifice this token: Target creature you control explores.",
+    "Lander": "{2}, {T}, Sacrifice this token: Search your library for a basic "
+              "land card, put it onto the battlefield tapped, then shuffle.",
+    "Construct": "This token gets +1/+1 for each artifact you control.",
+    "Eldrazi Spawn": "Sacrifice this token: Add {C}.",
+    "Powerstone": "{T}: Add {C}. This mana can't be spent to cast a nonartifact spell.",
+}
+
+
 @dataclass
 class Permanent:
     card: CardData
@@ -44,6 +62,11 @@ class Permanent:
     turn_flags: dict[str, int] = field(default_factory=dict)  # cleared each untap
     temp_power: int = 0                 # until end of turn
     temp_toughness: int = 0
+    temp_keywords: set = field(default_factory=set)  # lowercase, until end of turn
+    # P/T-defining behaviour stays anchored to the permanent even when its text
+    # box moves (Deadpool's exchange): when set, dynamic P/T is read from this
+    # impl instead of `impl`.
+    pt_impl: "Card | None" = None
     damage: int = 0                     # marked damage, cleared at cleanup
     attached_to: int | None = None      # equipment: uid of the equipped creature
     exiled_with: list[CardData] = field(default_factory=list)  # e.g. Parallax Wave
@@ -72,6 +95,16 @@ class Permanent:
     def is_creature_now(self) -> bool:
         return "creature" in self.type_line.split("—")[0].lower()
 
+    @property
+    def is_land(self) -> bool:
+        # Only the card types (left of the "—") count — this must NOT match a
+        # subtype like "Lander" (a Lander token is an Artifact, not a Land).
+        return "land" in self.type_line.split("—")[0].lower()
+
+    @property
+    def is_lander(self) -> bool:
+        return "lander" in self.type_line.lower()
+
     def base_power(self) -> int:
         return _pt(self.face.power)
 
@@ -91,6 +124,8 @@ class Permanent:
             turn_flags=dict(self.turn_flags),
             temp_power=self.temp_power,
             temp_toughness=self.temp_toughness,
+            temp_keywords=set(self.temp_keywords),
+            pt_impl=self.pt_impl,
             damage=self.damage,
             attached_to=self.attached_to,
             exiled_with=list(self.exiled_with),
@@ -160,9 +195,28 @@ class GameState:
     cards_drawn: int = 0
     commander_cast_count: dict[str, int] = field(default_factory=dict)
     storm_count: int = 0
+    energy: int = 0           # energy counters (a pool — never emptied by phases)
     attackers: list[int] = field(default_factory=list)  # uids attacking this turn
     _next_uid: int = 1
     log: list[dict] = field(default_factory=list)
+    # Game-long EVENT history for property queries ("Nick Fury's ability found a
+    # target", "its trigger put 2 lands into play"): dicts with at least
+    # {"turn", "kind", "name"}, plus "via"/"via_kind" (the resolving spell or
+    # ability that caused the effect) and kind-specific flags. See note_event().
+    events: list[dict] = field(default_factory=list)
+    # What is currently resolving, as (via_kind, source_name) —
+    # ("triggered"|"activated"|"spell"|"land_drop", name). Effects recorded
+    # while set are attributed to it. Managed by resolve_triggered_abilities /
+    # resolve_to_* / PlayLand and cleared when settle() hands back control.
+    resolving: tuple | None = None
+    # >0 while a stack ability's resolve() runs. Resolutions are ATOMIC:
+    # abilities that trigger during one are queued on the stack but only start
+    # resolving once the current resolution completes (nested settle calls
+    # defer — see resolve_triggered_abilities / settle).
+    _resolve_depth: int = 0
+    # Commander name(s) from the deck (stable — usable whether the commander is
+    # in the command zone, on the battlefield or anywhere else).
+    commander_names: tuple[str, ...] = ()
 
     # per-turn HISTORY (never reset — lets properties describe past states, e.g.
     # "a card went to the graveyard on every turn"). Keyed by turn number.
@@ -200,9 +254,14 @@ class GameState:
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
             storm_count=self.storm_count,
+            energy=self.energy,
             attackers=list(self.attackers),
             _next_uid=self._next_uid,
             log=list(self.log),
+            events=list(self.events),  # entries are append-only, never mutated
+            resolving=self.resolving,
+            _resolve_depth=self._resolve_depth,
+            commander_names=self.commander_names,
             graveyard_by_turn={t: list(v) for t, v in self.graveyard_by_turn.items()},
             entered_by_turn={t: [dict(e) for e in v] for t, v in self.entered_by_turn.items()},
         )
@@ -233,6 +292,12 @@ class GameState:
             self.emit(f"{ability.name} (on the stack)")
 
     def resolve_triggered_abilities(self) -> list["GameState"] | None:
+        # Resolutions are ATOMIC: while an ability is resolving, anything that
+        # triggers is queued on the stack but does NOT start resolving — it
+        # extends the pending work that the OUTER loop picks up once the
+        # current resolution has fully completed.
+        if self._resolve_depth > 0:
+            return None
         branched = False
         states = [self]
         while True:
@@ -245,6 +310,16 @@ class GameState:
                     continue
                 progressed = True
                 ability = state.stack.pop()
+                if ability.kind == "triggered":
+                    state.note_event("trigger_resolved", ability.source_name or ability.label,
+                                     detail=ability.label)
+                # Attribute every effect of this resolution (permanents put
+                # into play, cards drawn...) to the resolving ability, and mark
+                # the resolution ATOMIC (nested settle calls defer; queued
+                # triggers resolve on a later iteration of THIS loop).
+                prev_resolving = state.resolving
+                state.resolving = (ability.kind, ability.source_name or ability.label)
+                state._resolve_depth += 1
                 # The ability's effects apply the moment it resolves: pop it,
                 # run the effect, and let the effect's own emit be the single
                 # replay frame (stack popped + effects applied together). Only
@@ -252,6 +327,8 @@ class GameState:
                 base_len = len(state.log)
                 branches = ability.resolve(state)
                 if branches is None:
+                    state._resolve_depth = 0
+                    state.resolving = prev_resolving
                     if len(state.log) == base_len:
                         state.emit(f"{ability.name} resolves")
                     state.check_deaths()
@@ -259,6 +336,8 @@ class GameState:
                     continue
                 branched = True
                 for branch in branches:
+                    branch._resolve_depth = 0  # clones carried the +1
+                    branch.resolving = prev_resolving
                     if len(branch.log) == base_len:
                         branch.emit(f"{ability.name} resolves")
                     branch.check_deaths()
@@ -269,6 +348,12 @@ class GameState:
         return states if branched else None
 
     def settle(self, branches: list["GameState"] | None = None) -> list["GameState"] | None:
+        # Called from inside an atomic resolution (e.g. put_on_battlefield with
+        # fire_etb=True in card code): defer — the queued abilities stay on the
+        # stack and resolve once the current resolution completes. The
+        # `resolving` context must survive, so no clearing here.
+        if self._resolve_depth > 0:
+            return branches
         states = branches or [self]
         branched = branches is not None
         out: list[GameState] = []
@@ -280,6 +365,10 @@ class GameState:
             else:
                 branched = True
                 out.extend(resolved)
+        # Control returns to the search: nothing is resolving anymore (clears
+        # the "spell"/"land_drop" contexts set by resolve_to_* / PlayLand).
+        for state in out:
+            state.resolving = None
         return out if branched else None
 
     def settle_nonbranching(self, context: str) -> None:
@@ -318,15 +407,26 @@ class GameState:
             p.impl.extra_land_drops(self, p) for p in self.battlefield
         )
 
+    def apply_entry_statics(self, entering: Permanent) -> None:
+        """Apply immediate entry-replacement statics (e.g. Spelunking / Horizon
+        Explorer's "lands you control enter untapped") to `entering`.
+
+        Idempotent — the untap checks the permanent's current tapped state, so
+        re-applying is a no-op. Called right before the frame that first shows
+        the permanent (in `put_on_battlefield` and when a land is played), so a
+        permanent that should enter untapped is shown untapped from the start
+        and never flashes tapped-then-untapped in the replay."""
+        for perm in list(self.battlefield):
+            if perm is not entering and perm in self.battlefield:
+                perm.impl.on_other_etb_immediate(self, perm, entering)
+
     def queue_entry_triggers(self, entering: list[Permanent]) -> None:
         """Apply immediate entry statics, then put all ETB abilities on the stack.
 
         `entering` may contain multiple permanents that entered simultaneously.
         """
         for ent in entering:
-            for perm in list(self.battlefield):
-                if perm is not ent and perm in self.battlefield:
-                    perm.impl.on_other_etb_immediate(self, perm, ent)
+            self.apply_entry_statics(ent)
 
         abilities: list[StackAbility] = []
         for ent in entering:
@@ -383,9 +483,11 @@ class GameState:
         for _ in range(n):
             if not self.library:
                 return
-            self.hand.append(self.library.pop(0))
+            card = self.library.pop(0)
+            self.hand.append(card)
             self.cards_drawn += 1
             self.cards_drawn_this_turn += 1
+            self.note_event("draw", card.name, card=card)  # attributed to the resolving effect
             nth = self.cards_drawn_this_turn
             self.queue_draw_triggers(nth)
 
@@ -422,21 +524,41 @@ class GameState:
         self.entered_by_turn.setdefault(self.turn, []).append({
             "name": perm.name,
             "is_creature": perm.is_creature_now,
-            "is_land": "land" in perm.type_line.lower(),
+            "is_land": perm.is_land,
             "is_token": perm.is_token,
         })
+        # Attributed effect event: which spell/ability put this into play. The
+        # card object rides along (immutable, never serialized) so properties
+        # can test any characteristic of what entered (.faces, .cmc, ...).
+        self.note_event("enter_battlefield", perm.name,
+                        is_land=perm.is_land, is_creature=perm.is_creature_now,
+                        is_token=perm.is_token, card=perm.card)
+        # Settle "enters untapped" replacements (Spelunking, Horizon Explorer)
+        # BEFORE announcing, so the entry frame already shows the final tapped
+        # state instead of flashing tapped first.
+        self.apply_entry_statics(perm)
         # Announce the entry BEFORE any ETB triggers fire, so the replay shows
         # the permanent entering first and its triggers (landfall, Amulet, ...)
         # resolving afterwards — not the other way round.
         if announce:
+            if not perm.tapped:
+                # A replacement untapped it — don't let the message still say
+                # "tapped" over an untapped tile.
+                announce = re.sub(r"\btapped\b", "untapped", announce)
             self.emit(announce)
         if fire_etb:
             self.queue_entry_triggers([perm])
             self.settle_nonbranching(f"direct battlefield entry of {perm.name}")
         return perm
 
-    def make_token(self, name: str, power: int, toughness: int, type_line: str) -> Permanent:
-        data = CardData(name=name, type_line=type_line, power=str(power), toughness=str(toughness))
+    def make_token(
+        self, name: str, power: int, toughness: int, type_line: str,
+        text: str | None = None,
+    ) -> Permanent:
+        if text is None:
+            text = _TOKEN_TEXT.get(name, "")
+        data = CardData(name=name, type_line=type_line, power=str(power),
+                        toughness=str(toughness), oracle_text=text)
         perm = self.put_on_battlefield(data, token=True, fire_etb=False)
         self.emit(f"create token {name} ({power}/{toughness})")
         return perm
@@ -447,6 +569,9 @@ class GameState:
             return
         self.battlefield.remove(perm)
         self.permanent_left_battlefield_this_turn = True
+        self.note_event("leave_battlefield", perm.name, to=to,
+                        is_land=perm.is_land, is_creature=perm.is_creature_now,
+                        is_token=perm.is_token, card=perm.card)
         # Auras attached to it die; equipment merely unattaches.
         for att in list(self.battlefield):
             if att.attached_to == perm.uid:
@@ -475,7 +600,7 @@ class GameState:
             # modifiers has no known toughness to die from — skip it.
             has_mods = (
                 perm.temp_toughness or perm.counters.get("+1/+1")
-                or perm.impl.dynamic_toughness(self, perm) is not None
+                or (perm.pt_impl or perm.impl).dynamic_toughness(self, perm) is not None
                 or any(eq.attached_to == perm.uid for eq in self.battlefield)
             )
             known = str(perm.face.toughness or "").lstrip("-").isdigit()
@@ -492,7 +617,7 @@ class GameState:
 
     # ---- effective stats (counters, temp mods, equipment, dynamic P/T) ------
     def effective_power(self, perm: Permanent) -> int:
-        base = perm.impl.dynamic_power(self, perm)
+        base = (perm.pt_impl or perm.impl).dynamic_power(self, perm)
         if base is None:
             base = perm.base_power()
         val = base + perm.counters.get("+1/+1", 0) + perm.temp_power
@@ -502,7 +627,7 @@ class GameState:
         return val
 
     def effective_toughness(self, perm: Permanent) -> int:
-        base = perm.impl.dynamic_toughness(self, perm)
+        base = (perm.pt_impl or perm.impl).dynamic_toughness(self, perm)
         if base is None:
             base = perm.base_toughness()
         val = base + perm.counters.get("+1/+1", 0) + perm.temp_toughness
@@ -512,7 +637,144 @@ class GameState:
         return val
 
     def has_keyword(self, perm: Permanent, kw: str) -> bool:
-        return kw.lower() in [k.lower() for k in perm.card.keywords]
+        k = kw.lower()
+        return k in (x.lower() for x in perm.card.keywords) or k in perm.temp_keywords
+
+    # ---- energy (a pool: gained/spent, never emptied by phases) -------------
+    def add_energy(self, n: int) -> None:
+        self.energy += n
+        self.emit(f"gain {n} energy ({{E}}×{self.energy} total)")
+
+    def pay_energy(self, n: int) -> bool:
+        if self.energy < n:
+            return False
+        self.energy -= n
+        return True
+
+    # ---- game events (ability / spell outcomes) -----------------------------
+    def note_event(self, kind: str, name: str, detail: str | None = None, **extra) -> None:
+        """Record a game event for property queries. Kinds noted by the engine:
+        "activated" (an activated ability was paid and put on the stack),
+        "trigger_resolved" (a triggered ability resolved), "spell_resolved"
+        (a spell finished resolving), "enter_battlefield" / "leave_battlefield"
+        (with is_land/is_creature/is_token flags and the destination) and
+        "draw". Effect events carry "via"/"via_kind" — the resolving spell or
+        ability that caused them. Card implementations additionally note
+        "ability_success" when the ability actually achieved its purpose
+        (found a target, put a card onto the battlefield, ...)."""
+        via_kind, via = self.resolving or (None, None)
+        self.events.append({"turn": self.turn, "kind": kind, "name": name,
+                            "detail": detail, "via": via, "via_kind": via_kind,
+                            **extra})
+
+    def events_matching(
+        self,
+        kind: str | None = None,
+        name: str | None = None,
+        turn: int | None = None,
+        via: str | None = None,
+        via_kind: str | None = None,
+        pred=None,
+    ) -> list[dict]:
+        """Events filtered by kind, name / cause-name substrings
+        (case-insensitive), turn, cause kind, and/or an arbitrary predicate.
+        Each event: {"turn", "kind", "name", "via", "via_kind", ...}."""
+        name_l = name.lower() if name else None
+        via_l = via.lower() if via else None
+        return [
+            e for e in self.events
+            if (kind is None or e["kind"] == kind)
+            and (name_l is None or name_l in (e.get("name") or "").lower())
+            and (via_l is None or via_l in (e.get("via") or "").lower())
+            and (via_kind is None or e.get("via_kind") == via_kind)
+            and (turn is None or e["turn"] == turn)
+            and (pred is None or pred(e))
+        ]
+
+    def count_events(self, **filters) -> int:
+        """Count events matching the `events_matching` filters."""
+        return len(self.events_matching(**filters))
+
+    def permanents_put_by(
+        self,
+        source: str,
+        *,
+        via_kind: str | None = None,
+        land: bool | None = None,
+        creature: bool | None = None,
+        token: bool | None = None,
+        turn: int | None = None,
+    ) -> int:
+        """How many permanents entered the battlefield because a spell or
+        ability of `source` (name substring) resolved. `via_kind` narrows the
+        cause: "triggered" | "activated" | "spell" | "land_drop"; land /
+        creature / token filter what entered. e.g. "the commander's triggered
+        ability put at least 2 lands into play" ->
+        permanents_put_by(state.commander_name(), via_kind="triggered", land=True) >= 2."""
+        def ok(e):
+            if land is not None and e.get("is_land") != land:
+                return False
+            if creature is not None and e.get("is_creature") != creature:
+                return False
+            if token is not None and e.get("is_token") != token:
+                return False
+            return True
+        return self.count_events(kind="enter_battlefield", via=source,
+                                 via_kind=via_kind, turn=turn, pred=ok)
+
+    def cards_put_by(
+        self, source: str, *, via_kind: str | None = None, turn: int | None = None
+    ) -> list[CardData]:
+        """The CARD OBJECTS put onto the battlefield by a resolving spell or
+        ability of `source` — inspect any characteristic freely (.type_line,
+        .cmc, .faces / .is_double_faced, .colors, ...). e.g. "the commander's
+        activated ability put a double-sided card into play" ->
+        any(c.is_double_faced for c in
+            cards_put_by(state.commander_name(), via_kind="activated"))."""
+        return [
+            e["card"] for e in self.events_matching(
+                kind="enter_battlefield", via=source, via_kind=via_kind, turn=turn)
+            if e.get("card") is not None
+        ]
+
+    def cards_drawn_by(self, source: str, turn: int | None = None) -> int:
+        """How many cards were drawn because a spell or ability of `source`
+        (name substring) resolved."""
+        return self.count_events(kind="draw", via=source, turn=turn)
+
+    def commander_name(self) -> str:
+        """The deck's (first) commander name, wherever the card currently is."""
+        return self.commander_names[0] if self.commander_names else ""
+
+    def ability_activated(self, source: str, turn: int | None = None) -> bool:
+        """An activated ability of `source` (name substring) was activated."""
+        return bool(self.events_matching("activated", source, turn))
+
+    def ability_succeeded(self, source: str, turn: int | None = None) -> bool:
+        """An ability of `source` achieved its purpose (implementation-noted:
+        e.g. Nick Fury's power-up actually put a card onto the battlefield)."""
+        return bool(self.events_matching("ability_success", source, turn))
+
+    def played_on(self, name: str, turn: int | None = None) -> bool:
+        """A card named like `name` (substring, case-insensitive) was played or
+        cast during `turn` (None = any turn): it entered the battlefield (not
+        as a token) or its spell resolved. Game-long event history, so this can
+        be checked at ANY later moment — e.g. "Deadpool, Trading Card is played
+        on turn 4", verified at the end step of turn 6:
+        played_on("Deadpool, Trading Card", 4)."""
+        return bool(
+            self.events_matching(kind="enter_battlefield", name=name, turn=turn,
+                                 pred=lambda e: not e.get("is_token"))
+            or self.events_matching(kind="spell_resolved", name=name, turn=turn)
+        )
+
+    def spell_resolved(self, name: str, turn: int | None = None) -> bool:
+        """A spell named like `name` finished resolving (not countered)."""
+        return bool(self.events_matching("spell_resolved", name, turn))
+
+    def trigger_resolved(self, source: str, turn: int | None = None) -> bool:
+        """A triggered ability from `source` resolved."""
+        return bool(self.events_matching("trigger_resolved", source, turn))
 
     # ==== property-facing query API (keep stable) ==========================
     def battlefield_cards(self) -> list[CardData]:
@@ -529,11 +791,44 @@ class GameState:
         return [p for p in self.battlefield
                 if p.name.lower() == name.lower() or p.card.name.lower() == name.lower()]
 
+    def count_permanents(
+        self,
+        *,
+        type_contains: str | None = None,
+        name_contains: str | None = None,
+        tapped: bool | None = None,
+        transformed: bool | None = None,
+        token: bool | None = None,
+        commander: bool | None = None,
+    ) -> int:
+        """Count battlefield permanents by type line and state. Matching is
+        against the ACTIVE face (a transformed/flipped DFC matches its back
+        face's name and types); string filters are case-insensitive substrings,
+        state filters are optional booleans. e.g. "a flipped Hero creature is
+        in play" -> count_permanents(type_contains="Hero", transformed=True) >= 1.
+        """
+        n = 0
+        for p in self.battlefield:
+            if type_contains is not None and type_contains.lower() not in p.type_line.lower():
+                continue
+            if name_contains is not None and name_contains.lower() not in p.name.lower():
+                continue
+            if tapped is not None and p.tapped != tapped:
+                continue
+            if transformed is not None and p.transformed != transformed:
+                continue
+            if token is not None and p.is_token != token:
+                continue
+            if commander is not None and p.is_commander != commander:
+                continue
+            n += 1
+        return n
+
     def commander_in_play(self) -> bool:
         return any(p.is_commander for p in self.battlefield)
 
     def lands_in_play(self) -> int:
-        return sum(1 for p in self.battlefield if "land" in p.type_line.lower())
+        return sum(1 for p in self.battlefield if p.is_land)
 
     def creatures_in_play(self) -> int:
         return sum(1 for p in self.battlefield if p.is_creature_now)
@@ -626,6 +921,7 @@ class GameState:
             "phase": self.phase.value,
             "life": self.life,
             "opponent_life": self.opponent_life,
+            "energy": self.energy,
             "library": len(self.library),
             "hand": [c.name for c in self.hand],
             "command_zone": [c.name for c in self.command_zone],
@@ -641,12 +937,25 @@ class GameState:
                     "is_aura": "aura" in p.type_line.lower(),
                     "tapped": p.tapped,
                     "sick": p.summoning_sick,
-                    "is_land": "land" in p.type_line.lower(),
+                    "is_land": p.is_land,
+                    "is_lander": p.is_lander,
                     "is_creature": p.is_creature_now,
                     "commander": p.is_commander,
                     "token": p.is_token,
-                    "counters": {k: v for k, v in p.counters.items() if v},
+                    # Underscore-prefixed counters are internal bookkeeping
+                    # (e.g. "_powered_up" moved by Deadpool's text exchange) —
+                    # never shown as badges.
+                    "counters": {k: v for k, v in p.counters.items()
+                                 if v and not k.startswith("_")},
                     "attacking": p.uid in self.attackers,
+                    # Tokens have no card image: ship what the tile needs to
+                    # render a composed card face (type, textbox, P/T).
+                    **({
+                        "type_line": p.type_line,
+                        "text": p.card.oracle_text,
+                        "power": self.effective_power(p) if p.is_creature_now else None,
+                        "toughness": self.effective_toughness(p) if p.is_creature_now else None,
+                    } if p.is_token else {}),
                 }
                 for p in self.battlefield
             ],
@@ -675,6 +984,7 @@ def new_game_from_deck(deck: Deck, *, on_the_play: bool = True) -> GameState:
         state.library.extend([entry.card] * entry.quantity)
 
     state.commander_color_identity = tuple(sorted(identity))
+    state.commander_names = tuple(e.card.name for e in deck.commanders)
     return state
 
 

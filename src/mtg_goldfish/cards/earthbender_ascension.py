@@ -22,7 +22,7 @@ class EarthbenderAscension(Card):
         )
 
     def other_etb_stack_items(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return []
 
         def resolve(st, uid=perm.uid, entering_uid=entering.uid):
@@ -41,7 +41,7 @@ class EarthbenderAscension(Card):
         )]
 
     def on_other_etb(self, state, perm, entering):
-        if "land" not in entering.type_line.lower():
+        if not entering.is_land:
             return
         perm.counters["quest"] = perm.counters.get("quest", 0) + 1
         if perm.counters["quest"] >= 4:

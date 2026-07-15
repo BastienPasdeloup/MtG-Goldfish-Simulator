@@ -14,10 +14,10 @@ class LumraBellowOfTheWoods(Card):
     card_name = "Lumra, Bellow of the Woods"
 
     def dynamic_power(self, state, perm):
-        return sum(1 for p in state.battlefield if "land" in p.type_line.lower())
+        return sum(1 for p in state.battlefield if p.is_land)
 
     def dynamic_toughness(self, state, perm):
-        return sum(1 for p in state.battlefield if "land" in p.type_line.lower())
+        return sum(1 for p in state.battlefield if p.is_land)
 
     def on_etb(self, state, permanent):
         state.mill(4)

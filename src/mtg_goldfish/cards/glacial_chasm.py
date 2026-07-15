@@ -37,7 +37,7 @@ class GlacialChasm(Card):
     def on_etb(self, state, permanent):
         lands = {}
         for p in state.battlefield:
-            if p.uid != permanent.uid and "land" in p.type_line.lower() and p.name not in lands:
+            if p.uid != permanent.uid and p.is_land and p.name not in lands:
                 lands[p.name] = p.uid
         if not lands:
             return None

@@ -30,7 +30,7 @@ class AridArchway(Card):
 
     def on_etb(self, state, permanent):
         others = [p for p in state.battlefield
-                  if p.uid != permanent.uid and "land" in p.type_line.lower()]
+                  if p.uid != permanent.uid and p.is_land]
         if not others:
             target = permanent  # no other land — must return Arid Archway itself
         else:

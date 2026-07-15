@@ -89,6 +89,8 @@ class CardAction:
         if self._pre_fn is not None and not self._pre_fn(state):
             return None
         source_name = self._source_name or _stack_source_from_label(self.label)
+        # Property-visible event: this card's activated ability was activated.
+        state.note_event("activated", source_name, detail=self.label)
 
         def resolve(st):
             return self._fn(st)
@@ -177,6 +179,24 @@ class Card:
         """Choice of how a land/permanent enters. Each mode is a dict:
         {"label": str, "tapped": bool, "life": int, "choice": any}.
         `None` = single default mode (etb_tapped decides tapped)."""
+        return None
+
+    def on_enter_choice(self, state: "GameState", perm: "Permanent") -> None:
+        """Apply an "as it enters" replacement that depends on the entering
+        mode/choice (`perm.chosen`), e.g. Vesuva entering as a copy of a land.
+
+        Runs the instant the permanent enters — after the `etb_modes` choice is
+        settled, before the entry frame and any ETB triggers — so it is NOT an
+        ability on the stack. Each choice is already its own `etb_modes` branch,
+        so this never needs to branch itself."""
+
+    def enter_choices(self, state: "GameState", perm: "Permanent") -> list["GameState"] | None:
+        """"As it enters" choices that FAN OUT into branches (e.g. Deadpool
+        exchanging text boxes with up to one creature). Called the moment the
+        permanent enters, BEFORE its ETB triggers are queued — the choice is
+        part of entering, never an ability on the stack, and the queued ETBs
+        reflect the applied choice. Return the branch states (each with the
+        choice already applied), or None when there is nothing to choose."""
         return None
 
     def enters_with_counters(self, state: "GameState") -> dict[str, int]:

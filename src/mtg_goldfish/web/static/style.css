@@ -99,7 +99,7 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .model-head { display: flex; align-items: baseline; gap: .5rem; }
 .model-foot { font-size: 12px; margin-top: .35rem; }
 
-#hover-img { position: fixed; z-index: 50; pointer-events: none; display: none; max-width: 264px; }
+#hover-img { position: fixed; z-index: 200; pointer-events: none; display: none; max-width: 264px; } /* above modals */
 #hover-img img { width: 244px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.6); display: block; }
 #hover-img .hover-meta { margin-top: .45rem; padding: .5rem .6rem; border-radius: 10px; background: rgba(15,17,22,.94); border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,.35); font-size: 12px; color: #e6e8ee; max-width: 244px; white-space: normal; display: none; }
 #hover-img .hover-meta .k { color: #9aa3b2; display: block; margin-bottom: .15rem; }
@@ -120,9 +120,37 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
 .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent-2); }
-.prop-stat { display: flex; justify-content: space-between; padding: .25rem 0; border-bottom: 1px solid var(--border); }
+.prop-stat { display: flex; justify-content: space-between; gap: .8rem; padding: .25rem 0; border-bottom: 1px solid var(--border); }
+.prop-stat b { white-space: nowrap; flex-shrink: 0; }
 
 .log { background: #0f1116; border: 1px solid var(--border); border-radius: 6px; padding: .5rem; max-height: 300px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
+
+/* Simulation / Fixed-hand tabs */
+.tabs { display: flex; gap: .3rem; margin-bottom: .8rem; border-bottom: 1px solid var(--border); }
+.tabs .tab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; color: var(--muted); margin-bottom: -1px; }
+.tabs .tab:hover { color: var(--text); border-color: var(--border); }
+.tabs .tab.active { color: var(--text); font-weight: 600; background: var(--panel-2); border-color: var(--border); border-bottom-color: var(--panel); }
+
+/* Fixed-hand builder */
+.hand-minis { display: flex; flex-wrap: wrap; gap: .35rem; margin: .25rem 0 .1rem; }
+.mini { width: 58px; height: 81px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); background: var(--panel-2); position: relative; }
+.mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mini .fallback { padding: 4px; font-size: 9px; line-height: 1.1; color: var(--text); }
+.mini:not(.back) { cursor: pointer; }
+.mini:not(.back):hover { outline: 2px solid var(--bad); }
+/* Stylised card back for the slots not selected yet */
+.mini.back { background: radial-gradient(ellipse at center, #5a4634 0%, #3a2d20 60%, #241b12 100%); display: flex; align-items: center; justify-content: center; }
+.mini.back::after { content: ""; width: 68%; height: 55%; border-radius: 50%; border: 2px solid rgba(217, 164, 65, .35); }
+.pad-row { margin-top: .5rem; align-items: center; }
+.pad-size { display: inline-flex; align-items: center; gap: .35rem; }
+.sep { border-top: 1px solid var(--border); margin: .7rem 0 .8rem; }
+.fixed-picker { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: .3rem; margin-top: .25rem; }
+.picker-row { display: flex; align-items: center; gap: .4rem; padding: .15rem .25rem; border-radius: 4px; }
+.picker-row.chosen { background: var(--panel-2); }
+.picker-row .step { padding: 0 .5rem; font-size: 14px; line-height: 1.5; min-width: 1.7rem; }
+.picker-count { min-width: 1rem; text-align: center; font-variant-numeric: tabular-nums; }
+.picker-name { flex: 1; cursor: default; }
+.picker-qty { font-size: 11px; }
 
 /* mana pips (used for the board mana pool) */
 .pip {
@@ -133,13 +161,19 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .pip.W { background: #f7f0dc; } .pip.U { background: #a9cbe8; } .pip.B { background: #b3a9a2; }
 .pip.R { background: #eda28c; } .pip.G { background: #9fcf9a; } .pip.C, .pip.N { background: #c9ced6; }
 .pip.X { background: #c9ced6; }
+.pip.E { background: #ffd479; }
 
 /* board viewer (MTGO-like) */
 .board-toolbar { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; flex-wrap: wrap; }
-.board-toolbar .desc { color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; }
 .board { background: #0f1116; border: 1px solid var(--border); border-radius: 8px; padding: .6rem; }
-.board-header { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
-.board-header .turn { font-weight: 700; color: var(--accent); }
+/* Header lines: 1) phase + current step (bordered — separates the step from
+   the counters), 2) integers, 3) pools (no border before the board areas). */
+.board-header { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .3rem; }
+.board-header.step-line { flex-wrap: nowrap; align-items: baseline; margin-bottom: .5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+.board-header .turn { font-weight: 700; color: var(--accent); white-space: nowrap; }
+/* The step stays to the RIGHT of the phase: it takes the remaining width and
+   wraps inside its own column instead of dropping to a new line. */
+.board-header .action { flex: 1; min-width: 0; color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: break-word; }
 .board-header .k { color: var(--muted); font-size: 11px; text-transform: uppercase; }
 /* MTGO-like board grid: exile + graveyard piles on the left, field centre
    (lands below the other permanents), command zone + stack on the right,
@@ -192,7 +226,13 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .tile .ctr-row { position: absolute; bottom: 2px; left: 2px; right: 2px; display: flex; flex-wrap: wrap; gap: 2px; pointer-events: none; }
 .tile .badge.ctr { position: static; background: var(--accent-2); color: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
 .tile .badge.ctr.neg { background: var(--bad, #e05561); }
-.tile.sick::after { content: "✦"; position: absolute; bottom: 2px; right: 3px; color: #ffd479; font-size: 11px; }
+/* Composed token face (tokens have no card image) */
+.tile.token-card { background: linear-gradient(160deg, #3a3f4d, #262a34); }
+.tok-face { display: flex; flex-direction: column; height: 100%; padding: 3px 4px; text-align: left; }
+.tok-name { font-size: 9px; font-weight: 700; line-height: 1.15; }
+.tok-type { font-size: 7px; color: var(--muted); line-height: 1.15; border-bottom: 1px solid var(--border); padding-bottom: 1px; margin-bottom: 1px; }
+.tok-text { font-size: 7px; line-height: 1.2; flex: 1; overflow: hidden; }
+.tok-pt { align-self: flex-end; font-size: 9px; font-weight: 700; background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; }
 /* A host permanent with auras/equipment stacked behind it. Reserve room at the
    top-right for the attached cards to peek out from behind the host. */
 .perm-stack { position: relative; flex: 0 0 auto; margin: 14px 16px 0 0; }
@@ -202,7 +242,6 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .tiles.hand, .tiles.small { min-height: 81px; }
 .zone-inline { display: flex; gap: 1.2rem; flex-wrap: wrap; }
 .pool-pips { display: inline-flex; gap: 2px; }
-.counter-chip { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: .05rem .5rem; }
 .session-list-item { display: flex; gap: .6rem; align-items: center; padding: .4rem .2rem; border-bottom: 1px solid var(--border); }
 .hidden { display: none; }
 .err { color: var(--bad); }
@@ -212,6 +251,8 @@ button.ghost { background: transparent; font-size: 12px; padding: .3rem .55rem; 
 .modal-overlay.hidden { display: none; }  /* beats .modal-overlay's display:flex */
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; width: min(1100px, 94vw); max-height: 86vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
 .modal-head { display: flex; align-items: center; gap: .5rem; padding: .8rem 1rem; border-bottom: 1px solid var(--border); }
+.bug-steps { margin: 0; padding-left: 1.2rem; }
+.bug-steps > li { margin-bottom: .8rem; }
 .modal-body { overflow: auto; padding: .5rem 1rem 1rem; }
 table.runs { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.runs th, table.runs td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -247,7 +288,8 @@ table.viz-runs tbody tr.run-row.active { background: rgba(217,164,65,.14); outli
 
 /* floating grid of the opening-hand images (hand-icon hover) */
 #hover-grid {
-  position: fixed; z-index: 60; display: none; pointer-events: none;
+  /* above .modal-overlay (z-index 100) so previews work inside modals too */
+  position: fixed; z-index: 200; display: none; pointer-events: none;
   grid-template-columns: repeat(auto-fit, 92px); gap: 6px;
   max-width: 500px; padding: 8px; border-radius: 10px;
   background: rgba(20,22,27,.97); border: 1px solid var(--border);
@@ -255,3 +297,8 @@ table.viz-runs tbody tr.run-row.active { background: rgba(217,164,65,.14); outli
 }
 #hover-grid img { width: 92px; border-radius: 6px; display: block; }
 #hover-grid .gfallback { width: 92px; font-size: 10px; color: var(--muted); padding: 4px; }
+/* Card back for random-padding slots (same look as the builder's minis) */
+#hover-grid .gback { width: 92px; height: 128px; border-radius: 6px; border: 1px solid var(--border);
+  background: radial-gradient(ellipse at center, #5a4634 0%, #3a2d20 60%, #241b12 100%);
+  display: flex; align-items: center; justify-content: center; }
+#hover-grid .gback::after { content: ""; width: 68%; height: 55%; border-radius: 50%; border: 2px solid rgba(217, 164, 65, .35); }

@@ -11,6 +11,7 @@ import base64
 import gzip
 import json
 import threading
+import time
 
 from ..engine.simulator import (
     GameOutcome,
@@ -19,7 +20,7 @@ from ..engine.simulator import (
     run_simulation,
 )
 from ..properties import compile_all
-from ..session import Session, SessionStore, SimConfig, SimResult, new_id, now_iso
+from ..session import Session, SessionCorrupt, SessionStore, SimConfig, SimResult, new_id, now_iso
 from .hub import HUB
 
 
@@ -96,42 +97,82 @@ class SimulationRunner:
         self._runs[session.id] = handle
         result_id = new_id()
 
+        # The run appears in "previous runs" the moment it starts (seed is
+        # decided): create + persist the entry NOW, then keep updating it for
+        # as long as the run is running.
+        initial = SimResult(
+            id=result_id,
+            created_at=now_iso(),
+            config=config,
+            status="running",
+            properties=[p.model_copy() for p in session.properties if p.enabled],
+            stats={"total_games": config.num_games, "games_run": 0, "successes": 0,
+                   "timeouts": 0, "success_rate": 0.0, "per_property": {}},
+        )
+        fresh = self.store.load(session.id)
+        fresh.results.append(initial)
+        self.store.save(fresh)
+
         def worker() -> None:
             sample_runs: list[dict] = []
+            last_stats: dict = initial.stats
+            last_save = time.monotonic()
+
+            def persist(status: str) -> None:
+                # Reload to avoid clobbering concurrent edits, then update the
+                # entry in place and save.
+                try:
+                    fresh = self.store.load(session.id)
+                except (FileNotFoundError, SessionCorrupt):
+                    return  # session deleted (or unrecoverable) mid-run
+                for r in fresh.results:
+                    if r.id == result_id:
+                        r.stats = last_stats
+                        r.sample_runs = sample_runs
+                        # Mirror the winning lines into the legacy field so
+                        # older consumers keep working.
+                        r.sample_success_logs = [x["log"] for x in sample_runs if x["success"]]
+                        r.status = status
+                        break
+                self.store.save(fresh)
 
             def on_game(outcome: GameOutcome, stats: SimulationStats) -> None:
                 # Every game gets a row (successes carry their winning line).
                 # Trees carry a board snapshot per node, so they are stored
                 # gzip+base64 compressed (highly repetitive JSON, ~20x smaller);
                 # the frontend inflates them with DecompressionStream.
+                nonlocal last_stats, last_save
                 tree_gz = None
                 if outcome.tree is not None:
                     raw = dumps_tree(outcome.tree).encode()
                     tree_gz = base64.b64encode(gzip.compress(raw, 6)).decode("ascii")
-                sample_runs.append({
+                run = {
                     "game_index": outcome.game_index,
                     "success": outcome.success,
                     "timed_out": outcome.timed_out,
-                    "node_capped": outcome.node_capped,
                     "hand": outcome.opening_hand,
                     "branches_explored": outcome.branches_explored,
                     "branches_considered": outcome.branches_considered,
                     "tree_gz": tree_gz,
                     "tree_truncated": outcome.tree_truncated,
                     "log": outcome.sample_log if outcome.success else [],
-                })
+                }
+                sample_runs.append(run)
+                last_stats = stats.as_dict()
+                # Persist progress (throttled — the session file is sizeable).
+                if time.monotonic() - last_save > 2.0:
+                    last_save = time.monotonic()
+                    persist("running")
                 HUB.broadcast_threadsafe(
                     loop,
                     session.id,
                     {
                         "type": "progress",
                         "result_id": result_id,
-                        "stats": stats.as_dict(),
-                        "last_game": {
-                            "index": outcome.game_index,
-                            "success": outcome.success,
-                            "timed_out": outcome.timed_out,
-                        },
+                        "stats": last_stats,
+                        # The finished game's full row, so the table can be
+                        # populated live while the search keeps running.
+                        "run": run,
                     },
                 )
 
@@ -142,31 +183,34 @@ class SimulationRunner:
                 on_the_play=config.on_the_play,
                 base_seed=config.base_seed,
                 search_mode=config.search_mode,
+                fixed_hand=config.fixed_hand,
+                fixed_hand_pad_to=config.fixed_hand_pad_to,
             )
-            stats = run_simulation(
-                session.deck,
-                compiled,
-                sim_config,
-                on_game=on_game,
-                should_stop=handle.stop.is_set,
-            )
+            status = "stopped"
+            try:
+                stats = run_simulation(
+                    session.deck,
+                    compiled,
+                    sim_config,
+                    on_game=on_game,
+                    should_stop=handle.stop.is_set,
+                )
+                last_stats = stats.as_dict()
+                status = "stopped" if handle.stop.is_set() else "done"
+            finally:
+                # Final (or crash/cancel) state of the entry.
+                persist(status)
 
             result = SimResult(
                 id=result_id,
-                created_at=now_iso(),
+                created_at=initial.created_at,
                 config=config,
-                properties=[p.model_copy() for p in session.properties if p.enabled],
-                stats=stats.as_dict(),
+                status=status,
+                properties=initial.properties,
+                stats=last_stats,
                 sample_runs=sample_runs,
-                # Mirror the winning lines into the legacy field so older
-                # consumers keep working.
                 sample_success_logs=[r["log"] for r in sample_runs if r["success"]],
             )
-            # Reload to avoid clobbering concurrent edits, then append + persist.
-            fresh = self.store.load(session.id)
-            fresh.results.append(result)
-            self.store.save(fresh)
-
             HUB.broadcast_threadsafe(
                 loop,
                 session.id,
