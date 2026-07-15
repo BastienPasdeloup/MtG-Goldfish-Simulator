@@ -654,11 +654,15 @@ class GameState:
     # ---- game events (ability / spell outcomes) -----------------------------
     def note_event(self, kind: str, name: str, detail: str | None = None, **extra) -> None:
         """Record a game event for property queries. Kinds noted by the engine:
+        "cast" (a spell was cast — put on the stack — from hand/command/exile/
+        graveyard), "play_land" (a land was played as a land drop),
         "activated" (an activated ability was paid and put on the stack),
         "trigger_resolved" (a triggered ability resolved), "spell_resolved"
         (a spell finished resolving), "enter_battlefield" / "leave_battlefield"
         (with is_land/is_creature/is_token flags and the destination) and
-        "draw". Effect events carry "via"/"via_kind" — the resolving spell or
+        "draw". Note that "cast"/"play_land" (the ACT of playing) are distinct
+        from "enter_battlefield" (a permanent hitting the battlefield, however
+        it got there). Effect events carry "via"/"via_kind" — the resolving spell or
         ability that caused them. Card implementations additionally note
         "ability_success" when the ability actually achieved its purpose
         (found a target, put a card onto the battlefield, ...)."""
@@ -755,32 +759,69 @@ class GameState:
         e.g. Nick Fury's power-up actually put a card onto the battlefield)."""
         return bool(self.events_matching("ability_success", source, turn))
 
-    def played_on(self, name: str, turn: int | None = None,
-                  min_turn: int | None = None, max_turn: int | None = None) -> bool:
-        """A card named like `name` (substring, case-insensitive) was played or
-        cast: it entered the battlefield (not as a token) or its spell
-        resolved. Restrict the moment with `turn` (exactly that turn) or an
-        inclusive `min_turn`/`max_turn` range. Game-long event history, so this
-        can be checked at ANY later moment. Examples:
-          "played on turn 4"              -> played_on(name, 4)
-          "came into play before turn 4"  -> played_on(name, max_turn=3)
-          "played between turns 2 and 4"  -> played_on(name, min_turn=2, max_turn=4)
-        """
+    @staticmethod
+    def _turn_range_pred(min_turn: int | None, max_turn: int | None):
         def in_range(e) -> bool:
             if min_turn is not None and e["turn"] < min_turn:
                 return False
             if max_turn is not None and e["turn"] > max_turn:
                 return False
             return True
+        return in_range
+
+    def played_on(self, name: str, turn: int | None = None,
+                  min_turn: int | None = None, max_turn: int | None = None) -> bool:
+        """A card named like `name` (substring, case-insensitive) was PLAYED or
+        CAST by you — a spell you cast (put on the stack) or a land you played
+        (a land drop). This is the ACT of playing the card.
+
+        IMPORTANT: this is NOT the same as the card ENTERING the battlefield.
+        A permanent can enter without being played (fetched, reanimated, put
+        into play by another effect, or a token); a spell can be cast and then
+        countered so it never enters. Use `entered_battlefield` for "X entered
+        the battlefield" and this for "X was played/cast".
+
+        Restrict the moment with `turn` (exactly that turn) or an inclusive
+        `min_turn`/`max_turn` range. Game-long event history, so this can be
+        checked at ANY later moment. Examples:
+          "played on turn 4"              -> played_on(name, 4)
+          "cast/played before turn 4"     -> played_on(name, max_turn=3)
+          "played between turns 2 and 4"  -> played_on(name, min_turn=2, max_turn=4)
+        """
+        in_range = self._turn_range_pred(min_turn, max_turn)
         return bool(
-            self.events_matching(kind="enter_battlefield", name=name, turn=turn,
-                                 pred=lambda e: not e.get("is_token") and in_range(e))
-            or self.events_matching(kind="spell_resolved", name=name, turn=turn,
-                                    pred=in_range)
+            self.events_matching(kind="cast", name=name, turn=turn, pred=in_range)
+            or self.events_matching(kind="play_land", name=name, turn=turn, pred=in_range)
         )
 
+    def cast_on(self, name: str, turn: int | None = None,
+                min_turn: int | None = None, max_turn: int | None = None) -> bool:
+        """A SPELL named like `name` was CAST (put on the stack), whether or not
+        it later resolved. Lands are played, not cast — use `played_on` for
+        those. See `played_on` for why this differs from entering the
+        battlefield."""
+        in_range = self._turn_range_pred(min_turn, max_turn)
+        return bool(self.events_matching(kind="cast", name=name, turn=turn, pred=in_range))
+
+    def entered_battlefield(self, name: str, turn: int | None = None,
+                            min_turn: int | None = None, max_turn: int | None = None,
+                            token: bool | None = None, via_kind: str | None = None) -> bool:
+        """A permanent named like `name` ENTERED the battlefield (however it got
+        there — cast, played, fetched, reanimated, copied, a token...). This is
+        the ETB event, distinct from `played_on`/`cast_on` (the act of playing).
+        `token` filters token/non-token entries; `via_kind` narrows the cause
+        ("spell" | "land_drop" | "triggered" | "activated"). Restrict the moment
+        with `turn` or an inclusive `min_turn`/`max_turn` range."""
+        in_range = self._turn_range_pred(min_turn, max_turn)
+        return bool(self.events_matching(
+            kind="enter_battlefield", name=name, turn=turn, via_kind=via_kind,
+            pred=lambda e: in_range(e) and (token is None or e.get("is_token") == token)))
+
     def spell_resolved(self, name: str, turn: int | None = None) -> bool:
-        """A spell named like `name` finished resolving (not countered)."""
+        """A spell named like `name` finished resolving (was cast and not
+        countered). Distinct from `cast_on` (cast, maybe countered) and from
+        `entered_battlefield` (a permanent spell that resolved DID enter, but
+        an instant/sorcery resolves without entering)."""
         return bool(self.events_matching("spell_resolved", name, turn))
 
     def trigger_resolved(self, source: str, turn: int | None = None) -> bool:

@@ -25,6 +25,11 @@ class PropertySpec(BaseModel):
     english: str = ""
     code: str | None = None  # compiled `def check(state): ...`
     enabled: bool = True
+    # Set by the LLM compiler: how sure it is the code matches the English
+    # ("high" | "medium" | "low"), and a short note — resolved card names, or
+    # what extra detail would make the translation unambiguous.
+    confidence: str | None = None
+    compile_note: str | None = None
 
     def describe(self) -> str:
         return f"{self.timing.value} {self.phase} of turn {self.turn}: {self.english}"

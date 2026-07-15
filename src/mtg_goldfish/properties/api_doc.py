@@ -47,19 +47,35 @@ resolution actually did):
       # of a card whose name contains `source` was activated (optionally on `turn`)
   state.ability_succeeded(source: str, turn=None) -> bool  # ...and it achieved its
       # purpose (e.g. Nick Fury's power-up actually put a card onto the battlefield)
-  state.played_on(name: str, turn=None, min_turn=None, max_turn=None) -> bool
-      # a card named like `name` was played/cast: it entered the battlefield
-      # (tokens excluded) or its spell resolved. Restrict the moment with
-      # `turn` (exactly that turn) or the INCLUSIVE min_turn/max_turn range.
-      # Game-long history — usable at ANY later checkpoint. ALWAYS use this
-      # for "X is/was played on/before/between turn(s) ..." when the
-      # property's trigger moment is LATER (has_permanent_named + state.turn
+
+  ==== "played/cast" vs "entered the battlefield" — THESE ARE DIFFERENT ====
+  Playing/casting is an ACTION the player takes. Entering the battlefield is
+  what happens to a permanent — however it got there. They often coincide but
+  NOT always: a land you FETCH enters the battlefield but was never "played";
+  a creature you REANIMATE, or a TOKEN, enters but was never "cast"; a spell
+  that is COUNTERED was cast but never enters. Choose the helper that matches
+  the ENGLISH wording: "plays/casts X" -> played_on / cast_on; "X enters / comes
+  into play / is put onto the battlefield" -> entered_battlefield.
+  state.played_on(name, turn=None, min_turn=None, max_turn=None) -> bool
+      # the player PLAYED or CAST a card named like `name` — cast a spell OR
+      # played a land (a land drop). The act of playing, NOT entering play.
+  state.cast_on(name, turn=None, min_turn=None, max_turn=None) -> bool
+      # a SPELL named like `name` was CAST (put on the stack), even if later
+      # countered. Lands are played, not cast — use played_on for lands.
+  state.entered_battlefield(name, turn=None, min_turn=None, max_turn=None,
+                            token=None, via_kind=None) -> bool
+      # a permanent named like `name` ENTERED the battlefield, however it got
+      # there. token= filters token/non-token; via_kind= narrows the cause
+      # ("spell"|"land_drop"|"triggered"|"activated").
+      # All three take an exact `turn` OR an INCLUSIVE min_turn/max_turn range
+      # and read game-long history (usable at ANY later checkpoint — ALWAYS use
+      # these for "X was played/entered on/before/between turn(s) ..." when the
+      # property's trigger moment is LATER; has_permanent_named + state.turn
       # would never match there). Examples:
-      #   "played on turn 4"                  -> played_on(name, 4)
-      #   "came into play before turn 4"      -> played_on(name, max_turn=3)
-      #   "played between turns 2 and 4"      -> played_on(name, min_turn=2, max_turn=4)
-      #   "played by (on or before) turn 4"   -> played_on(name, max_turn=4)
-  state.spell_resolved(name: str, turn=None) -> bool   # the spell resolved (not countered)
+      #   "cast on turn 4"                     -> cast_on(name, 4)
+      #   "played before turn 4"               -> played_on(name, max_turn=3)
+      #   "entered play between turns 2 and 4" -> entered_battlefield(name, min_turn=2, max_turn=4)
+  state.spell_resolved(name: str, turn=None) -> bool   # cast AND resolved (not countered)
   state.trigger_resolved(source: str, turn=None) -> bool  # a triggered ability resolved
   Examples:
     # "the commander is in play, and its triggered ability has put at least
@@ -85,6 +101,13 @@ resolution actually did):
     # the game history, not the current board:
     def check(state):
         return state.played_on("Deadpool, Trading Card", 4)
+    # "a land entered the battlefield on turn 1 WITHOUT being played" (e.g. a
+    # fetched land) — entered but not a land drop:
+    def check(state):
+        return state.entered_battlefield("", turn=1, via_kind="triggered")  # fetched
+    # "you cast Lightning Bolt by turn 3" (cast — counts even if it fizzled):
+    def check(state):
+        return state.cast_on("Lightning Bolt", max_turn=3)
 
 Generic event access (to test ANYTHING that happened during the game):
   state.count_events(kind=None, name=None, via=None, via_kind=None,
@@ -93,10 +116,14 @@ Generic event access (to test ANYTHING that happened during the game):
   state.events -> the raw list. Each event is a dict with at least
       {"turn", "kind", "name", "via", "via_kind"} where via/via_kind identify
       the resolving spell or ability that caused it. Kinds:
+      "cast" (a spell was cast / put on the stack; + is_creature, is_land)
+      "play_land" (a land was played as a land drop)
       "enter_battlefield" / "leave_battlefield"  (+ is_land, is_creature,
           is_token; leave also has "to": "graveyard"|"exile"|"hand"|"none")
       "draw" (name = the card drawn)
       "activated", "trigger_resolved", "spell_resolved", "ability_success"
+      Remember: "cast"/"play_land" (the player's action) ≠ "enter_battlefield"
+      (a permanent hitting the battlefield, however it got there).
   Examples:
     # "at least two creatures died this game"
     def check(state):

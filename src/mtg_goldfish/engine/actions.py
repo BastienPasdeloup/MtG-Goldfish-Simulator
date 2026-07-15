@@ -166,6 +166,12 @@ def begin_cast(
         state.creature_spells_cast_this_turn += 1
     else:
         state.noncreature_spells_cast_this_turn += 1
+    # Property-visible event: the player CAST this spell (put it on the stack).
+    # This is distinct from the card entering the battlefield — a spell can be
+    # cast and then countered (never enters), and a permanent can enter without
+    # being cast (fetched, reanimated, a token). `played_on`/`cast_on` read this.
+    state.note_event("cast", card.name, card=card,
+                     is_creature=card.is_creature, is_land=card.is_land)
     state.emit(f"cast {card.name}{f' ({tag})' if tag else ''} (on the stack)")
     state.queue_cast_triggers(card)
     state.settle_nonbranching(f"cast triggers for {card.name}")
@@ -217,11 +223,27 @@ def resolve_to_graveyard(state: GameState, card) -> None:
 # --------------------------------------------------------------------------
 # Generic actions
 # --------------------------------------------------------------------------
+def _is_instant_speed(card) -> bool:
+    """Whether a card can be cast at instant speed (an instant, or any spell
+    with the Flash keyword). Sorceries, creatures and other permanents without
+    Flash are sorcery-speed. Uses the `keywords` list (not an oracle-text scan,
+    which would false-match "Flashback")."""
+    if card.is_instant:
+        return True
+    return any(k.lower() == "flash" for k in card.keywords)
+
+
 class Action:
     """A single legal decision. `apply` mutates the (already cloned) state in
-    place, or returns a list of branch states."""
+    place, or returns a list of branch states.
+
+    `sorcery_speed` gates WHEN the action may be taken: sorcery-speed actions
+    (lands, sorceries, most permanents) are only offered in a main phase with
+    the stack empty; instant-speed ones (instants, flash, most activated
+    abilities) are also offered in the instant-speed windows of other steps."""
 
     label: str = "action"
+    sorcery_speed: bool = True
 
     def apply(self, state: GameState):  # pragma: no cover - interface
         raise NotImplementedError
@@ -230,6 +252,7 @@ class Action:
 @dataclass
 class PassPhase(Action):
     label: str = "pass"
+    sorcery_speed: bool = False  # passing priority is always available
 
     def apply(self, state: GameState) -> None:
         state.emit("pass")
@@ -249,6 +272,10 @@ class PlayLand(Action):
         card = _find_in_zone(src, self.card_name)
         src.remove(card)
         state.lands_played_this_turn += 1
+        # Property-visible event: the player PLAYED this land (a land drop).
+        # Distinct from the land entering the battlefield — a land fetched or
+        # otherwise put into play was NOT "played". `played_on` reads this.
+        state.note_event("play_land", card.name, card=card, is_land=True)
         state.resolving = ("land_drop", card.name)  # cleared by the final settle
         perm = state.put_on_battlefield(card, fire_etb=False)
         perm.turn_flags["played_as_land"] = 1
@@ -316,12 +343,26 @@ class CastCommander(Action):
 
 
 # --------------------------------------------------------------------------
-# Legal-action enumeration (main phases)
+# Legal-action enumeration
 # --------------------------------------------------------------------------
-def legal_actions(state: GameState) -> list[Action]:
-    """All meaningful actions in the current main phase, plus passing.
+def _mark(actions: list[Action], instant: bool) -> list[Action]:
+    """Stamp a cast/play's speed (a cast of an instant/flash card is
+    instant-speed, everything else sorcery-speed)."""
+    for a in actions:
+        a.sorcery_speed = not instant
+    return actions
+
+
+def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Action]:
+    """Meaningful actions available with priority right now, plus passing.
     Choices are de-duplicated by card name so duplicates don't multiply the
-    branching factor."""
+    branching factor.
+
+    `sorcery_speed_ok` is True in a main phase (empty stack): sorcery-speed
+    plays (lands, sorceries, most permanents, equip) are allowed. It is False
+    in the instant-speed windows of other steps, where only instant-speed
+    actions (instants, flash, most activated abilities) — and passing — are
+    offered."""
     actions: list[Action] = []
     seen: set[str] = set()
     land_drop_ok = state.lands_played_this_turn < state.max_land_drops()
@@ -340,11 +381,12 @@ def legal_actions(state: GameState) -> list[Action]:
             else:
                 actions.append(PlayLand(card.name))
         elif not impl.is_land:
+            inst = _is_instant_speed(card)
             custom = impl.cast_actions(state)
             if custom is not None:
-                actions.extend(custom)
+                actions.extend(_mark(list(custom), inst))
             elif impl.is_castable(state) and can_afford(state, impl.cast_cost(state)):
-                actions.append(CastDefault(card.name))
+                actions.append(_mark([CastDefault(card.name)], inst)[0])
         actions.extend(impl.hand_actions(state))
 
     # --- commander(s) from the command zone ---
@@ -358,7 +400,7 @@ def legal_actions(state: GameState) -> list[Action]:
         base = impl.cast_cost(state)
         cost = ManaCost(generic=base.generic + tax, pips=base.pips)
         if can_afford(state, cost):
-            actions.append(CastCommander(card.name))
+            actions.append(_mark([CastCommander(card.name)], _is_instant_speed(card))[0])
 
     # --- from the graveyard (escape, bestow, ...) ---
     seen_gy: set[str] = set()
@@ -396,8 +438,16 @@ def legal_actions(state: GameState) -> list[Action]:
     for perm in list(state.battlefield):
         actions.extend(perm.impl.battlefield_actions(state, perm))
 
+    if not sorcery_speed_ok:
+        actions = [a for a in actions if not a.sorcery_speed]
     actions.append(PassPhase())
     return actions
+
+
+def _has_instant_actions(state: GameState) -> bool:
+    """Whether any instant-speed play (beyond passing) is available now — used
+    to decide if a non-main step is worth stopping at as a decision point."""
+    return len(legal_actions(state, sorcery_speed_ok=False)) > 1
 
 
 def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]:
@@ -418,6 +468,7 @@ def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]
                 if c in st.exile:
                     st.exile.remove(c)
                 st.lands_played_this_turn += 1
+                st.note_event("play_land", c.name, card=c, is_land=True)
                 perm = st.put_on_battlefield(c, fire_etb=False)
                 perm.turn_flags["played_as_land"] = 1
                 st.queue_entry_triggers([perm])
@@ -477,7 +528,11 @@ class DeclareAttackers(Action):
 
 
 def combat_actions(state: GameState) -> list[Action]:
-    """Actions at declare-attackers: attack all, or don't."""
+    """The declare-attackers option: attack with all able creatures, if any can
+    (passing/holding back is offered separately by the decision's PassPhase).
+    Returns `[]` when no creature can attack."""
+    if state.attackers:
+        return []  # attackers already declared this combat (declared once)
     if any(p.impl.prevents_attacks for p in state.battlefield):
         return []  # Glacial Chasm: creatures you control can't attack
     able = [
@@ -487,7 +542,7 @@ def combat_actions(state: GameState) -> list[Action]:
     ]
     if not able:
         return []
-    return [DeclareAttackers(), PassPhase()]
+    return [DeclareAttackers()]
 
 
 def deal_combat_damage(state: GameState) -> None:

@@ -155,6 +155,7 @@ class SimulationRunner:
                     "branches_considered": outcome.branches_considered,
                     "tree_gz": tree_gz,
                     "tree_truncated": outcome.tree_truncated,
+                    "bugs": outcome.bugs,
                     "log": outcome.sample_log if outcome.success else [],
                 }
                 sample_runs.append(run)

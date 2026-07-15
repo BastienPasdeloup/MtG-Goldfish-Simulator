@@ -122,16 +122,19 @@ async function init() {
   $("fixed-pad").onchange = renderFixedBuilder;
   $("fixed-pad-size").oninput = renderFixedBuilder; // slot count follows the size
 
-  // ← / → step through the game being visualized (like Prev / Next), unless
-  // the user is typing in a field (or focusing the range slider, which
-  // handles arrows natively).
+  // Keyboard nav while a game is open, unless the user is typing in a field
+  // (or focusing the range slider, which handles arrows natively):
+  //   ← / →  step through the frames of the current game (like Prev / Next)
+  //   ↑ / ↓  switch to the previous / next successful (replayable) game
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+    if (!keys.includes(e.key)) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
     if (!state.vizNav) return;
     e.preventDefault();
-    state.vizNav(e.key === "ArrowLeft" ? -1 : 1);
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") state.vizNav(e.key === "ArrowLeft" ? -1 : 1);
+    else stepGame(e.key === "ArrowUp" ? -1 : 1);
   });
 
   await loadSessionList();
@@ -577,6 +580,8 @@ function addProperty(p) {
     turn: 1,
     english: "",
     code: null,
+    confidence: null,
+    compile_note: null,
     enabled: true,
   });
 }
@@ -609,11 +614,26 @@ function propRow(p, i) {
   const trigger = el("div", { className: "row trigger" }, timing, phase, "of turn", turn, del);
 
   const ta = el("textarea", { rows: 2, placeholder: "e.g. the commander is in play and 4 non-creature spells have been cast this turn", value: p.english });
-  ta.oninput = () => { p.english = ta.value; p.code = null; };
+  // Editing the English invalidates the compiled code and its confidence/note.
+  ta.oninput = () => { p.english = ta.value; p.code = null; p.confidence = null; p.compile_note = null; };
 
   wrap.append(trigger, ta);
   if (p.code) {
-    wrap.append(el("label", { textContent: "generated code" }));
+    const label = el("label", { textContent: "Generated code" });
+    if (p.confidence) {
+      const c = p.confidence.toLowerCase();
+      label.append(el("span", {
+        className: "confidence conf-" + c,
+        textContent: c + " confidence",
+        title: "the model's confidence that this code matches your English",
+      }));
+    }
+    wrap.append(label);
+    // A clarification / resolved-names note from the compiler.
+    if (p.compile_note) {
+      const cls = (p.confidence || "").toLowerCase() === "low" ? "compile-note warn" : "compile-note";
+      wrap.append(el("div", { className: cls, textContent: p.compile_note }));
+    }
     wrap.append(el("pre", { textContent: p.code }));
   }
   return wrap;
@@ -910,7 +930,7 @@ function runsTable(runs) {
   // [header, alignment-class, sortable] triples.
   const COLS = [["#", "numc", true], ["Result", "cc", true], ["Hand", "cc", false],
     ["Steps", "numc", true], ["Explored", "numc", true], ["Considered", "numc", true],
-    ["Tree", "cc", false]];
+    ["Tree", "cc", false], ["Bugs", "cc", false]];
   const { key, dir } = state.runsSort;
   const thead = el("thead", {}, el("tr", {},
     ...COLS.map(([h, cls, sortable]) => {
@@ -962,6 +982,18 @@ function runsTable(runs) {
         })()
       : el("span", { className: "muted", textContent: "—" });
 
+    // Bugs: exceptions hit during this game's search. An icon opens the detail.
+    const nbugs = (run.bugs || []).length;
+    const bugCell = nbugs
+      ? (() => {
+          const b = el("span", { className: "icon-btn", textContent: "🐛",
+            title: `${nbugs} bug${nbugs > 1 ? "s" : ""} hit during the search — click for details` });
+          b.append(el("span", { className: "bug-count", textContent: String(nbugs) }));
+          b.onclick = (e) => { e.stopPropagation(); openBugs(run, i); };
+          return b;
+        })()
+      : el("span", { className: "muted", textContent: "—" });
+
     const canReplay = run.frames.length > 0;
     const tr = el("tr", { className: "run-row" + (canReplay ? " replayable" : "") },
       el("td", { className: "numc", textContent: String(i + 1) }));
@@ -972,7 +1004,8 @@ function runsTable(runs) {
       el("td", { className: "numc", title: "steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
       el("td", { className: "numc", textContent: num(run.branches_explored) }),
       el("td", { className: "numc", textContent: num(run.branches_considered) }),
-      el("td", { className: "cc" }, treeCell));
+      el("td", { className: "cc" }, treeCell),
+      el("td", { className: "cc" }, bugCell));
     if (canReplay) {
       tr.title = "click to replay the winning line below";
       tr.onclick = () => { highlightGame(i); openBoard(i); };
@@ -985,7 +1018,26 @@ function runsTable(runs) {
 function highlightGame(gi) {
   state.vizIdx = gi;
   const tbody = $("viz-list").querySelector("tbody");
-  if (tbody) [...tbody.children].forEach((tr) => tr.classList.toggle("active", +tr.dataset.idx === gi));
+  if (!tbody) return;
+  [...tbody.children].forEach((tr) => {
+    const on = +tr.dataset.idx === gi;
+    tr.classList.toggle("active", on);
+    if (on) tr.scrollIntoView({ block: "nearest" });
+  });
+}
+
+// ↑ / ↓ : open the previous / next SUCCESSFUL (replayable) game, in the order
+// they are currently shown in the runs table (so the highlight moves up/down
+// the visible list, respecting the active sort).
+function stepGame(d) {
+  const tbody = $("viz-list").querySelector("tbody");
+  if (!tbody) return;
+  const order = [...tbody.querySelectorAll("tr.replayable")].map((tr) => +tr.dataset.idx);
+  if (!order.length) return;
+  let pos = order.indexOf(state.vizIdx);
+  if (pos === -1) pos = d > 0 ? -1 : order.length;  // step in from either end
+  const next = order[Math.min(order.length - 1, Math.max(0, pos + d))];
+  if (next != null && next !== state.vizIdx) { highlightGame(next); openBoard(next); }
 }
 
 // Floating grid of card images shown while hovering a hand icon.
@@ -1054,6 +1106,46 @@ async function openTree(run, i) {
   };
   w.document.open();
   w.document.write(treeHtml(payload));
+  w.document.close();
+}
+
+// Open a plain report of the bugs hit during a game's search in a new tab.
+function openBugs(run, i) {
+  const bugs = run.bugs || [];
+  if (!bugs.length) return;
+  const w = window.open("", "_blank");
+  if (!w) { alert("Popup blocked — allow popups for this site to view the bugs."); return; }
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const items = bugs.map((b, n) => `
+    <div class="bug">
+      <div class="h">#${n + 1} — ${esc(b.context || "search")}
+        ${b.turn != null ? `<span class="k">turn ${esc(b.turn)}, ${esc(b.phase)}</span>` : ""}</div>
+      <div class="err">${esc(b.error)}</div>
+      <div class="k">${esc(b.where)}</div>
+      <pre>${esc(b.traceback)}</pre>
+    </div>`).join("");
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8">
+<title>Search bugs — game #${i + 1}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0f1116; color:#e6e8ee;
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:.7rem 1rem; border-bottom:1px solid #2e3340; background:#1c1f27; position:sticky; top:0; }
+  header b { color:#e05561; }
+  .wrap { padding:1rem; display:flex; flex-direction:column; gap:1rem; }
+  .bug { border:1px solid #2e3340; border-radius:8px; background:#171a21; padding:.7rem .9rem; }
+  .bug .h { font-weight:600; color:#e0a561; margin-bottom:.3rem; }
+  .bug .err { color:#e05561; font-family:ui-monospace,Menlo,monospace; margin-bottom:.3rem; }
+  .bug .k { color:#9aa3b2; font-size:12px; }
+  .bug pre { margin:.5rem 0 0; padding:.6rem; background:#0f1116; border-radius:6px;
+    overflow:auto; font:12px/1.45 ui-monospace,Menlo,monospace; color:#c5ccd8; }
+</style></head><body>
+<header><b>🐛 ${bugs.length} bug${bugs.length > 1 ? "s" : ""}</b> hit while searching game #${i + 1}
+  — these lines were skipped; the search continued.</header>
+<div class="wrap">${items}</div>
+</body></html>`);
   w.document.close();
 }
 

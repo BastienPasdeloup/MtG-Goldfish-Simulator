@@ -68,7 +68,7 @@ class CardAction:
         pre_fn: Callable,
         resolve_fn: Callable,
         *,
-        sorcery_speed: bool = True,
+        sorcery_speed: bool = False,  # activated abilities are instant-speed by default
         source_name: str | None = None,
         ability_text: str | None = None,
     ) -> "CardAction":

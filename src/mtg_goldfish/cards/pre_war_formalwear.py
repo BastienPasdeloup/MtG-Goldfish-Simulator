@@ -67,6 +67,7 @@ class PreWarFormalwear(Card):
                 f"equip Pre-War Formalwear → {target_name}",
                 pay,
                 resolve,
+                sorcery_speed=True,  # equip: only as a sorcery
                 source_name="Pre-War Formalwear",
                 ability_text="Equip",
             )

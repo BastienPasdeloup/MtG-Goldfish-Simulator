@@ -19,7 +19,12 @@ from ..deck.models import Deck
 from ..engine.phases import phase_labels
 from ..formats import get_format, list_formats
 from ..llm import get_provider
-from ..properties import STATE_API_DOC, PropertySpec, compile_condition
+from ..properties import (
+    STATE_API_DOC,
+    PropertySpec,
+    compile_condition,
+    compile_condition_detailed,
+)
 from ..session import Session, SessionCorrupt, SessionStore, SimConfig, new_id, now_iso
 from .hub import HUB
 from .sim_runner import SimulationRunner
@@ -278,15 +283,27 @@ def compile_one(req: CompileRequest) -> dict:
     return {"code": code}
 
 
+def _deck_card_names(deck: Deck) -> list[str]:
+    """Distinct card names in the deck (commanders + mainboard) so the compiler
+    can resolve approximate names in a condition to their exact full name."""
+    return sorted({e.card.name for e in deck.entries})
+
+
 @app.post("/api/sessions/{session_id}/properties/compile")
 def compile_properties(session_id: str) -> dict:
     session = _load(session_id)
+    names = _deck_card_names(session.deck)
     for spec in session.properties:
         if spec.enabled and not spec.code:
             try:
-                spec.code = compile_condition(spec.english)
+                r = compile_condition_detailed(spec.english, names)
+                spec.code = r["code"]
+                spec.confidence = r["confidence"]
+                spec.compile_note = r["notes"]
             except Exception as exc:  # noqa: BLE001 - surface per-property
                 spec.code = f"# compilation error: {exc}\ndef check(state):\n    return False\n"
+                spec.confidence = "low"
+                spec.compile_note = f"compilation failed: {exc}"
     store.save(session)
     return {"properties": [p.model_dump() for p in session.properties]}
 

@@ -3,7 +3,9 @@
 For each game (one random shuffle) we branch over:
 
   * mulligan keeps — all ways to bottom `Y` of the opening 7 cards, and
-  * every line of play — each legal ordering of lands/spells each turn,
+  * every line of play — each legal ordering of plays at every priority window
+    (sorcery-speed plays in the main phases; instant-speed plays — instants,
+    flash, activated abilities — in the other steps' instant-speed windows),
 
 exploring until the latest property trigger moment is reached. A game is a
 **success** if some single line satisfies *all* properties at their respective
@@ -28,13 +30,33 @@ import heapq
 import itertools
 import random
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-from .actions import PassPhase, combat_actions, deal_combat_damage, legal_actions
+from .actions import (
+    PassPhase,
+    _has_instant_actions,
+    combat_actions,
+    deal_combat_damage,
+    legal_actions,
+)
 from .game_state import GameState, new_game_from_deck
 from .phases import MAIN_PHASES, TURN_ORDER, Phase, phase_index
+
+#: Non-main steps that grant priority for instant-speed plays. Untap and
+#: cleanup grant no priority; the main phases and declare-attackers are handled
+#: explicitly (they always stop for sorcery-speed plays / the attack decision).
+INSTANT_STEPS: tuple[Phase, ...] = (
+    Phase.UPKEEP,
+    Phase.DRAW,
+    Phase.BEGIN_COMBAT,
+    Phase.DECLARE_BLOCKERS,
+    Phase.COMBAT_DAMAGE,
+    Phase.END_COMBAT,
+    Phase.END_STEP,
+)
 
 
 class CompiledProperty(Protocol):
@@ -89,6 +111,8 @@ class GameOutcome:
     branches_considered: int = 0
     tree: dict | None = None
     tree_truncated: bool = False
+    # Exceptions hit during this game's search (see _SearchContext.record_bug).
+    bugs: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -132,6 +156,13 @@ class _SearchContext:
         self.tree_count = 0            # nodes recorded so far (bounded by tree_cap)
         self.tree_truncated = False
         self.tree_root: dict | None = None
+        # Bugs hit during the search (exceptions raised while applying an action
+        # or stepping the game). Recorded rather than silently swallowed so a
+        # buggy card can't invisibly hide otherwise-viable lines; surfaced per
+        # game in the runs table. De-duplicated by (context, exception) so one
+        # recurring fault doesn't flood the list.
+        self.bugs: list[dict] = []
+        self._bug_keys: set[tuple] = set()
 
     def new_tree_node(
         self, parent: dict | None, label: str, state: GameState,
@@ -168,6 +199,27 @@ class _SearchContext:
             self.timed_out = True
             return True
         return False
+
+    def record_bug(self, exc: BaseException, *, context: str,
+                   state: GameState | None = None) -> None:
+        """Record an exception raised during the search. Kept short and
+        de-duplicated: the last frame of the traceback usually pins the culprit
+        card/engine call, which is what a debugging user needs."""
+        tb = traceback.extract_tb(exc.__traceback__)
+        last = tb[-1] if tb else None
+        where = f"{last.filename.split('/')[-1]}:{last.lineno} in {last.name}" if last else "?"
+        key = (context, type(exc).__name__, str(exc), where)
+        if key in self._bug_keys:
+            return
+        self._bug_keys.add(key)
+        self.bugs.append({
+            "context": context,
+            "error": f"{type(exc).__name__}: {exc}",
+            "where": where,
+            "turn": state.turn if state is not None else None,
+            "phase": state.phase.value if state is not None else None,
+            "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-2000:],
+        })
 
 
 # --------------------------------------------------------------------------
@@ -304,8 +356,15 @@ def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
     """Advance the state deterministically (no choices) until a decision point,
     a success, or the search horizon. Mutates `state`. Returns
     (status, satisfied) with status in {"success", "dead", "unviable",
-    "decision", "combat"} — "unviable" means a property can no longer be
-    verified on this line ("dead" is a budget cut)."""
+    "decision"} — "unviable" means a property can no longer be verified on this
+    line ("dead" is a budget cut).
+
+    A "decision" is returned in every main phase (full sorcery-speed plays), at
+    declare-attackers (the attack decision, plus any instant-speed plays), and
+    in any other step where an instant-speed play is actually available — so all
+    lines of play, including instant-speed ones, are explored. Steps with no
+    available play are skipped so the search doesn't fan out a bare "pass" at
+    every step."""
     while True:
         if ctx.budget_exceeded():
             return "dead", satisfied
@@ -324,9 +383,12 @@ def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
 
         if state.phase in MAIN_PHASES:
             return "decision", satisfied
-
-        if state.phase == Phase.DECLARE_ATTACKERS and combat_actions(state):
-            return "combat", satisfied
+        if state.phase == Phase.DECLARE_ATTACKERS and (
+            combat_actions(state) or _has_instant_actions(state)
+        ):
+            return "decision", satisfied
+        if state.phase in INSTANT_STEPS and _has_instant_actions(state):
+            return "decision", satisfied
 
         _goto_next_phase(state)
 
@@ -375,13 +437,15 @@ def _strip_parents(node: dict) -> None:
 def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
     """Search over game states. `items` are (state, satisfied, node, kind, own)
     seeds, where kind is "advance" (state must first be advanced through
-    non-choice phases), "decision" (main phase, player holds priority) or
-    "combat" (declare attackers, each option ends the decision); `own` says
-    whether `node` was created for this very state (vs. a truncation fallback).
+    non-choice steps) or "decision" (the player holds priority — a main phase,
+    declare-attackers, or an instant-speed window); `own` says whether `node`
+    was created for this very state (vs. a truncation fallback).
 
     Every branch state created by an action gets its own tree node — including
     passing priority — so the recorded tree shows ALL states created during
-    the search. All modes are exhaustive; they differ only in visit order."""
+    the search. Actions that raise mid-apply are recorded as bugs (see
+    `ctx.record_bug`) and shown as error leaves, never silently dropped. All
+    modes are exhaustive; they differ only in visit order."""
     heuristic = mode in ("dfs_heuristic", "best_first")
 
     if mode == "bfs":
@@ -419,7 +483,12 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             # — anything verified during this advance belongs to LATER phases
             # and shows up on the nodes created there (otherwise circles would
             # turn green one phase early in the tree).
-            status, satisfied = _advance(state, ctx, satisfied)
+            try:
+                status, satisfied = _advance(state, ctx, satisfied)
+            except Exception as exc:  # a crash while stepping the game forward
+                ctx.record_bug(exc, state=state, context=f"advancing @ {state.phase.value}")
+                ctx.new_tree_node(node, "⚠ error advancing the game", state, satisfied)
+                continue
             if status == "success":
                 _finish_success(state, ctx, satisfied, node)
                 return True
@@ -431,26 +500,27 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                 continue
             if status == "dead":
                 continue
-            kind = status  # "decision" | "combat"
+            kind = status  # "decision"
 
-        if kind == "decision":
-            # Checkpoint after every action too, so "before <phase>" properties
-            # can be satisfied at any moment and stop the search immediately.
-            satisfied = _check_due(state, ctx, satisfied)
-            if refresh_ok and own and node is not None:
-                node["sat"] = sorted(satisfied)
-            if _all_satisfied(ctx, satisfied):
-                _finish_success(state, ctx, satisfied, node)
-                return True
-            if not _viable(state, ctx, satisfied):
-                ctx.new_tree_node(node, "✗ dead end — a property can no longer be verified",
-                                  state, satisfied)
-                continue  # some property can no longer be verified from here
-            actions = list(legal_actions(state))
-            once = False
-        else:  # combat: each option immediately advances to the next phase
-            actions = list(combat_actions(state))
-            once = True
+        # A decision point: the player holds priority. In a main phase full
+        # sorcery-speed plays are offered; elsewhere only instant-speed ones.
+        # Checkpoint after every action too, so "before <phase>" properties can
+        # be satisfied at any moment and stop the search immediately.
+        satisfied = _check_due(state, ctx, satisfied)
+        if refresh_ok and own and node is not None:
+            node["sat"] = sorted(satisfied)
+        if _all_satisfied(ctx, satisfied):
+            _finish_success(state, ctx, satisfied, node)
+            return True
+        if not _viable(state, ctx, satisfied):
+            ctx.new_tree_node(node, "✗ dead end — a property can no longer be verified",
+                              state, satisfied)
+            continue  # some property can no longer be verified from here
+        sorcery_ok = state.phase in MAIN_PHASES
+        actions = list(legal_actions(state, sorcery_speed_ok=sorcery_ok))
+        if state.phase == Phase.DECLARE_ATTACKERS:
+            # The attack decision, alongside any instant-speed plays and pass.
+            actions = list(combat_actions(state)) + actions
 
         if heuristic:
             actions.sort(key=_action_priority, reverse=True)
@@ -461,8 +531,12 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             child = state.clone()
             try:
                 branches = action.apply(child)
-            except Exception:
-                continue  # a card action that turned out to be illegal mid-apply
+            except Exception as exc:
+                # Never silently drop a line: record the bug (surfaced per game
+                # in the runs table) and leave an error leaf in the tree.
+                ctx.record_bug(exc, state=child, context=f"applying '{action.label}'")
+                ctx.new_tree_node(node, f"⚠ error — {action.label}", child, satisfied)
+                continue
             blist = branches if branches is not None else [child]
             # An action whose resolution fans out (fetch targets, surveil
             # piles...) yields several candidate branches: count the extras as
@@ -478,7 +552,10 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                     label += f" · option {k + 1}/{len(blist)}"
                     if details[k]:
                         label += f" — {details[k]}"
-                if isinstance(action, PassPhase) or once:
+                if isinstance(action, PassPhase):
+                    # Passing priority advances to the next step; every other
+                    # action (including declaring attackers) keeps priority so
+                    # further plays this step are explored.
                     _goto_next_phase(branch)
                     ckind = "advance"
                 else:
@@ -603,7 +680,11 @@ def simulate_game(
         items.append((variant, frozenset(), hand_node, "advance", hand_node is not None))
 
     ctx.branches_considered += len(items)  # the keeps are candidates too
-    success = _search(items, ctx, config.search_mode)
+    try:
+        success = _search(items, ctx, config.search_mode)
+    except Exception as exc:  # a crash in the search itself, not a single action
+        ctx.record_bug(exc, context="search")
+        success = False
     root["success"] = success
     _strip_parents(root)
 
@@ -627,6 +708,7 @@ def simulate_game(
         branches_considered=ctx.branches_considered,
         tree=root,
         tree_truncated=ctx.tree_truncated,
+        bugs=ctx.bugs,
     )
 
 
@@ -646,7 +728,15 @@ def run_simulation(
     for i in range(config.num_games):
         if should_stop and should_stop():
             break
-        outcome = simulate_game(base_state, properties, config, i)
+        try:
+            outcome = simulate_game(base_state, properties, config, i)
+        except Exception as exc:  # keep the run alive; report the game as buggy
+            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            outcome = GameOutcome(
+                game_index=i, success=False,
+                bugs=[{"context": "game setup/search", "error": f"{type(exc).__name__}: {exc}",
+                       "where": "?", "turn": None, "phase": None, "traceback": tb[-2000:]}],
+            )
         stats.games_run += 1
         if outcome.success:
             stats.successes += 1

@@ -50,6 +50,7 @@ class Skullclamp(Card):
                 f"equip Skullclamp → {state.find_permanent(uid).name if state.find_permanent(uid) else uid}",
                 pay,
                 resolve,
+                sorcery_speed=True,  # equip: only as a sorcery
                 source_name="Skullclamp",
                 ability_text="Equip",
             )
