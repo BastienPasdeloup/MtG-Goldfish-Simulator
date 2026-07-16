@@ -12,7 +12,7 @@
 
 <header class="site">
   <div class="inner">
-    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator</a>
+    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator<span class="ver">v0.1.0</span></a>
     <nav>
       <a href="index.html">How it works</a>
       <a href="simulation.html">The search</a>
@@ -260,7 +260,7 @@ state.some_turn(pred) -> bool    <span class="comment"># … for at least one tu
 <h2 id="tips">Tips &amp; pitfalls</h2>
 
 <ul>
-  <li><strong>Pick the right timing.</strong> “I can have X by turn 3” is usually
+  <li><strong>Pick the right timing.</strong> “I can have it by turn 3” is usually
   <code>before end step of turn 3</code> (any moment counts), not <code>at</code> — with
   <code>at</code>, the condition must hold at that exact phase.</li>
   <li><strong>Approximate card names are fine.</strong> The compiler resolves them against your

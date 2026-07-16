@@ -12,7 +12,7 @@
 
 <header class="site">
   <div class="inner">
-    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator</a>
+    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator<span class="ver">v0.1.0</span></a>
     <nav>
       <a href="index.html">How it works</a>
       <a class="active" href="simulation.html">The search</a>
@@ -38,8 +38,8 @@ game's decision tree.</p>
 tree:</p>
 
 <ol>
-  <li><strong>Mulligans.</strong> If you allow <code>Y</code> mulligans, every way of bottoming
-  <code>Y</code> cards of the opening 7 becomes a separate root of the search.</li>
+  <li><strong>Mulligans.</strong> If you allow mulligans, every way of choosing which cards to
+  bottom from the opening 7 becomes a separate root of the search.</li>
   <li><strong>Lines of play.</strong> At every point the player has priority, every legal action
   is a branch: in a <strong>main phase</strong>, playing a distinct land (with its enter modes —
   a shockland can enter tapped or cost 2 life), casting a distinct affordable spell, activating
@@ -47,7 +47,8 @@ tree:</p>
   <strong>instant-speed window</strong> opens whenever an instant, a flash spell, or an
   instant-speed ability is actually available — so lines like cracking a fetchland on the end
   step, or holding up a counterspell, are explored too. Fetch targets, tutor targets, discards,
-  X values, modal choices and attack declarations branch as well.</li>
+  the value chosen for an <code>{X}</code> spell, modal choices and attack declarations branch as
+  well.</li>
   <li><strong>Mana is not a branch point.</strong> Tapping sources to pay a cost is solved
   deterministically by a payment planner, keeping the tree focused on genuinely meaningful
   decisions.</li>

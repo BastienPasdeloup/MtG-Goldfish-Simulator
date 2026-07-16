@@ -12,7 +12,7 @@
 
 <header class="site">
   <div class="inner">
-    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator</a>
+    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator<span class="ver">v0.1.0</span></a>
     <nav>
       <a href="index.html">How it works</a>
       <a href="simulation.html">The search</a>
@@ -123,7 +123,7 @@ it changes:</p>
 <div class="table-scroll"><table>
   <tr><th>Hook</th><th>Meaning</th></tr>
   <tr><td><code>cast_cost(state)</code></td><td>Dynamic costs (domain reduction, commander tax handled by the engine).</td></tr>
-  <tr><td><code>cast_actions(state)</code></td><td>Override the default cast to enumerate targets / X values / modes — one <code>CardAction</code> per choice.</td></tr>
+  <tr><td><code>cast_actions(state)</code></td><td>Override the default cast to enumerate targets / <code>{X}</code> values / modes — one <code>CardAction</code> per choice.</td></tr>
   <tr><td><code>hand_actions</code> / <code>graveyard_actions</code></td><td>Non-cast plays: cycling, channel, escape, MDFC land faces…</td></tr>
   <tr><td><code>etb_modes(state)</code> / <code>etb_tapped(state)</code></td><td>How a permanent may enter (shockland pay-2/tapped choice, fastlands).</td></tr>
   <tr><td><code>enters_with_counters(state)</code></td><td>Replacement effect: counters the permanent enters with (depletion, fading…). Never uses the stack.</td></tr>
