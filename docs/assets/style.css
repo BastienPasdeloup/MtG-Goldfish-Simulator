@@ -35,15 +35,24 @@ header.site {
   position: sticky; top: 0; z-index: 10;
 }
 header.site .inner {
-  max-width: 980px; margin: 0 auto; padding: .7rem 1.2rem;
-  display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap;
+  max-width: 1080px; margin: 0 auto; padding: .7rem 1.2rem;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem;
 }
-header.site .logo { font-weight: 700; color: var(--accent); font-size: 1.05rem; white-space: nowrap; }
+header.site .logo {
+  justify-self: start; font-weight: 700; color: var(--accent); font-size: 1.05rem;
+  white-space: nowrap; text-decoration: none;
+}
+header.site .logo:hover { color: var(--accent); filter: brightness(1.12); }
 header.site .logo .fish { margin-right: .45rem; }
-header.site nav { display: flex; gap: 1rem; flex-wrap: wrap; }
+header.site nav { justify-self: center; display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
 header.site nav a { color: var(--muted); font-size: .95rem; }
 header.site nav a.active, header.site nav a:hover { color: var(--text); text-decoration: none; }
-header.site .gh { margin-left: auto; color: var(--muted); font-size: .9rem; }
+header.site .gh { justify-self: end; color: var(--muted); font-size: .9rem; white-space: nowrap; }
+
+@media (max-width: 780px) {
+  header.site .inner { grid-template-columns: 1fr; justify-items: center; row-gap: .5rem; }
+  header.site .logo, header.site nav, header.site .gh { justify-self: center; }
+}
 
 /* ---- layout ---- */
 main { max-width: 980px; margin: 0 auto; padding: 2rem 1.2rem 4rem; }
@@ -88,12 +97,15 @@ pre code { background: none; border: none; padding: 0; font-size: 13px; }
 table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .95rem; }
 th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .4px; }
-td code { white-space: nowrap; }
+/* Let code in cells wrap. Previously `white-space: nowrap` forced long
+   slash-separated hook lists onto a single line, ballooning the first column;
+   wrapping lets auto-layout size columns to their content instead. */
+td code { overflow-wrap: break-word; }
 .table-scroll { overflow-x: auto; }
 
 /* ---- diagrams ---- */
 figure.diagram {
-  margin: 1.2rem 0; padding: 1rem; background: var(--bg2);
+  margin: 1.2rem 0; padding: 1rem; background: var(--bg);
   border: 1px solid var(--border); border-radius: var(--radius);
   overflow-x: auto; text-align: center;
 }

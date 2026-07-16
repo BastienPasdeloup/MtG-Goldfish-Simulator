@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The search — MtG Goldfish Simulator</title>
+<meta name="description" content="How the MtG Goldfish Simulator explores a game's decision tree: what branches, how lines are pruned, and the available search strategies.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator</a>
+    <nav>
+      <a href="index.html">How it works</a>
+      <a class="active" href="simulation.html">The search</a>
+      <a href="properties.html">Properties &amp; states</a>
+      <a href="examples.html">Examples</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="install.html">Install</a>
+    </nav>
+    <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+
+<h1>The search</h1>
+<p class="lead">How one run turns a deck into a success rate — by exhaustively exploring each
+game's decision tree.</p>
+
+<h2 id="simulation">How a simulation runs</h2>
+
+<p>A run plays <strong>N independent games</strong>. Each game is one random shuffle of the deck
+(seeded, so runs are reproducible). For each game the engine then searches the whole decision
+tree:</p>
+
+<ol>
+  <li><strong>Mulligans.</strong> If you allow <code>Y</code> mulligans, every way of bottoming
+  <code>Y</code> cards of the opening 7 becomes a separate root of the search.</li>
+  <li><strong>Lines of play.</strong> At every point the player has priority, every legal action
+  is a branch: in a <strong>main phase</strong>, playing a distinct land (with its enter modes —
+  a shockland can enter tapped or cost 2 life), casting a distinct affordable spell, activating
+  an ability, or passing. In the other steps (upkeep, combat sub-steps, end step) an
+  <strong>instant-speed window</strong> opens whenever an instant, a flash spell, or an
+  instant-speed ability is actually available — so lines like cracking a fetchland on the end
+  step, or holding up a counterspell, are explored too. Fetch targets, tutor targets, discards,
+  X values, modal choices and attack declarations branch as well.</li>
+  <li><strong>Mana is not a branch point.</strong> Tapping sources to pay a cost is solved
+  deterministically by a payment planner, keeping the tree focused on genuinely meaningful
+  decisions.</li>
+  <li><strong>Checkpoints.</strong> The game state is checked against your properties at every
+  phase entry and after every action at a priority window.</li>
+</ol>
+
+<p>A game is a <strong>success</strong> if <em>some single line</em> satisfies <em>all</em>
+properties at their respective trigger moments. Independently, per-property statistics count the
+games where each property was satisfiable in <em>any</em> line.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3a4150"/>
+    </marker>
+  </defs>
+  <g stroke="#3a4150" fill="none" marker-end="url(#arr2)">
+    <path d="M120,150 C170,150 170,60 220,60"/>
+    <path d="M120,150 C170,150 170,150 220,150"/>
+    <path d="M120,150 C170,150 170,240 220,240"/>
+    <path d="M330,60 C380,60 380,30 430,30"/>
+    <path d="M330,60 C380,60 380,90 430,90"/>
+    <path d="M330,240 C380,240 380,240 430,240"/>
+  </g>
+  <g stroke="#d9a441" stroke-width="2.4" fill="none" marker-end="url(#arr2)">
+    <path d="M330,150 C380,150 380,165 430,165"/>
+    <path d="M540,165 C590,165 590,165 640,165"/>
+    <path d="M750,165 C790,165 790,165 820,165"/>
+  </g>
+  <g stroke="#2e3340" fill="#1c1f27">
+    <rect x="20"  y="130" width="100" height="40" rx="8"/>
+    <rect x="220" y="40"  width="110" height="40" rx="8"/>
+    <rect x="220" y="130" width="110" height="40" rx="8"/>
+    <rect x="220" y="220" width="110" height="40" rx="8"/>
+    <rect x="430" y="10"  width="110" height="40" rx="8"/>
+    <rect x="430" y="70"  width="110" height="40" rx="8"/>
+    <rect x="430" y="145" width="110" height="40" rx="8" stroke="#d9a441"/>
+    <rect x="430" y="220" width="110" height="40" rx="8"/>
+    <rect x="640" y="145" width="110" height="40" rx="8" stroke="#d9a441"/>
+  </g>
+  <g fill="#e6e8ee" text-anchor="middle">
+    <text x="70"  y="154">keep hand</text><text x="70" y="167" fill="#9aa3b2">7 cards</text>
+    <text x="275" y="64">play Forest</text>
+    <text x="275" y="154">play Bayou</text>
+    <text x="275" y="244">pass</text>
+    <text x="485" y="34">cast Sol Ring</text>
+    <text x="485" y="94">fetch → Taiga</text>
+    <text x="485" y="169" fill="#f2e0b8">cast commander</text>
+    <text x="485" y="244">pass</text>
+    <text x="695" y="169" fill="#f2e0b8">attack</text>
+  </g>
+  <text x="826" y="170" fill="#d9a441" font-size="16">✓</text>
+  <text x="845" y="170" fill="#d9a441" font-size="12">all properties satisfied</text>
+  <text x="560" y="34" fill="#e05561" font-size="12">✗ property no longer verifiable → pruned</text>
+</svg>
+<figcaption>Every state created during the search is recorded; the UI can open the full explored tree of any game, with the winning line highlighted in gold.</figcaption>
+</figure>
+
+<h2 id="pruning">Pruning &amp; bounds</h2>
+<ul>
+  <li><strong>Viability pruning:</strong> a branch is dropped the moment any unsatisfied property
+  can no longer be verified on it (its “at” moment is past, or its “before” deadline reached) —
+  no descendant could make the game a success.</li>
+  <li><strong>Sticky satisfaction:</strong> once a property holds at one of its checkpoints on a
+  line, it stays satisfied on that line; the search stops as soon as every property is verified.</li>
+  <li><strong>Budget:</strong> each game runs until every property is satisfied, no branch can
+  satisfy them anymore (the frontier drains), or a wall-clock timeout — there is no node cap.
+  Timed-out games are reported as such (⏱ in the runs table).</li>
+  <li><strong>Bugs are logged, never hidden.</strong> If a card's behaviour raises mid-action the
+  branch is recorded as an error (⚠ in that game's tree) and the game keeps searching other
+  lines; the number of bugs hit is surfaced per game in the runs table (🐛), with the full
+  traceback one click away — so a buggy card can't silently swallow otherwise-viable lines.</li>
+</ul>
+
+<h2 id="strategies">Search strategies</h2>
+<p>All strategies are exhaustive — they visit the same states, only the <em>order</em> differs,
+so winning lines are found sooner and timeouts bite later:</p>
+<div class="table-scroll"><table>
+  <tr><th>Mode</th><th>Order</th></tr>
+  <tr><td><code>best_first</code> <span class="pill gold">default</span></td>
+      <td>Greedy best-first on a board-progress score (satisfied properties, then permanents in play, cards seen, turn) — heads for the most developed states first.</td></tr>
+  <tr><td><code>bfs</code></td><td>Breadth-first — shallowest lines first.</td></tr>
+</table></div>
+
+<p class="muted">The stack — how casting, activating and triggering are modelled step by step — is
+covered on the <a href="architecture.html#stack">Architecture</a> page.</p>
+
+</main>
+
+<footer class="site">
+  MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">source on GitHub</a>.
+  Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+</footer>
+
+</body>
+</html>

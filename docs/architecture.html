@@ -12,13 +12,14 @@
 
 <header class="site">
   <div class="inner">
-    <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
+    <a class="logo" href="index.html"><span class="fish">🐟</span>MtG Goldfish Simulator</a>
     <nav>
       <a href="index.html">How it works</a>
-      <a href="install.html">Install</a>
-      <a class="active" href="architecture.html">Architecture</a>
+      <a href="simulation.html">The search</a>
       <a href="properties.html">Properties &amp; states</a>
       <a href="examples.html">Examples</a>
+      <a class="active" href="architecture.html">Architecture</a>
+      <a href="install.html">Install</a>
     </nav>
     <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
   </div>
@@ -204,7 +205,7 @@ Wild Growth that add mana when the host is tapped, lands that sacrifice themselv
 <h2 id="search">The simulator</h2>
 
 <p><code>engine/simulator.py</code> runs one search per game (see
-<a href="index.html#simulation">How it works</a>). Implementation highlights:</p>
+<a href="simulation.html#simulation">The search</a>). Implementation highlights:</p>
 
 <ul>
   <li>The frontier is a stack / deque / heap depending on the strategy; every mode is exhaustive
