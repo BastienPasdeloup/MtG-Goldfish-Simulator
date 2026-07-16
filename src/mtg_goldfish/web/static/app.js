@@ -109,6 +109,12 @@ async function init() {
     b.dataset.play = on ? "0" : "1";
     b.textContent = on ? "On the draw" : "On the play";
   };
+  $("instant-speed-toggle").onclick = (e) => {
+    const b = e.currentTarget;
+    const on = b.dataset.on === "1";
+    b.dataset.on = on ? "0" : "1";
+    b.textContent = on ? "Forbid" : "Allow";
+  };
   $("stop-btn").onclick = () => api(`/api/sessions/${state.session.id}/simulate/stop`, { method: "POST" });
   $("delete-session").onclick = deleteSession;
   $("load-run-btn").onclick = openRunsModal;
@@ -257,6 +263,7 @@ function enterSession(payload) {
   renderDeck();
   addProperty(); // exactly one blank property on open
   renderProps();
+  showPropWarnings([]);
   $("sim-stats").innerHTML = "";
   $("sim-seed").textContent = "";
   $("progress-box").classList.add("hidden");
@@ -379,8 +386,13 @@ function loadRun(r) {
   $("mulligans").value = cfg.mulligans ?? 0;
   $("timeout").value = cfg.timeout_per_game_s ?? 5;
   $("seed").value = cfg.base_seed ?? "";
-  $("search-mode").value = cfg.search_mode ?? "best_first";
-  $("instant-speed").checked = !!cfg.instant_speed;
+  // Fall back to best-first if this run used a search mode that no longer exists.
+  const sm = $("search-mode");
+  sm.value = cfg.search_mode ?? "best_first";
+  if (sm.value !== (cfg.search_mode ?? "best_first")) sm.value = "best_first";
+  const isb = $("instant-speed-toggle"), ison = !!cfg.instant_speed;
+  isb.dataset.on = ison ? "1" : "0";
+  isb.textContent = ison ? "Allow" : "Forbid";
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -666,6 +678,20 @@ async function saveProps() {
   await api(`/api/sessions/${state.session.id}/properties`, { method: "PUT", body });
 }
 
+// Show (or clear) compiler warnings — e.g. an empty property that produced no
+// code — in the status line under the property list.
+function showPropWarnings(warnings) {
+  const box = $("prop-status");
+  if (!box) return;
+  if (!warnings || !warnings.length) {
+    box.classList.add("hidden");
+    box.replaceChildren();
+    return;
+  }
+  box.classList.remove("hidden");
+  box.replaceChildren(...warnings.map((w) => el("div", { textContent: "⚠ " + w })));
+}
+
 async function compileProps() {
   await saveProps();
   const btn = $("compile-props");
@@ -674,6 +700,7 @@ async function compileProps() {
     const r = await api(`/api/sessions/${state.session.id}/properties/compile`, { method: "POST" });
     state.props = r.properties.map((p) => ({ ...p }));
     renderProps();
+    showPropWarnings(r.warnings);
   } catch (e) { alert("Compile failed: " + e.message); }
   finally { btn.disabled = false; btn.textContent = "Compile → review code"; }
 }
@@ -782,7 +809,7 @@ async function runSim() {
     on_the_play: $("play-draw-toggle").dataset.play === "1",
     base_seed: seedField === "" ? null : parseInt(seedField),
     search_mode: $("search-mode").value,
-    instant_speed: $("instant-speed").checked,
+    instant_speed: $("instant-speed-toggle").dataset.on === "1",
     fixed_hand: fixed ? state.fixedHand.slice() : null,
     fixed_hand_pad_to: fixed && $("fixed-pad").checked
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)

@@ -71,6 +71,11 @@ class Permanent:
     attached_to: int | None = None      # equipment: uid of the equipped creature
     exiled_with: list[CardData] = field(default_factory=list)  # e.g. Parallax Wave
     chosen: str | None = None           # "as ~ enters, choose ..." (Multiversal Passage)
+    # Until-end-of-turn "becomes a creature" animation (man-lands: Mishra's
+    # Factory, Den of the Bugbear, ...). When set, it overrides the type line
+    # and base P/T: {"type_line": str, "power": int, "toughness": int}. Cleared
+    # at cleanup. Granted keywords ride on `temp_keywords` as usual.
+    becomes: dict | None = None
     uid: int = 0
 
     # ---- face-aware views ---------------------------------------------------
@@ -89,6 +94,8 @@ class Permanent:
 
     @property
     def type_line(self) -> str:
+        if self.becomes is not None:
+            return self.becomes["type_line"]
         return self.face.type_line or self.card.type_line
 
     @property
@@ -106,9 +113,13 @@ class Permanent:
         return "lander" in self.type_line.lower()
 
     def base_power(self) -> int:
+        if self.becomes is not None and self.becomes.get("power") is not None:
+            return int(self.becomes["power"])
         return _pt(self.face.power)
 
     def base_toughness(self) -> int:
+        if self.becomes is not None and self.becomes.get("toughness") is not None:
+            return int(self.becomes["toughness"])
         return _pt(self.face.toughness)
 
     def clone(self) -> "Permanent":
@@ -130,6 +141,7 @@ class Permanent:
             attached_to=self.attached_to,
             exiled_with=list(self.exiled_with),
             chosen=self.chosen,
+            becomes=dict(self.becomes) if self.becomes is not None else None,
             uid=self.uid,
         )
 
@@ -194,6 +206,10 @@ class GameState:
     cards_drawn_this_turn: int = 0
     permanent_left_battlefield_this_turn: bool = False  # revolt
     gy_this_turn: list[str] = field(default_factory=list)  # names put in GY this turn
+    descended_this_turn: bool = False  # a permanent card entered your GY this turn
+    crimes_this_turn: int = 0  # times you committed a crime (targeted an opponent)
+    attacked_this_turn: bool = False  # you declared one or more attackers this turn
+    left_graveyard_this_turn: bool = False  # a card left your graveyard this turn
 
     # game-long bookkeeping
     cards_drawn: int = 0
@@ -256,6 +272,10 @@ class GameState:
             cards_drawn_this_turn=self.cards_drawn_this_turn,
             permanent_left_battlefield_this_turn=self.permanent_left_battlefield_this_turn,
             gy_this_turn=list(self.gy_this_turn),
+            descended_this_turn=self.descended_this_turn,
+            crimes_this_turn=self.crimes_this_turn,
+            attacked_this_turn=self.attacked_this_turn,
+            left_graveyard_this_turn=self.left_graveyard_this_turn,
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
             storm_count=self.storm_count,
@@ -390,6 +410,10 @@ class GameState:
         self.cards_drawn_this_turn = 0
         self.permanent_left_battlefield_this_turn = False
         self.gy_this_turn.clear()
+        self.descended_this_turn = False
+        self.crimes_this_turn = 0
+        self.attacked_this_turn = False
+        self.left_graveyard_this_turn = False
         for p in self.battlefield:
             p.turn_flags.clear()
 
@@ -482,6 +506,35 @@ class GameState:
         self.graveyard.append(card)
         self.gy_this_turn.append(card.name)
         self.graveyard_by_turn.setdefault(self.turn, []).append(card.name)
+        # Descend: a permanent card was put into your graveyard from anywhere.
+        if card.is_permanent:
+            self.descended_this_turn = True
+
+    def note_crime(self, n: int = 1) -> None:
+        """You committed a crime (targeted an opponent, something they control,
+        or a card in their graveyard). Card effects that key off crimes
+        (Forsaken Miner) read `crimes_this_turn`."""
+        self.crimes_this_turn += n
+
+    def leave_graveyard(self, card: CardData) -> None:
+        """Remove a card from your graveyard (reanimation, escape, aftermath...),
+        setting the 'a card left your graveyard this turn' flag (Gau)."""
+        if card in self.graveyard:
+            self.graveyard.remove(card)
+        self.left_graveyard_this_turn = True
+
+    def discard(self, card: CardData) -> None:
+        """Discard `card` from hand: move it to the graveyard and fire the
+        'whenever you discard' watchers (Inti). Batched discards should call
+        once per card."""
+        if card in self.hand:
+            self.hand.remove(card)
+        self.to_graveyard(card)
+        self.emit(f"discard {card.name}")
+        items: list[StackAbility] = []
+        for perm in list(self.battlefield):
+            items.extend(perm.impl.discard_stack_items(self, perm, 1))
+        self.push_triggered_abilities(items)
 
     # ---- drawing (fires draw triggers) --------------------------------------
     def draw(self, n: int = 1) -> None:
@@ -568,13 +621,18 @@ class GameState:
         self.emit(f"create token {name} ({power}/{toughness})")
         return perm
 
-    def leaves_battlefield(self, perm: Permanent, to: str = "graveyard") -> None:
-        """Move a permanent off the battlefield (graveyard/exile/hand/none)."""
+    def leaves_battlefield(self, perm: Permanent, to: str = "graveyard",
+                           reason: str | None = None) -> None:
+        """Move a permanent off the battlefield (graveyard/exile/hand/none).
+
+        `reason` records WHY it left ("dies"/"sacrifice"/"destroy"/None) for the
+        death/sacrifice watchers (`on_other_leave`). "Dies" is any move to a
+        graveyard (to == "graveyard")."""
         if perm not in self.battlefield:
             return
         self.battlefield.remove(perm)
         self.permanent_left_battlefield_this_turn = True
-        self.note_event("leave_battlefield", perm.name, to=to,
+        self.note_event("leave_battlefield", perm.name, to=to, reason=reason,
                         is_land=perm.is_land, is_creature=perm.is_creature_now,
                         is_token=perm.is_token, card=perm.card)
         # Auras attached to it die; equipment merely unattaches.
@@ -585,6 +643,14 @@ class GameState:
                 else:
                     att.attached_to = None
         self.queue_leave_triggers(perm)
+        # "Whenever another permanent leaves / a creature dies / you sacrifice"
+        # watchers on everything still in play (aristocrats: Vraan, Sephiroth...).
+        watchers: list[StackAbility] = []
+        for w in list(self.battlefield):
+            if w.uid == perm.uid:
+                continue
+            watchers.extend(w.impl.other_leave_stack_items(self, w, perm, to, reason))
+        self.push_triggered_abilities(watchers)
         if perm.is_token:
             return  # tokens cease to exist
         if to == "graveyard":
@@ -616,7 +682,7 @@ class GameState:
                 # Equipment "equipped creature dies" triggers (e.g. Skullclamp).
                 holders = [eq for eq in self.battlefield if eq.attached_to == perm.uid]
                 self.emit(f"{perm.name} dies")
-                self.leaves_battlefield(perm, "graveyard")
+                self.leaves_battlefield(perm, "graveyard", reason="dies")
                 for eq in holders:
                     self.queue_equipped_died_triggers(eq)
 

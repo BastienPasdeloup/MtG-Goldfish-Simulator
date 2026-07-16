@@ -12,9 +12,9 @@ exploring until the latest property trigger moment is reached. A game is a
 trigger moments. We also record, per game, which properties were satisfiable
 in *any* line (for per-property statistics).
 
-The search order is configurable (`SimulationConfig.search_mode`) — DFS with
-or without heuristic move ordering, BFS, or greedy best-first on a progress
-score. Every mode visits the same states; only the visit order differs.
+The search order is configurable (`SimulationConfig.search_mode`) — greedy
+best-first on a board-progress score, or breadth-first. Every mode visits the
+same states; only the visit order differs.
 
 The search is exhaustive and runs until whichever comes first: the per-game
 wall-clock timeout expires, every property has been satisfied on some line, or
@@ -75,8 +75,6 @@ class CompiledProperty(Protocol):
 #: exhaustive; they differ only in the order states are visited.
 SEARCH_MODES: dict[str, str] = {
     "best_first": "Best-first · greedy on board progress (default)",
-    "dfs_heuristic": "DFS · heuristic move ordering",
-    "dfs": "DFS · natural move order",
     "bfs": "BFS · breadth-first (shallowest lines first)",
 }
 
@@ -256,12 +254,25 @@ def _apply_step_entry(state: GameState) -> None:
         if state.attackers:
             deal_combat_damage(state)
     elif state.phase == Phase.END_COMBAT:
+        # Decayed permanents that attacked are sacrificed at end of combat.
+        for perm in list(state.battlefield):
+            if perm.counters.get("decayed") and perm.uid in state.attackers:
+                state.emit(f"{perm.name}: decayed — sacrifice at end of combat")
+                state.leaves_battlefield(perm, "graveyard", reason="sacrifice")
         state.attackers.clear()
+    elif state.phase == Phase.END_STEP:
+        # "Sacrifice it at the beginning of the next end step" (Emperor of Bones'
+        # reanimated creatures, Stadium Headliner's mobilized tokens).
+        for perm in list(state.battlefield):
+            if perm.counters.get("end_step_sac"):
+                state.emit(f"{perm.name}: sacrifice at beginning of end step")
+                state.leaves_battlefield(perm, "graveyard", reason="sacrifice")
     elif state.phase == Phase.CLEANUP:
         for perm in state.battlefield:
             perm.temp_power = 0
             perm.temp_toughness = 0
             perm.temp_keywords.clear()
+            perm.becomes = None  # man-land animation ends
             perm.damage = 0
         state.check_deaths()
 
@@ -462,13 +473,15 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
     the search. Actions that raise mid-apply are recorded as bugs (see
     `ctx.record_bug`) and shown as error leaves, never silently dropped. All
     modes are exhaustive; they differ only in visit order."""
-    heuristic = mode in ("dfs_heuristic", "best_first")
+    # Best-first uses move-ordering as a heap tie-break; BFS is pure
+    # breadth-first with no reordering.
+    heuristic = mode != "bfs"
 
     if mode == "bfs":
         frontier: deque = deque(items)
         pop = frontier.popleft
         push = frontier.append
-    elif mode == "best_first":
+    else:  # best_first: a min-heap on the board-progress score
         seq = itertools.count()  # tie-breaker: insertion order
         frontier_h: list[tuple] = []
         for it in items:
@@ -476,10 +489,6 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         frontier = frontier_h
         pop = lambda: heapq.heappop(frontier)[2]  # noqa: E731
         push = lambda it: heapq.heappush(frontier, (_progress_score(it[0], it[1]), next(seq), it))  # noqa: E731
-    else:  # dfs / dfs_heuristic: children are pushed reversed so the
-        frontier = list(reversed(items))  # highest-priority branch pops first
-        pop = frontier.pop
-        push = frontier.append
 
     while frontier:
         if ctx.timed_out or ctx.stopped:
@@ -586,12 +595,8 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                 new_node = ctx.new_tree_node(node, label, branch, satisfied)
                 children.append((branch, satisfied, new_node or node, ckind, new_node is not None))
 
-        if mode in ("dfs", "dfs_heuristic"):
-            for it in reversed(children):
-                push(it)
-        else:
-            for it in children:
-                push(it)
+        for it in children:
+            push(it)
     return False
 
 
@@ -666,7 +671,7 @@ def simulate_game(
         keeps = _fixed_opening_hand(shuffled, config.fixed_hand, config.fixed_hand_pad_to)
     else:
         keeps = _opening_hands(shuffled, hand_size, config.mulligans)
-        if config.search_mode in ("dfs_heuristic", "best_first"):
+        if config.search_mode == "best_first":
             # Heuristic keep ordering: try hands whose land count is closest to
             # 3 first (all keeps are still searched — this only changes order).
             def _keep_score(variant: tuple) -> int:

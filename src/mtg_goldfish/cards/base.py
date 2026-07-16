@@ -123,6 +123,10 @@ class Card:
     grants_gy_land_plays: ClassVar[bool] = False
     #: Static: creatures can't attack (Glacial Chasm).
     prevents_attacks: ClassVar[bool] = False
+    #: If set, `on_phase` only fires at this phase (avoids the base
+    #: "fires every phase" behaviour — see phase_stack_items). Cards that must
+    #: react to several phases leave this None and gate inside on_phase.
+    trigger_phase: ClassVar = None
 
     def __init__(self, data: CardData) -> None:
         self.data = data
@@ -280,11 +284,21 @@ class Card:
     def on_combat_damage(self, state: "GameState", perm: "Permanent", damage: int) -> None:
         """Called when this permanent deals combat damage to the opponent."""
 
+    def on_you_attack(self, state: "GameState", perm: "Permanent") -> None:
+        """Called ONCE (while on the battlefield) when you declare one or more
+        attackers — the player-level "whenever you attack" triggers (Inti,
+        Ellie Brick Master). Distinct from `on_attack`, which fires per
+        attacking creature."""
+
     def on_draw_card(self, state: "GameState", perm: "Permanent", nth_this_turn: int) -> None:
         """Called (while on the battlefield) after the player draws a card."""
 
     def on_cast_other(self, state: "GameState", perm: "Permanent", card: CardData) -> None:
         """Called (while on the battlefield) when the player casts any spell."""
+
+    def on_you_discard(self, state: "GameState", perm: "Permanent", count: int) -> None:
+        """Called (while on the battlefield) when you discard one or more cards
+        (Inti's impulse draw). Fired once per discard event via GameState.discard."""
 
     def on_other_etb_immediate(self, state: "GameState", perm: "Permanent", entering: "Permanent") -> None:
         """Immediate non-stack entry effects for static/replacement approximations."""
@@ -294,6 +308,18 @@ class Card:
         landfall, 'whenever a permanent enters tapped' (Amulet of Vigor),
         artifact triggers (Tezzeret)... Fired after the entering permanent's
         tapped state is settled, before its own on_etb."""
+
+    def on_other_leave(
+        self, state: "GameState", perm: "Permanent", left: "Permanent",
+        to: str, reason: str | None,
+    ) -> None:
+        """Called (while on the battlefield) when ANOTHER permanent leaves the
+        battlefield — the death/sacrifice watchers of aristocrats effects
+        (Vraan, Sephiroth, Marionette Apprentice, Juri...). `left` is a snapshot
+        of the permanent that left (its final characteristics), `to` is the
+        destination zone ("graveyard"/"exile"/"hand"/...) and `reason` is why it
+        left ("dies"/"sacrifice"/"destroy"/None). "Dies" = put into a graveyard
+        from the battlefield (to == "graveyard")."""
 
     def stack_ability(
         self,
@@ -362,6 +388,8 @@ class Card:
     def phase_stack_items(self, state: "GameState", perm: "Permanent", phase) -> list:
         if type(self).on_phase is Card.on_phase:
             return []
+        if self.trigger_phase is not None and phase != self.trigger_phase:
+            return []
 
         def resolve(st, uid=perm.uid, phase_now=phase):
             live = st.find_permanent(uid)
@@ -392,6 +420,24 @@ class Card:
             label=f"{perm.name}: attack trigger",
             resolve=resolve,
             trigger_text=f"{perm.name} attacked",
+            ability_text="Attack-triggered ability",
+        )]
+
+    def you_attack_stack_items(self, state: "GameState", perm: "Permanent") -> list:
+        if type(self).on_you_attack is Card.on_you_attack:
+            return []
+
+        def resolve(st, uid=perm.uid):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_you_attack(st, live)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: you attacked",
+            resolve=resolve,
+            trigger_text="You attacked with one or more creatures",
             ability_text="Attack-triggered ability",
         )]
 
@@ -431,6 +477,24 @@ class Card:
             ability_text="Draw-triggered ability",
         )]
 
+    def discard_stack_items(self, state: "GameState", perm: "Permanent", count: int) -> list:
+        if type(self).on_you_discard is Card.on_you_discard:
+            return []
+
+        def resolve(st, uid=perm.uid, n=count):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_you_discard(st, live, n)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: you discarded",
+            resolve=resolve,
+            trigger_text="You discarded one or more cards",
+            ability_text="Discard-triggered ability",
+        )]
+
     def cast_other_stack_items(self, state: "GameState", perm: "Permanent", card: CardData) -> list:
         if type(self).on_cast_other is Card.on_cast_other:
             return []
@@ -465,6 +529,29 @@ class Card:
             label=f"{perm.name}: {entering.name} trigger",
             resolve=resolve,
             trigger_text=f"{entering.name} entered the battlefield",
+            ability_text="Triggered ability",
+        )]
+
+    def other_leave_stack_items(
+        self, state: "GameState", perm: "Permanent", left: "Permanent",
+        to: str, reason: str | None,
+    ) -> list:
+        if type(self).on_other_leave is Card.on_other_leave:
+            return []
+
+        # `left` is already off the battlefield — pass the snapshot straight
+        # through (there is nothing to re-find).
+        def resolve(st, uid=perm.uid, snap=left, dest=to, why=reason):
+            live = st.find_permanent(uid)
+            if live is None:
+                return None
+            return live.impl.on_other_leave(st, live, snap, dest, why)
+
+        return [self.stack_ability(
+            source_name=perm.name,
+            label=f"{perm.name}: {left.name} left ({reason or to})",
+            resolve=resolve,
+            trigger_text=f"{left.name} left the battlefield",
             ability_text="Triggered ability",
         )]
 

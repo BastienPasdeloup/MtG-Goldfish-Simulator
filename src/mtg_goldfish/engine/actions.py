@@ -518,12 +518,19 @@ class DeclareAttackers(Action):
             if perm.summoning_sick and not state.has_keyword(perm, "Haste"):
                 continue
             state.attackers.append(perm.uid)
+            perm.turn_flags["attacked"] = 1
             if not state.has_keyword(perm, "Vigilance"):
                 perm.tapped = True
             state.queue_attack_triggers(perm)
         if state.attackers:
+            state.attacked_this_turn = True
             names = [p.name for p in state.battlefield if p.uid in state.attackers]
             state.emit(f"attack with {', '.join(names)}")
+            # Player-level "whenever you attack" triggers (Inti, Ellie), once each.
+            you_attack: list = []
+            for perm in list(state.battlefield):
+                you_attack.extend(perm.impl.you_attack_stack_items(state, perm))
+            state.push_triggered_abilities(you_attack)
         return state.settle()
 
 
@@ -556,6 +563,10 @@ def deal_combat_damage(state: GameState) -> None:
         if perm is None:
             continue
         dmg = max(0, state.effective_power(perm))
+        # No blockers in a goldfish, so double strike is simply twice the damage
+        # (first-strike + normal combat damage steps both connect).
+        if state.has_keyword(perm, "Double strike"):
+            dmg *= 2
         if dmg == 0:
             continue
         total += dmg

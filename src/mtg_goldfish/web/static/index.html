@@ -94,6 +94,7 @@
               <button id="model-btn" title="Choose the model that compiles properties">⚙ Choose model</button>
             </div>
             <div id="prop-list"></div>
+            <div id="prop-status" class="warnings hidden" style="margin-top:.5rem"></div>
             <div class="row" style="margin-top:.5rem">
               <span class="spacer"></span>
               <button id="compile-props" class="primary">Compile → review code</button>
@@ -134,17 +135,12 @@
               <div><label>Search</label><br />
                 <select id="search-mode">
                   <option value="best_first" selected>Best-first · board progress</option>
-                  <option value="dfs_heuristic">DFS · heuristic ordering</option>
-                  <option value="dfs">DFS · natural order</option>
                   <option value="bfs">BFS · shallowest lines first (slow, may time out)</option>
                 </select>
               </div>
               <div><label>Instant speed</label><br />
-                <label style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer;font-size:12px;min-height:32px"
-                       title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Off by default.">
-                  Allow instant-speed plays
-                  <input id="instant-speed" type="checkbox" />
-                </label>
+                <button id="instant-speed-toggle" data-on="0"
+                        title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Forbidden by default.">Forbid</button>
               </div>
             </div>
             <div class="row" style="margin-top:.6rem">

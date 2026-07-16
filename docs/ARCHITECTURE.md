@@ -57,10 +57,8 @@ domain logic have no web dependency and can be driven from a script or tests.
   "before" deadline reached) — no descendant could make the game a success.
   Per-property statistics therefore count satisfaction in *viable* lines.
 - The **search strategy is selectable** (`SEARCH_MODES`): greedy best-first on
-  a board-progress score (**default**), DFS with heuristic move ordering
-  (lands → commander → tutors → other spells → abilities → pass, mulligan keeps
-  closest to 3 lands first), DFS in natural order, or BFS. Every mode visits the
-  same states — only the order differs — so winning lines are found sooner and
+  a board-progress score (**default**), or BFS. Every mode visits the same
+  states — only the order differs — so winning lines are found sooner and
   timeouts bite later.
 - The search records a tree node for **every state created** (including
   passing priority), so the per-game graph shows all considered states; the

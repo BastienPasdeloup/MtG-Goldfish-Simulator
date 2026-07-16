@@ -258,6 +258,354 @@ def fast_land(name: str, colors: tuple[str, str]) -> type[Card]:
     return _Fast
 
 
+_CARD_TYPES = ("creature", "instant", "sorcery", "land", "artifact",
+               "enchantment", "planeswalker", "battle")
+
+
+def graveyard_card_types(state: "GameState") -> set:
+    """The distinct card types among cards in your graveyard (delirium, escape,
+    Nethergoyf)."""
+    found: set[str] = set()
+    for c in state.graveyard:
+        tl = c.type_line.lower()
+        for t in _CARD_TYPES:
+            if t in tl:
+                found.add(t)
+    return found
+
+
+def evoke_actions(self: Card, state: "GameState", color: str) -> list[CardAction]:
+    """Evoke: cast this creature for free by exiling a `color` card from your
+    hand; when it enters, its ETB resolves and then it is sacrificed. Returns a
+    single hand action (the fuel card is chosen deterministically — the
+    lowest-mana-value eligible card)."""
+    from ..engine.actions import begin_cast
+    from ..engine.game_state import StackAbility
+    from ..engine.mana import ManaCost
+
+    fuel = [c for c in state.hand
+            if color in c.colors and c.name != self.card_name]
+    if not fuel:
+        return []
+
+    def fn(st: "GameState"):
+        me = next((c for c in st.hand if c.name == self.card_name), None)
+        picks = sorted((c for c in st.hand
+                        if color in c.colors and c.name != self.card_name),
+                       key=lambda c: c.cmc)
+        if me is None or not picks:
+            return None
+        chosen = picks[0]
+        st.hand.remove(chosen)
+        st.exile.append(chosen)
+        st.emit(f"evoke {me.name}: exile {chosen.name}")
+        if not begin_cast(st, me, ManaCost(), tag="evoke"):
+            return None
+        if me in st.stack:
+            st.stack.remove(me)
+        st.note_event("spell_resolved", me.name)
+        st.resolving = ("spell", me.name)
+        perm = st.put_on_battlefield(me, fire_etb=False)
+        st.emit(f"{me.name} resolves — enters (evoked)")
+
+        def sac_resolve(s, uid=perm.uid, nm=me.name):
+            p = s.find_permanent(uid)
+            if p is not None:
+                s.emit(f"{nm}: evoke — sacrifice")
+                s.leaves_battlefield(p, "graveyard", reason="sacrifice")
+            return None
+
+        # Sacrifice resolves AFTER the ETB: push it first (bottom of stack),
+        # then the ETB triggers on top.
+        st.push_triggered_abilities([StackAbility(
+            f"{me.name}: evoke sacrifice", sac_resolve,
+            source_name=me.name, kind="triggered",
+            trigger_text="Evoke", ability_text="Sacrifice this creature")])
+        st.queue_entry_triggers([perm])
+        return None  # apply() settles the queued ETB + evoke sacrifice
+
+    # Label starts with "cast " so CardAction.apply runs it as a spell cast
+    # (pay + resolve immediately) and settles the result.
+    return [CardAction(f"cast {self.card_name} (evoke — exile a {color} card)", fn)]
+
+
+def damage_any_target_options(state: "GameState", *, players_only: bool = False):
+    """Enumerate 'any target' choices for a damage effect: the opponent (a
+    crime) plus each distinct creature you control. Returns a list of
+    (label_suffix, apply(st, amount)) — the caller wraps each in an action."""
+    options: list[tuple[str, Callable]] = []
+
+    def opp(st: "GameState", amount: int):
+        st.opponent_life -= amount
+        st.note_crime()
+        st.emit(f"{amount} damage to opponent ({st.opponent_life})")
+
+    options.append(("opponent", opp))
+    if players_only:
+        return options
+    seen: set[str] = set()
+    for p in state.battlefield:
+        if not p.is_creature_now or p.name in seen:
+            continue
+        seen.add(p.name)
+
+        def make(uid: int):
+            def apply(st: "GameState", amount: int):
+                t = st.find_permanent(uid)
+                if t is not None:
+                    t.damage += amount
+                    st.emit(f"{amount} damage to {t.name}")
+                    st.check_deaths()
+            return apply
+
+        options.append((p.name, make(p.uid)))
+    return options
+
+
+def amass(state: "GameState", n: int, subtype: str = "Zombie") -> "Permanent":
+    """Amass <subtype> N: put N +1/+1 counters on an Army you control; if you
+    control none, create a 0/0 black Army creature token of that subtype first.
+    The Army also becomes the named subtype (approximated by naming the token)."""
+    army = next((p for p in state.battlefield if "army" in p.type_line.lower()), None)
+    if army is None:
+        army = state.make_token(f"{subtype} Army", 0, 0, f"Creature — {subtype} Army")
+    army.counters["+1/+1"] = army.counters.get("+1/+1", 0) + n
+    state.emit(f"amass {subtype} {n} — {army.name} is now "
+               f"{state.effective_power(army)}/{state.effective_toughness(army)}")
+    state.check_deaths()
+    return army
+
+
+def surveil_branches(state: "GameState", n: int, source: str) -> list["GameState"] | None:
+    """Surveil `n`: look at the top `n` cards; each may go to the graveyard or
+    stay on top. Branch over the 2**n keep/bin outcomes (bounded — surveil
+    counts are small). Returns None if the library is empty."""
+    top = state.library[:n]
+    if not top:
+        return None
+    outcomes = [()]
+    for _ in top:
+        outcomes = [combo + (keep,) for combo in outcomes for keep in (True, False)]
+
+    def fn(st: "GameState", combo):
+        # Process from the top down; binned cards go to the graveyard, kept
+        # cards stay in their original relative order on top.
+        binned = []
+        keep_stack = []
+        for card, keep in zip(st.library[:len(combo)], combo):
+            if keep:
+                keep_stack.append(card)
+            else:
+                binned.append(card)
+        del st.library[:len(combo)]
+        st.library[:0] = keep_stack
+        for card in binned:
+            st.to_graveyard(card)
+        if binned:
+            st.emit(f"{source}: surveil {len(combo)} — {', '.join(c.name for c in binned)} to graveyard")
+        else:
+            st.emit(f"{source}: surveil {len(combo)} — keep all on top")
+        return None
+
+    return branch_over(state, outcomes, fn)
+
+
+def mono_land(name: str, color: str) -> type[Card]:
+    """A land that taps for a single colour (also covers artifact lands)."""
+
+    @register
+    class _Mono(Card):
+        card_name = name
+
+        def mana_abilities(self, state):
+            return [ManaAbility(amount=1, choices=(color,))]
+
+    _Mono.__name__ = name.replace(" ", "").replace("'", "").replace(",", "")
+    _Mono.__doc__ = f"{name} — Land. {{T}}: Add {{{color}}}."
+    return _Mono
+
+
+def slow_land(name: str, colors: tuple[str, str]) -> type[Card]:
+    """Dual that enters tapped unless you control two or more other lands."""
+
+    @register
+    class _Slow(Card):
+        card_name = name
+
+        def mana_abilities(self, state):
+            return [ManaAbility(amount=1, choices=colors)]
+
+        def etb_tapped(self, state):
+            other_lands = sum(1 for p in state.battlefield if p.is_land)
+            return other_lands < 2
+
+    _Slow.__name__ = name.replace(" ", "").replace("'", "")
+    _Slow.__doc__ = f"{name} — taps for {colors}; tapped unless ≥2 other lands."
+    return _Slow
+
+
+def pain_land(name: str, colors: tuple[str, str]) -> type[Card]:
+    """'{T}: Add {C}.' and '{T}: Add <A> or <B>. Deals 1 damage to you.'
+    Modelled with a free colourless ability and a coloured ability with a
+    1-life cost (the payment planner prefers the painless one when it can)."""
+
+    @register
+    class _Pain(Card):
+        card_name = name
+
+        def mana_abilities(self, state):
+            return [
+                ManaAbility(amount=1, choices=("C",)),
+                ManaAbility(amount=1, choices=colors, life_cost=1),
+            ]
+
+    _Pain.__name__ = name.replace(" ", "").replace("'", "")
+    _Pain.__doc__ = f"{name} — pain land: {{C}} free, or {colors} for 1 life."
+    return _Pain
+
+
+def filter_land(name: str, colors: tuple[str, str]) -> type[Card]:
+    """Filter land (Graven Cairns cycle). Approximation: a free {C} plus a
+    coloured ability for either of its two colours (the {B/R} filter input is
+    not modelled — in practice the filter fixes the colour of mana you already
+    have, so treating it as an extra coloured source is a close goldfish
+    approximation)."""
+
+    @register
+    class _Filter(Card):
+        card_name = name
+
+        def mana_abilities(self, state):
+            return [
+                ManaAbility(amount=1, choices=("C",)),
+                ManaAbility(amount=1, choices=colors),
+            ]
+
+    _Filter.__name__ = name.replace(" ", "").replace("'", "")
+    _Filter.__doc__ = f"{name} — filter land approximated as {{C}} plus {colors}."
+    return _Filter
+
+
+def verge_land(name: str, main_color: str, second_color: str,
+               required_types: tuple[str, ...]) -> type[Card]:
+    """Verge cycle: '{T}: Add <main>.' and '{T}: Add <second>. Activate only if
+    you control a <T1> or a <T2>.' (Blazemire Verge, ...)."""
+
+    @register
+    class _Verge(Card):
+        card_name = name
+
+        def mana_abilities_perm(self, state, perm):
+            abilities = [ManaAbility(amount=1, choices=(main_color,))]
+            if any(p.is_land and perm_has_subtype(p, required_types)
+                   for p in state.battlefield):
+                abilities.append(ManaAbility(amount=1, choices=(second_color,)))
+            return abilities
+
+    _Verge.__name__ = name.replace(" ", "").replace("'", "")
+    _Verge.__doc__ = (
+        f"{name} — verge: {{{main_color}}} always; {{{second_color}}} only with a "
+        f"{'/'.join(required_types)}.")
+    return _Verge
+
+
+def animate_land_action(
+    self: Card, state: "GameState", perm: "Permanent", *,
+    cost: ManaCost, type_line: str, power: int, toughness: int,
+    keywords: Iterable[str] = (), label: str | None = None,
+) -> list[CardAction]:
+    """'<cost>: Until end of turn, this land becomes a P/T creature ...
+    It's still a land.' Sets `perm.becomes` (cleared at cleanup); granted
+    keywords go on `temp_keywords`. Instant speed."""
+    from ..engine.actions import can_afford, pay_cost
+
+    # The land can't tap itself for mana to pay its own animation cost (it would
+    # end up tapped and unable to attack) — exclude it from the payment.
+    if perm.becomes is not None or not can_afford(state, cost, exclude_uids={perm.uid}):
+        return []
+    kws = tuple(k.lower() for k in keywords)
+
+    def pay(st: "GameState"):
+        p = st.find_permanent(perm.uid)
+        if p is None or p.becomes is not None or not pay_cost(st, cost, exclude_uids={perm.uid}):
+            return False
+        return True
+
+    def resolve(st: "GameState"):
+        p = st.find_permanent(perm.uid)
+        if p is None:
+            return None
+        p.becomes = {"type_line": type_line, "power": power, "toughness": toughness}
+        p.temp_keywords.update(kws)
+        st.emit(f"{perm.name} becomes a {power}/{toughness} creature until end of turn")
+        return None
+
+    return [CardAction.activated(
+        label or f"{self.card_name}: animate ({power}/{toughness})",
+        pay,
+        resolve,
+        source_name=self.card_name,
+        ability_text=f"Becomes a {power}/{toughness} creature until end of turn",
+    )]
+
+
+def sacrifice_outlet_actions(
+    self: Card, state: "GameState", perm: "Permanent", *,
+    cost: ManaCost | None, effect: Callable, label: str,
+    can_sac: Callable[["Permanent"], bool] | None = None,
+    tap: bool = False, sac_self_ok: bool = True,
+) -> list[CardAction]:
+    """A 'Sacrifice a creature[/permanent]: <effect>' outlet: one branch per
+    distinct sacrificeable permanent. `effect(st, source_perm)` applies the
+    result after the sacrifice. `can_sac(perm)` filters what may be sacrificed
+    (default: any creature you control)."""
+    from ..engine.actions import can_afford, pay_cost
+
+    if perm.tapped and tap:
+        return []
+    if cost is not None and not can_afford(state, cost):
+        return []
+    pred = can_sac or (lambda p: p.is_creature_now)
+    victims: dict[str, int] = {}
+    for p in state.battlefield:
+        if not pred(p):
+            continue
+        if not sac_self_ok and p.uid == perm.uid:
+            continue
+        victims.setdefault(p.name, p.uid)
+
+    def make(vuid: int):
+        def pay(st: "GameState"):
+            src = st.find_permanent(perm.uid)
+            victim = st.find_permanent(vuid)
+            if src is None or victim is None:
+                return False
+            if tap:
+                if src.tapped:
+                    return False
+                src.tapped = True
+            if cost is not None and not pay_cost(st, cost):
+                return False
+            st.emit(f"sacrifice {victim.name}")
+            st.leaves_battlefield(victim, "graveyard", reason="sacrifice")
+            return True
+
+        def resolve(st: "GameState"):
+            src = st.find_permanent(perm.uid)
+            return effect(st, src)
+
+        vname = state.find_permanent(vuid).name if state.find_permanent(vuid) else vuid
+        return CardAction.activated(
+            f"{label} (sac {vname})",
+            pay,
+            resolve,
+            source_name=self.card_name,
+            ability_text=label,
+        )
+
+    return [make(uid) for uid in victims.values()]
+
+
 def counterspell(
     name: str, *, target: Callable[[CardData], bool] | None = None,
     dest: str = "graveyard", note: str = "",

@@ -235,3 +235,84 @@ def test_stack_snapshot_carries_source_and_trigger_metadata():
     assert frame["source_name"] == "Amulet of Vigor"
     assert frame["trigger"] == "Gingerbread Cabin entered the battlefield tapped"
     assert frame["ability"] == "Untap Gingerbread Cabin"
+
+
+# --- Ellie, Vengeful Hunter deck: aristocrats / man-lands / evoke -----------
+def _ellie(names, hand=()):
+    return _state(names, hand_names=hand, commander="Ellie, Vengeful Hunter")
+
+
+def test_mishras_factory_animates_and_reverts():
+    from mtg_goldfish.engine.phases import Phase
+    from mtg_goldfish.engine.simulator import _apply_step_entry
+    state = _ellie([])
+    for _ in range(2):
+        state.put_on_battlefield(card("Mountain")).summoning_sick = False
+    mf = state.put_on_battlefield(card("Mishra's Factory"))
+    mf.summoning_sick = False
+    mf.tapped = False
+    act = next(a for a in legal_actions(state) if "become a 2/2" in a.label)
+    act.apply(state)
+    live = state.find_permanent(mf.uid)
+    assert live.is_creature_now and state.effective_power(live) == 2
+    assert live.is_land  # "It's still a land."
+    state.phase = Phase.CLEANUP
+    _apply_step_entry(state)
+    assert not state.find_permanent(mf.uid).is_creature_now  # animation ended
+
+
+def test_den_of_the_bugbear_attack_makes_goblin():
+    from mtg_goldfish.engine.actions import DeclareAttackers
+    from mtg_goldfish.engine.phases import Phase
+    state = _ellie([])
+    den = state.put_on_battlefield(card("Den of the Bugbear"))
+    den.summoning_sick = False
+    den.tapped = False
+    for _ in range(4):
+        state.put_on_battlefield(card("Mountain")).summoning_sick = False
+    next(a for a in legal_actions(state) if "Den of the Bugbear: become" in a.label).apply(state)
+    state.phase = Phase.DECLARE_ATTACKERS
+    DeclareAttackers().apply(state)
+    assert state.count_permanents(name_contains="Goblin") == 1
+    assert len([u for u in state.attackers]) == 2  # Den + token
+
+
+def test_aristocrats_sacrifice_drains_and_grows():
+    state = _ellie([])
+    cf = state.put_on_battlefield(card("Carrion Feeder"), fire_etb=False)
+    cf.summoning_sick = False
+    state.put_on_battlefield(card("Vraan, Executioner Thane"), fire_etb=False)
+    state.put_on_battlefield(card("Marionette Apprentice"), fire_etb=False)
+    fodder = state.put_on_battlefield(card("Gravecrawler"), fire_etb=False)
+    sac = next(a for a in legal_actions(state)
+               if "Carrion Feeder: sacrifice" in a.label and "Gravecrawler" in a.label)
+    sac.apply(state)
+    assert state.opponent_life == 17          # Vraan -2, Marionette -1
+    assert state.life == 22                    # Vraan +2
+    assert state.effective_power(state.find_permanent(cf.uid)) == 2  # +1/+1
+
+
+def test_decayed_token_sacrificed_at_end_of_combat():
+    from mtg_goldfish.engine.phases import Phase
+    from mtg_goldfish.engine.simulator import _apply_step_entry
+    state = _ellie([])
+    jadar = state.put_on_battlefield(card("Jadar, Ghoulcaller of Nephalia"), fire_etb=False)
+    jadar.summoning_sick = False
+    state.phase = Phase.END_STEP
+    _apply_step_entry(state)  # Jadar makes a decayed Zombie
+    zombie = next(p for p in state.battlefield if p.counters.get("decayed"))
+    state.attackers = [zombie.uid]
+    state.phase = Phase.END_COMBAT
+    _apply_step_entry(state)
+    assert state.find_permanent(zombie.uid) is None  # sacrificed at end of combat
+
+
+def test_evoke_fury_sacrifices_itself():
+    state = _ellie([], hand=["Fury", "Lightning Bolt"])  # Lightning Bolt = red fuel
+    evoke = next(a for a in legal_actions(state) if a.label.startswith("cast Fury (evoke"))
+    branches = evoke.apply(state)  # Fury's ETB branches (branch_over clones)
+    state = branches[0] if branches else state
+    # Fury entered and was sacrificed by evoke -> in the graveyard, not in play.
+    assert not state.has_permanent_named("Fury")
+    assert "Fury" in state.graveyard_names()
+    assert "Lightning Bolt" in [c.name for c in state.exile]  # exiled as evoke cost

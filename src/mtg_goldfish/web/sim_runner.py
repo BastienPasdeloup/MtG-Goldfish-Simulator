@@ -13,6 +13,8 @@ import json
 import threading
 import time
 
+from ..cards import is_implemented, load_all_cards
+from ..deck.models import DeckBoard
 from ..engine.simulator import (
     GameOutcome,
     SimulationConfig,
@@ -88,6 +90,22 @@ class SimulationRunner:
     ) -> str:
         if self.is_running(session.id):
             raise RuntimeError("A simulation is already running for this session.")
+
+        # Every card that can enter the game must have a real implementation;
+        # unimplemented cards would silently play as vanilla approximations and
+        # skew the results. Sideboard cards never enter the game, so ignore them.
+        load_all_cards()
+        missing = sorted({
+            e.card.name for e in session.deck.entries
+            if e.board != DeckBoard.SIDEBOARD and not is_implemented(e.card.name)
+        })
+        if missing:
+            preview = ", ".join(missing[:12])
+            more = f" (+{len(missing) - 12} more)" if len(missing) > 12 else ""
+            raise ValueError(
+                f"{len(missing)} card(s) are not implemented yet — implement them "
+                f"before running a simulation: {preview}{more}"
+            )
 
         compiled = compile_all(session.properties)
         if not compiled:

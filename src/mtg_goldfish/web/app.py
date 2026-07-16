@@ -357,8 +357,22 @@ def _deck_card_names(deck: Deck) -> list[str]:
 def compile_properties(session_id: str) -> dict:
     session = _load(session_id)
     names = _deck_card_names(session.deck)
-    for spec in session.properties:
-        if spec.enabled and not spec.code:
+    warnings: list[str] = []
+    for i, spec in enumerate(session.properties, 1):
+        if not spec.enabled:
+            continue
+        if not spec.english.strip():
+            # An empty condition: don't fabricate placeholder code — leave it
+            # uncompiled and tell the user (the run simply ignores it).
+            spec.code = None
+            spec.confidence = None
+            spec.compile_note = None
+            warnings.append(
+                f"Property {i} ({spec.timing.value} {spec.phase} of turn "
+                f"{spec.turn}) has no condition — nothing was compiled for it."
+            )
+            continue
+        if not spec.code:
             try:
                 r = compile_condition_detailed(spec.english, names)
                 spec.code = r["code"]
@@ -369,7 +383,7 @@ def compile_properties(session_id: str) -> dict:
                 spec.confidence = "low"
                 spec.compile_note = f"compilation failed: {exc}"
     store.save(session)
-    return {"properties": [p.model_dump() for p in session.properties]}
+    return {"properties": [p.model_dump() for p in session.properties], "warnings": warnings}
 
 
 # --------------------------------------------------------------------------
