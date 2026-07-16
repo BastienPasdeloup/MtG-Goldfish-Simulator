@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install — MtG Goldfish Simulator</title>
+<meta name="description" content="Step-by-step installation guide for the MtG Goldfish Simulator — no programming experience needed. Install uv, download the project, run one command.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>">
+</head>
+<body>
+
+<header class="site">
+  <div class="inner">
+    <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
+    <nav>
+      <a href="index.html">How it works</a>
+      <a class="active" href="install.html">Install</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="properties.html">Properties &amp; states</a>
+      <a href="examples.html">Examples</a>
+    </nav>
+    <a class="gh" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+
+<h1>Installing &amp; running it</h1>
+<p class="lead">No programming experience needed. You'll install one small free tool, download the
+project, and run a single command. Budget about 10 minutes the first time. The app then runs
+<strong>entirely on your own computer</strong> — nothing is uploaded anywhere.</p>
+
+<div class="panel callout blue">
+  <div class="title">What you need</div>
+  <p style="margin:0">A Windows, macOS or Linux computer, an internet connection (to download the
+  tool and, later, to fetch card data from Scryfall), and a web browser. You do
+  <strong>not</strong> need to install Python yourself — the tool below does that for you.</p>
+</div>
+
+<h2 id="step1">Step 1 — Install <code>uv</code></h2>
+<p><a href="https://docs.astral.sh/uv/">uv</a> is a tiny tool that runs the project and
+automatically fetches the correct version of Python and every dependency, so you never have to
+manage that yourself. Open a <strong>terminal</strong> and paste one line:</p>
+<div class="table-scroll"><table>
+  <tr><th>Your computer</th><th>Open a terminal by…</th><th>Paste this, then press Enter</th></tr>
+  <tr><td><strong>macOS</strong></td><td>press ⌘ + Space, type “Terminal”, Enter</td>
+      <td><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></td></tr>
+  <tr><td><strong>Linux</strong></td><td>open your terminal app</td>
+      <td><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></td></tr>
+  <tr><td><strong>Windows</strong></td><td>Start menu, type “PowerShell”, Enter</td>
+      <td><code>powershell -c "irm https://astral.sh/uv/install.ps1 | iex"</code></td></tr>
+</table></div>
+<p class="muted">When it finishes, <strong>close and reopen the terminal</strong> so it picks up
+the new <code>uv</code> command. (Prefer a package manager? uv is also on Homebrew
+(<code>brew install uv</code>) and the Microsoft Store / winget — see uv's site.)</p>
+
+<h2 id="step2">Step 2 — Download the project</h2>
+<p><strong>Easiest, no Git required:</strong> on the
+<a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">GitHub page</a> click the
+green <strong>“&lt;&gt; Code”</strong> button, then <strong>“Download ZIP”</strong>. Unzip it
+somewhere you'll find again (e.g. your Documents folder). You'll get a folder named
+<code>MtG-Goldfish-Simulator-main</code>.</p>
+<p class="muted">Comfortable with Git? <code>git clone
+https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator.git</code> works too — and enables the
+built-in “new version available” check on startup.</p>
+
+<h2 id="step3">Step 3 — Run it</h2>
+<p>In the terminal, move into the folder you just unzipped, then start the app. A handy trick for
+the first line: type <code>cd</code> and a space, then <strong>drag the folder</strong> onto the
+terminal window (it fills in the path for you) and press Enter. Then run the second line:</p>
+<pre><code>cd path/to/MtG-Goldfish-Simulator-main
+uv run mtg-goldfish        <span class="comment"># first run downloads Python + dependencies — a minute or two</span></code></pre>
+<p>When you see a line like <code>Uvicorn running on http://127.0.0.1:8000</code>, open that
+address in your web browser. That's it — the simulator is running.</p>
+<ul>
+  <li><strong>To stop it:</strong> return to the terminal and press <kbd>Ctrl</kbd> + <kbd>C</kbd>.</li>
+  <li><strong>To start it again another day:</strong> just repeat the two commands in Step 3.</li>
+</ul>
+
+<h2 id="use">Step 4 — Use it in the browser</h2>
+<ol>
+  <li>Choose a format (Duel Commander) and paste a <strong>Moxfield deck URL</strong>. Commanders
+  and companions are detected automatically.</li>
+  <li>Define <a href="properties.html">properties</a> (a trigger moment + a plain-English
+  condition) and how many mulligans to allow.</li>
+  <li>Compile, review the generated code, and run a simulation. Statistics stream live; each
+  successful game can be replayed on an MTGO-like board, and its full search tree opened.</li>
+</ol>
+
+<div class="panel callout blue">
+  <div class="title">Optional: sharper English → code</div>
+  <p style="margin:0">Out of the box, a built-in offline converter handles simple conditions. For
+  more complex English, click <strong>⚙ Choose model</strong> in the Properties box to use a
+  local model (via <a href="https://ollama.com/">Ollama</a>) or an API model — set an
+  <code>ANTHROPIC_API_KEY</code> (copy <code>.env.example</code> to <code>.env</code>). Either
+  way the generated code is shown for you to review before running.</p>
+</div>
+
+<h2 id="updating">Updating to a newer version</h2>
+<p>The project improves over time. On startup the app checks whether the code has changed on
+GitHub and shows a small “download the latest version” popup when it has (Git checkouts only).</p>
+<ul>
+  <li><strong>Downloaded the ZIP?</strong> Download the ZIP again and replace your folder (your
+  saved sessions live elsewhere and aren't affected).</li>
+  <li><strong>Cloned with Git?</strong> Run <code>git pull</code> in the project folder, then start
+  it again with <code>uv run mtg-goldfish</code>.</li>
+</ul>
+
+<h2 id="trouble">Troubleshooting</h2>
+<div class="table-scroll"><table>
+  <tr><th>Symptom</th><th>Fix</th></tr>
+  <tr><td><code>uv: command not found</code></td>
+      <td>Close and reopen the terminal after Step 1. If it persists, re-run the install line and
+      read its final notes about your <code>PATH</code>.</td></tr>
+  <tr><td><code>cd</code> says “No such file or directory”</td>
+      <td>The path is wrong — retype <code>cd </code> and drag the unzipped folder onto the
+      terminal to fill it in exactly.</td></tr>
+  <tr><td>The browser page doesn't load</td>
+      <td>Make sure the terminal still shows <code>Uvicorn running…</code> and open exactly
+      <code>http://127.0.0.1:8000</code>.</td></tr>
+  <tr><td>A card is shown in red</td>
+      <td>It has no dedicated implementation yet and plays as a vanilla approximation — results
+      relying on it are approximate.</td></tr>
+</table></div>
+
+</main>
+
+<footer class="site">
+  MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator">source on GitHub</a>.
+  Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+</footer>
+
+</body>
+</html>

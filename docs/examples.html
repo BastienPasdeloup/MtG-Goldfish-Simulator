@@ -15,6 +15,7 @@
     <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
     <nav>
       <a href="index.html">How it works</a>
+      <a href="install.html">Install</a>
       <a href="architecture.html">Architecture</a>
       <a href="properties.html">Properties &amp; states</a>
       <a class="active" href="examples.html">Examples</a>
@@ -33,10 +34,11 @@ cards — from a basic land to abilities that use the stack.</p>
 
 <ol>
   <li><strong>Import.</strong> Paste a Moxfield URL, pick Duel Commander, name the session.
-  The decklist shows every card with its image; unimplemented cards are red with a 🔧 button.</li>
+  The decklist shows every card with its image; cards without a dedicated implementation are
+  shown in red (they still play as a vanilla approximation).</li>
   <li><strong>Properties.</strong> Two properties:
     <ul>
-      <li><em>at precombat main of turn 3</em> — “at least 5 lands on the battlefield”</li>
+      <li><em>at the end of precombat main of turn 3</em> — “at least 5 lands on the battlefield”</li>
       <li><em>before end step of turn 3</em> — “the commander is in play”</li>
     </ul>
   </li>
@@ -171,12 +173,14 @@ option from its resolve function so the exhaustive search explores them all:</p>
     targets = state.search_library(<span class="kw">lambda</span> c: c.is_creature)
     <span class="kw">return</span> branch_over(state, [t.name <span class="kw">for</span> t <span class="kw">in</span> targets], put_in_hand)</code></pre>
 
-<div class="panel callout blue">
-  <div class="title">Or let the LLM write it</div>
-  <p style="margin:0">In the UI, the 🔧 button next to any unimplemented card asks the selected
-  model to generate the implementation from the card's oracle text. The output is validated —
-  it must compile, import, and register the card — before being written and hot-loaded; failures
-  keep the vanilla approximation.</p>
+<div class="panel callout">
+  <div class="title">Cards without an implementation</div>
+  <p style="margin:0">A card with no dedicated file still plays as a <strong>vanilla
+  approximation</strong> — it can be cast/played, permanents enter the battlefield and count
+  toward board state and spell tallies, but its special text is ignored (unimplemented lands tap
+  for one mana of any colour in the commander's identity). Such cards are flagged in red in the
+  decklist, so you know a result that relies on them is approximate. To model one exactly, add a
+  file for it as shown above.</p>
 </div>
 
 <h2 id="replay">What a winning line looks like</h2>

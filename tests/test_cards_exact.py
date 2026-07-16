@@ -64,23 +64,26 @@ def test_city_of_brass_pays_life():
     assert state.life == 19
 
 
-def test_counterspells_need_a_target_spell():
-    # A counterspell alone (no other spell in hand) has nothing to target.
-    for name in ("Mana Tithe", "Daze", "Force of Negation"):
+def test_counterspells_need_a_spell_on_the_stack():
+    # A counterspell needs a valid target — a spell ON THE STACK. With the stack
+    # empty (spells resolve atomically here) it is not castable; there is no
+    # "counter your own spell" out of thin air.
+    for name in ("Mana Tithe", "Daze", "Force of Negation", "Mana Leak"):
         state = _state([], hand_names=[name])
         for _ in range(4):
-            state.put_on_battlefield(card("Plains")).summoning_sick = False
+            state.put_on_battlefield(card("Island")).summoning_sick = False
         assert not any(name in a.label for a in legal_actions(state) if "cast" in a.label), name
 
 
-def test_counterspell_can_counter_own_spell():
-    # With a target spell in hand and enough mana, the counter is castable and
-    # sends the countered spell to the graveyard (fuelling graveyard-matters).
-    state = _state([], hand_names=["Mana Leak", "Brainstorm"])
+def test_counterspell_counters_a_spell_on_the_stack():
+    # With a spell actually on the stack (and mana), the counter is castable and
+    # sends the countered spell to the graveyard.
+    state = _state([], hand_names=["Mana Leak"])
     for _ in range(4):
         state.put_on_battlefield(card("Island")).summoning_sick = False
-    acts = [a for a in legal_actions(state) if a.label.startswith("cast Mana Leak countering own")]
-    assert acts, "Mana Leak should be able to counter Brainstorm"
+    state.stack.append(card("Brainstorm"))  # a spell to counter
+    acts = [a for a in legal_actions(state) if a.label.startswith("cast Mana Leak countering")]
+    assert acts, "Mana Leak should be able to counter the spell on the stack"
     acts[0].apply(state)
     assert "Mana Leak" in state.graveyard_names()
     assert "Brainstorm" in state.graveyard_names()

@@ -5,6 +5,8 @@ import asyncio
 import json
 import os
 import random
+import re
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -30,10 +32,30 @@ from .hub import HUB
 from .sim_runner import SimulationRunner
 
 _STATIC = Path(__file__).parent / "static"
+#: Repo root (src/mtg_goldfish/web/app.py -> ../../../). Used for the git-based
+#: update check.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 app = FastAPI(title="MtG Goldfish Simulator")
 store = SessionStore()
 runner = SimulationRunner(store)
+
+
+def _git(*args: str) -> str | None:
+    """Run a git command in the repo root; None if git/repo is unavailable."""
+    try:
+        out = subprocess.run(["git", *args], cwd=_REPO_ROOT,
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (out.stdout.strip() or None) if out.returncode == 0 else None
+
+
+def _origin_owner_repo() -> str:
+    """`owner/repo` parsed from the git origin remote (so a fork checks itself),
+    falling back to the canonical repo."""
+    m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", _git("remote", "get-url", "origin") or "")
+    return m.group(1) if m else _GITHUB_REPO
 
 
 # --------------------------------------------------------------------------
@@ -61,6 +83,7 @@ class SimulateRequest(BaseModel):
     on_the_play: bool = True
     base_seed: int | None = None  # random when omitted
     search_mode: str = "best_first"  # see engine.simulator.SEARCH_MODES
+    instant_speed: bool = False  # explore instant-speed plays (see SimConfig)
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
@@ -152,6 +175,47 @@ def meta() -> dict:
         "llm_provider": get_provider().name,
         "llm_is_real": get_provider().is_real,
         "github_issues_url": f"https://github.com/{_GITHUB_REPO}/issues/new",
+    }
+
+
+@app.get("/api/version-check")
+def version_check() -> dict:
+    """Is this checkout behind the repository's `main`? Compares the local git
+    HEAD to GitHub via the compare API, so a developer who is ahead or diverged
+    is NOT prompted. Returns `checked=False` when this is not a git checkout
+    (e.g. a downloaded ZIP), git is unavailable, or GitHub can't be reached —
+    the UI then simply shows nothing."""
+    import httpx
+
+    local = _git("rev-parse", "HEAD")
+    if not local:
+        return {"checked": False}
+    owner_repo = _origin_owner_repo()
+    try:
+        resp = httpx.get(
+            f"https://api.github.com/repos/{owner_repo}/compare/{local}...main",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "mtg-goldfish-simulator"},
+            timeout=6.0,
+        )
+    except Exception:  # offline, DNS, timeout…
+        return {"checked": False}
+    if resp.status_code != 200:  # e.g. local commit not on GitHub (unpushed dev)
+        return {"checked": False}
+    data = resp.json()
+    status = data.get("status")            # ahead | behind | identical | diverged
+    ahead = int(data.get("ahead_by", 0))   # commits main is ahead of this checkout
+    tip = (data.get("commits") or [{}])[-1].get("sha") or ""
+    return {
+        "checked": True,
+        # Prompt only when main is strictly ahead (not when we're ahead/diverged).
+        "update_available": status == "ahead" and ahead > 0,
+        "behind_by": ahead,
+        "status": status,
+        "local": local[:7],
+        "remote": tip[:7],
+        "repo_url": f"https://github.com/{owner_repo}",
+        "download_url": f"https://github.com/{owner_repo}/archive/refs/heads/main.zip",
     }
 
 
@@ -420,6 +484,7 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
         on_the_play=req.on_the_play,
         base_seed=seed,
         search_mode=req.search_mode,
+        instant_speed=req.instant_speed,
         fixed_hand=(req.fixed_hand or None),
         fixed_hand_pad_to=(req.fixed_hand_pad_to if req.fixed_hand else None),
     )

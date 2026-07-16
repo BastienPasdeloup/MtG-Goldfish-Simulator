@@ -8,12 +8,10 @@
 </head>
 <body>
   <header class="appbar">
-    <span class="logo">🐟 MtG Goldfish Simulator</span>
+    <span class="logo" id="home-logo" role="button" tabindex="0" title="Back to home">🐟 MtG Goldfish Simulator</span>
     <span class="spacer"></span>
-    <span id="llm-pill" class="pill"></span>
-    <button id="model-btn" title="Choose the model that compiles properties">⚙ Choose model</button>
     <button id="bug-btn" class="hidden" title="Report a bug — the current session and run are attached">🐞 Report a bug</button>
-    <button id="home-btn">Home</button>
+    <button id="docs-btn" title="Open the documentation website ↗">📖 Documentation</button>
   </header>
 
   <main>
@@ -90,10 +88,11 @@
           <div class="card-box">
             <div class="row">
               <h3 style="margin:0">Properties</h3>
-              <span class="spacer"></span>
               <button id="add-prop">+ Add property</button>
+              <span class="spacer"></span>
+              <span id="llm-pill" class="pill" title="the model that compiles English properties into code"></span>
+              <button id="model-btn" title="Choose the model that compiles properties">⚙ Choose model</button>
             </div>
-            <div class="muted" id="prop-llm-note" style="font-size:12px;margin:.15rem 0 .4rem"></div>
             <div id="prop-list"></div>
             <div class="row" style="margin-top:.5rem">
               <span class="spacer"></span>
@@ -140,7 +139,15 @@
                   <option value="bfs">BFS · shallowest lines first (slow, may time out)</option>
                 </select>
               </div>
-              <span class="spacer"></span>
+              <div><label>Instant speed</label><br />
+                <label style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer;font-size:12px;min-height:32px"
+                       title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Off by default.">
+                  Allow instant-speed plays
+                  <input id="instant-speed" type="checkbox" />
+                </label>
+              </div>
+            </div>
+            <div class="row" style="margin-top:.6rem">
               <button id="run-btn" class="primary">Run</button>
               <button id="stop-btn" class="danger" disabled>Stop</button>
             </div>

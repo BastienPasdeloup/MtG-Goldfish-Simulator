@@ -15,6 +15,7 @@
     <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
     <nav>
       <a href="index.html">How it works</a>
+      <a href="install.html">Install</a>
       <a href="architecture.html">Architecture</a>
       <a class="active" href="properties.html">Properties &amp; states</a>
       <a href="examples.html">Examples</a>
@@ -38,7 +39,7 @@ true at once.</p>
 
 <div class="table-scroll"><table>
   <tr><th>Part</th><th>Values</th><th>Meaning</th></tr>
-  <tr><td><strong>Timing</strong></td><td><code>at</code> · <code>before</code></td><td>When the condition is evaluated (see below).</td></tr>
+  <tr><td><strong>Timing</strong></td><td>“at the end of” · “before”</td><td>When the condition is evaluated. (“at the end of” is the <code>at</code> timing — see below.)</td></tr>
   <tr><td><strong>Phase</strong></td><td>untap, upkeep, draw, precombat main, …, end step</td><td>The phase of the trigger moment.</td></tr>
   <tr><td><strong>Turn</strong></td><td>1, 2, 3…</td><td>The turn of the trigger moment.</td></tr>
   <tr><td><strong>Condition</strong></td><td>plain English</td><td>Compiled to a Python <code>check(state)</code> function you can review.</td></tr>

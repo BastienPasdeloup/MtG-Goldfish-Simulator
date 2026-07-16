@@ -14,6 +14,9 @@ class SimConfig(BaseModel):
     on_the_play: bool = True
     base_seed: int = 12345
     search_mode: str = "best_first"  # see engine.simulator.SEARCH_MODES
+    # Explore instant-speed plays (instants/flash/abilities in non-main steps,
+    # and countering your own spells). Off by default — much larger search.
+    instant_speed: bool = False
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).

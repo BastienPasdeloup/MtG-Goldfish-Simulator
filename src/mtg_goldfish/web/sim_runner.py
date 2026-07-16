@@ -184,6 +184,7 @@ class SimulationRunner:
                 on_the_play=config.on_the_play,
                 base_seed=config.base_seed,
                 search_mode=config.search_mode,
+                instant_speed=config.instant_speed,
                 fixed_hand=config.fixed_hand,
                 fixed_hand_pad_to=config.fixed_hand_pad_to,
             )

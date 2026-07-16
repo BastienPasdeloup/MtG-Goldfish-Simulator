@@ -1,4 +1,4 @@
-"""Mental Misstep — counter your own spell with mana value 1 (fills the graveyard).
+"""Mental Misstep — counter a spell with mana value 1 (needs a spell on the stack; not castable in a goldfish).
 Approximation: the Phyrexian-blue alternative cost is not modelled."""
 from ._common import counterspell
 

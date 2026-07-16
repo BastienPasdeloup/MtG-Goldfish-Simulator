@@ -1,4 +1,4 @@
-"""Force of Negation — counter your own NONCREATURE spell (fills the graveyard).
+"""Force of Negation — counter a NONCREATURE spell (needs a spell on the stack; not castable in a goldfish).
 Approximation: the free alternative cost (exile a blue card) is not modelled."""
 from ._common import counterspell
 

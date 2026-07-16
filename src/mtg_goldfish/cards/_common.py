@@ -262,22 +262,17 @@ def counterspell(
     name: str, *, target: Callable[[CardData], bool] | None = None,
     dest: str = "graveyard", note: str = "",
 ) -> type[Card]:
-    """A counterspell that targets YOUR OWN spell.
+    """A counterspell: it can only be cast with a valid target — a spell ON THE
+    STACK.
 
-    In a solitaire game there are no opponents' spells, and this engine resolves
-    spells atomically — but you can still usefully counter your own spell: cast
-    the target and the counter together (paying both costs) so the target is
-    countered instead of resolving. This puts the target card into your
-    graveyard (fuelling graveyard-matters cards) rather than onto the
-    battlefield / letting it resolve. `target(card)` restricts legal targets
-    (e.g. mana value 1 for Mental Misstep); `dest` is where the countered card
-    goes ("graveyard", or "library_top" for Memory Lapse)."""
-
-    def _merge(a: ManaCost, b: ManaCost) -> ManaCost:
-        pips: dict[str, int] = dict(a.pip_map)
-        for c, n in b.pip_map.items():
-            pips[c] = pips.get(c, 0) + n
-        return ManaCost(generic=a.generic + b.generic, pips=tuple(pips.items()))
+    In this solitaire engine there is no opponent and spells resolve atomically,
+    so at any priority window the stack holds no spell to counter; a counterspell
+    is therefore not castable by default. When instant-speed exploration is
+    enabled (`state.instant_speed`), it additionally offers the niche play of
+    countering your OWN spell — casting a hand spell and the counter together so
+    it goes to the graveyard/library instead of resolving. `target(card)`
+    restricts legal targets (e.g. mana value 1 for Mental Misstep); `dest` is
+    where the countered card goes ("graveyard", or "library_top" for Memory Lapse)."""
 
     @register
     class _Counter(Card):
@@ -287,47 +282,95 @@ def counterspell(
             from ..engine.actions import begin_cast, can_afford, resolve_to_graveyard
 
             my_cost = self.cast_cost(state)
+            if not can_afford(state, my_cost):
+                return []
             acts: list[CardAction] = []
             seen: set[str] = set()
-            for tgt in list(state.hand):
-                if tgt.name == name or tgt.name in seen or tgt.is_land:
+            # A counterspell needs a spell on the stack to target. (Spells
+            # resolve atomically here, so this list is normally empty and the
+            # counter is not offered — exactly "can't be cast without a spell on
+            # the stack".)
+            for victim in list(state.stack):
+                if not isinstance(victim, CardData) or victim.name == name:
                     continue
-                if target is not None and not target(tgt):
+                if victim.name in seen or (target is not None and not target(victim)):
                     continue
-                seen.add(tgt.name)
-                combined = _merge(my_cost, ManaCost.parse(tgt.mana_cost))
-                if not can_afford(state, combined):
-                    continue
+                seen.add(victim.name)
 
-                def make(target_name: str):
+                def make(victim_name: str):
                     def fn(st: "GameState"):
                         counter = next((c for c in st.hand if c.name == name), None)
-                        victim = next((c for c in st.hand if c.name == target_name), None)
+                        victim = next((c for c in st.stack if isinstance(c, CardData)
+                                       and c.name == victim_name), None)
                         if counter is None or victim is None:
-                            return None
-                        # Cast the victim (onto the stack), then the counter.
-                        if not begin_cast(st, victim, ManaCost.parse(victim.mana_cost)):
                             return None
                         if not begin_cast(st, counter, my_cost):
                             return None
-                        # The counter resolves: the victim is countered.
-                        resolve_to_graveyard(st, counter)
+                        resolve_to_graveyard(st, counter)  # the counter resolves
                         if victim in st.stack:
                             st.stack.remove(victim)
                         if dest == "library_top":
                             st.library.insert(0, victim)
-                            st.emit(f"{name}: counter own {target_name} — to top of library")
+                            st.emit(f"{name}: counter {victim_name} — to top of library")
                         else:
                             st.to_graveyard(victim)
-                            st.emit(f"{name}: counter own {target_name} — to graveyard")
+                            st.emit(f"{name}: counter {victim_name} — to graveyard")
                         return None
                     return fn
 
-                acts.append(CardAction(f"cast {name} countering own {tgt.name}", make(tgt.name)))
+                acts.append(CardAction(f"cast {name} countering {victim.name}", make(victim.name)))
+
+            # Instant-speed niche play: counter your OWN spell. Cast a spell from
+            # hand and the counter together (paying both costs) so it never
+            # resolves — it goes to the graveyard / library instead. Only offered
+            # when instant-speed exploration is enabled (see GameState.instant_speed).
+            if getattr(state, "instant_speed", False):
+                def _merge(a: ManaCost, b: ManaCost) -> ManaCost:
+                    pips = dict(a.pip_map)
+                    for c, n in b.pip_map.items():
+                        pips[c] = pips.get(c, 0) + n
+                    return ManaCost(generic=a.generic + b.generic, pips=tuple(pips.items()))
+
+                for tgt in list(state.hand):
+                    if tgt.name == name or tgt.name in seen or tgt.is_land:
+                        continue
+                    if target is not None and not target(tgt):
+                        continue
+                    seen.add(tgt.name)
+                    if not can_afford(state, _merge(my_cost, ManaCost.parse(tgt.mana_cost))):
+                        continue
+
+                    def make_own(target_name: str):
+                        def fn(st: "GameState"):
+                            counter = next((c for c in st.hand if c.name == name), None)
+                            victim = next((c for c in st.hand if c.name == target_name), None)
+                            if counter is None or victim is None:
+                                return None
+                            if not begin_cast(st, victim, ManaCost.parse(victim.mana_cost)):
+                                return None
+                            if not begin_cast(st, counter, my_cost):
+                                return None
+                            resolve_to_graveyard(st, counter)  # the counter resolves
+                            if victim in st.stack:
+                                st.stack.remove(victim)
+                            if dest == "library_top":
+                                st.library.insert(0, victim)
+                                st.emit(f"{name}: counter own {target_name} — to top of library")
+                            else:
+                                st.to_graveyard(victim)
+                                st.emit(f"{name}: counter own {target_name} — to graveyard")
+                            return None
+                        return fn
+
+                    acts.append(CardAction(f"cast {name} countering own {tgt.name}", make_own(tgt.name)))
             return acts
 
     _Counter.__name__ = name.replace(" ", "").replace("'", "")
-    _Counter.__doc__ = f"{name} — counter your own spell to fill the graveyard.{(' ' + note) if note else ''}"
+    _Counter.__doc__ = (
+        f"{name} — counterspell. Targets a spell on the stack (never present in a "
+        f"goldfish, so normally uncastable); with instant-speed exploration on, can "
+        f"counter your own spell to fill the graveyard.{(' ' + note) if note else ''}"
+    )
     return _Counter
 
 

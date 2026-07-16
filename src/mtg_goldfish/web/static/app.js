@@ -93,7 +93,12 @@ async function init() {
   const fs = $("format-select");
   fs.replaceChildren(...state.meta.formats.map((f) => el("option", { value: f.id, textContent: f.name })));
 
-  $("home-btn").onclick = showHome;
+  // Clicking the title/logo goes home (there is no separate Home button).
+  const logo = $("home-logo");
+  logo.onclick = showHome;
+  logo.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showHome(); } };
+  $("docs-btn").onclick = () =>
+    window.open("https://bastienpasdeloup.github.io/MtG-Goldfish-Simulator/", "_blank", "noopener");
   $("create-btn").onclick = doCreate;
   $("add-prop").onclick = () => { addProperty(); renderProps(); };
   $("compile-props").onclick = compileProps;
@@ -139,6 +144,31 @@ async function init() {
 
   await loadSessionList();
   showHome();
+  checkForUpdate();  // non-blocking: prompts if the repo has newer code
+}
+
+// On startup, ask the backend whether this checkout is behind the repository's
+// main branch; if so, show a dismissible "download the latest version" popup.
+async function checkForUpdate() {
+  let info;
+  try { info = await api("/api/version-check"); } catch { return; }
+  if (!info || !info.checked || !info.update_available) return;
+  // Don't nag: once dismissed for a given remote version, stay quiet until a
+  // newer one appears.
+  if (localStorage.getItem("mtg-update-dismissed") === (info.remote || "")) return;
+  const n = info.behind_by || 0;
+  const bar = el("div", { id: "update-banner" },
+    el("span", { className: "ic", textContent: "🔄" }),
+    el("span", { className: "msg" },
+      document.createTextNode(`A newer version is available${n ? ` (${n} update${n === 1 ? "" : "s"} behind)` : ""}. `),
+      el("a", { href: info.download_url, target: "_blank", rel: "noopener", textContent: "Download latest ↗" }),
+      document.createTextNode(" · "),
+      el("a", { href: info.repo_url, target: "_blank", rel: "noopener", textContent: "GitHub" })),
+  );
+  const close = el("button", { className: "close", title: "Dismiss", textContent: "✕" });
+  close.onclick = () => { localStorage.setItem("mtg-update-dismissed", info.remote || "1"); bar.remove(); };
+  bar.append(close);
+  document.body.append(bar);
 }
 
 function showHome() {
@@ -350,6 +380,7 @@ function loadRun(r) {
   $("timeout").value = cfg.timeout_per_game_s ?? 5;
   $("seed").value = cfg.base_seed ?? "";
   $("search-mode").value = cfg.search_mode ?? "best_first";
+  $("instant-speed").checked = !!cfg.instant_speed;
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -410,7 +441,7 @@ function renderDeck() {
   const total = state.cards.reduce((n, c) => n + c.quantity, 0);
   const approx = state.cards.filter((c) => !c.implemented).length;
   $("deck-summary").textContent = `${total} cards` +
-    (approx ? ` · ${approx} with approximated rules (in red)` : "");
+    (approx ? ` · ${approx} not yet implemented (in red)` : "");
 
   const order = Object.keys(groups).sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
@@ -470,22 +501,13 @@ function downloadBugFile() {
 }
 
 // ---- model picker ----
-// Reflect the currently selected LLM everywhere it's shown: the top pill, the
-// Properties-section model button, and the note under it (the model compiles
-// English properties into code).
+// Reflect the currently selected LLM in the Properties-box badge.
 function updateLlmUi() {
   const m = state.meta || {};
   const pill = $("llm-pill");
   if (pill) {
     pill.textContent = "LLM: " + m.llm_provider + (m.llm_is_real ? "" : " (offline stub)");
     pill.classList.toggle("warn", !m.llm_is_real);
-  }
-  const note = $("prop-llm-note");
-  if (note) {
-    note.textContent = m.llm_is_real
-      ? `Properties are compiled to code by ${m.llm_provider}.`
-      : `Properties are compiled by the offline stub (regex heuristics only). Click “⚙ Model” to pick a local or API model for accurate compilation.`;
-    note.classList.toggle("warnings", !m.llm_is_real);
   }
 }
 
@@ -760,6 +782,7 @@ async function runSim() {
     on_the_play: $("play-draw-toggle").dataset.play === "1",
     base_seed: seedField === "" ? null : parseInt(seedField),
     search_mode: $("search-mode").value,
+    instant_speed: $("instant-speed").checked,
     fixed_hand: fixed ? state.fixedHand.slice() : null,
     fixed_hand_pad_to: fixed && $("fixed-pad").checked
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)

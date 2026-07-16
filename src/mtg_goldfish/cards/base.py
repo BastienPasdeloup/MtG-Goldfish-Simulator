@@ -212,14 +212,26 @@ class Card:
         # subject of an "enters ... tapped" clause. Triggered abilities such as
         # Amulet of Vigor's "whenever a permanent you control enters tapped,
         # untap it" mention the phrase but refer to OTHER permanents.
-        for sentence in text.replace("\n", " ").split("."):
+        # Split on newlines FIRST (then periods): a leading keyword line such as
+        # "Trample" must not be glued to the next sentence — otherwise
+        # "Trample\nWhenever ~ enters ... put them onto the battlefield tapped"
+        # would read as this permanent entering tapped (Primeval Titan bug).
+        sentences: list[str] = []
+        for line in text.split("\n"):
+            sentences.extend(line.split("."))
+        for sentence in sentences:
             s = sentence.strip()
             if "enters" not in s or "tapped" not in s:
                 continue
             if s.startswith(("when", "whenever")):  # triggered ability, not self
                 continue
-            # Another permanent is the subject ("a land you control enters...").
             head = s.split("enters", 1)[0]
+            # A "when/whenever ... enters" trigger anywhere in this clause refers
+            # to an EVENT; any "tapped" belongs to what the trigger does (e.g.
+            # Primeval Titan puts fetched lands tapped), not to THIS permanent.
+            if "when" in head:  # matches "when" and "whenever"
+                continue
+            # Another permanent is the subject ("a land you control enters...").
             if any(k in head for k in (
                 "you control", "another", "each ", "a land", "a creature",
                 "a permanent", "permanents", "they ", "one or more",

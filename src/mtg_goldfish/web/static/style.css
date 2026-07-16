@@ -50,7 +50,8 @@ header.appbar {
   padding: .8rem 1.2rem; border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
-header.appbar .logo { font-weight: 700; color: var(--accent); letter-spacing: .3px; }
+header.appbar .logo { font-weight: 700; color: var(--accent); letter-spacing: .3px; cursor: pointer; }
+header.appbar .logo:hover { filter: brightness(1.15); }
 header.appbar .spacer { flex: 1; }
 .pill { font-size: 11px; padding: .15rem .5rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); }
 .pill.warn { border-color: var(--accent); color: var(--accent); }
@@ -233,7 +234,7 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .tile .badge.ctr { position: static; background: var(--accent-2); color: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
 .tile .badge.ctr.neg { background: var(--bad, #e05561); }
 /* Current P/T of variable-P/T creatures (CDAs like Barrowgoyf's *​/*) */
-.tile .badge.pt { left: auto; right: 2px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
+.tile .badge.pt { top: auto; bottom: 2px; left: auto; right: 2px; z-index: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
 /* Granted (until end of turn) abilities, e.g. Cosmic Spider-Man's combat buff */
 .tile .badge.kw { position: static; background: var(--ok, #4bbf73); color: #10240f; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
 /* "As it enters, choose ..." (Multiversal Passage's basic land type) */
@@ -268,7 +269,7 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .modal-body { overflow: auto; padding: .5rem 1rem 1rem; }
 table.runs { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.runs th, table.runs td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-table.runs th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; position: sticky; top: 0; background: var(--panel); }
+table.runs th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; position: sticky; top: 0; background: var(--panel); z-index: 2; }
 table.runs tbody tr { cursor: pointer; }
 table.runs tbody tr:hover { background: var(--panel-2); }
 .runs-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; }
@@ -302,6 +303,17 @@ table.viz-runs tbody tr.run-row.active { background: rgba(217,164,65,.14); outli
 .icon-btn:hover { opacity: 1; }
 .bug-count { font-size: 10px; font-weight: 700; color: var(--bad, #e05561);
   vertical-align: super; margin-left: 1px; }
+
+/* "A newer version is available" popup (shown on startup when behind the repo). */
+#update-banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 60; display: flex; align-items: center; gap: .55rem; max-width: 92vw;
+  background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .5rem .7rem; box-shadow: 0 8px 28px rgba(0,0,0,.45); font-size: 13px; }
+#update-banner .ic { font-size: 15px; }
+#update-banner a { color: var(--accent); font-weight: 600; }
+#update-banner .close { background: transparent; border: none; color: var(--muted);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 0 .1rem; }
+#update-banner .close:hover { color: var(--text); }
 .hand-icon { cursor: help; font-size: 15px; }
 
 /* floating grid of the opening-hand images (hand-icon hover) */

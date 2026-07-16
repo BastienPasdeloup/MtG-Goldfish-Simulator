@@ -15,6 +15,7 @@
     <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
     <nav>
       <a href="index.html">How it works</a>
+      <a href="install.html">Install</a>
       <a class="active" href="architecture.html">Architecture</a>
       <a href="properties.html">Properties &amp; states</a>
       <a href="examples.html">Examples</a>
@@ -84,7 +85,7 @@ a script or from tests.</p>
   <tr><td><code>cards</code></td><td>Runtime card <strong>behaviour</strong>. One file per card, auto-discovered; <code>build_card</code> returns the registered <code>Card</code> or an <code>UnimplementedCard</code> vanilla approximation.</td></tr>
   <tr><td><code>engine</code></td><td><code>GameState</code> (cloneable), turn <code>phases</code>, <code>mana</code> (+ payment planner), <code>actions</code>, and the exhaustive <code>simulator</code>.</td></tr>
   <tr><td><code>properties</code></td><td><code>PropertySpec</code> model, LLM compiler (English → <code>check(state)</code>, resolving approximate card names and reporting a confidence + clarification note), and the sandboxed evaluator with its documented, game-long event/state API.</td></tr>
-  <tr><td><code>llm</code></td><td>Provider interface + Anthropic + local Ollama + deterministic offline stub; card auto-implementation (codegen).</td></tr>
+  <tr><td><code>llm</code></td><td>Provider interface + Anthropic + local Ollama + deterministic offline stub (used to compile English properties into code).</td></tr>
   <tr><td><code>session</code></td><td><code>Session</code>/<code>SimResult</code> models and a JSON-file store.</td></tr>
   <tr><td><code>web</code></td><td>FastAPI routes, WebSocket <code>Hub</code>, threaded <code>SimulationRunner</code>, static frontend.</td></tr>
 </table></div>
@@ -134,11 +135,11 @@ it changes:</p>
 <div class="panel callout">
   <div class="title">Approximations are documented per card</div>
   <p style="margin:0">There is no opponent, so opponent-facing text is a no-op and is stated as
-  such in each card file's docstring (e.g. counterspells can only counter <em>your own</em>
-  spells to fill the graveyard). Unimplemented cards still play as vanilla approximations and
-  are flagged red in the UI, with a 🔧 button that asks the selected LLM to generate the
-  implementation from oracle text — validated (compiles, imports, registers) before being
-  hot-loaded.</p>
+  such in each card file's docstring — e.g. a counterspell targets a spell on the stack, and
+  since spells resolve atomically here the stack is empty at every priority window, so
+  counterspells are not castable. Cards with no dedicated implementation still play as vanilla
+  approximations (castable, permanents enter and count toward board state; special text ignored)
+  and are flagged red in the decklist so results relying on them read as approximate.</p>
 </div>
 
 <h2 id="stack">The stack: casting, activating, triggering</h2>

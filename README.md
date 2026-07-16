@@ -19,9 +19,11 @@ simulator works, code architecture with diagrams, how to write properties
 
 ## Status
 
-Early scaffold + a runnable vertical slice. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design and the roadmap of
-what is stubbed vs. implemented.
+Working end to end: Moxfield import, an exhaustive rules-aware search (including
+instant-speed windows), English→code properties with a game-long event API, and
+a live web UI with board replay and search-tree views. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design and what is exact
+vs. approximated.
 
 ## Requirements
 

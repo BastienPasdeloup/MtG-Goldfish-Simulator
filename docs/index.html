@@ -15,6 +15,7 @@
     <span class="logo"><span class="fish">🐟</span>MtG Goldfish Simulator</span>
     <nav>
       <a class="active" href="index.html">How it works</a>
+      <a href="install.html">Install</a>
       <a href="architecture.html">Architecture</a>
       <a href="properties.html">Properties &amp; states</a>
       <a href="examples.html">Examples</a>
@@ -234,27 +235,14 @@ so winning lines are found sooner and timeouts bite later:</p>
 <p>The board viewer shows the stack zone live during replays, so you can watch spells and
 abilities go on and come off it, step by step.</p>
 
-<h2 id="quickstart">Quick start</h2>
+<h2 id="quickstart">Installing &amp; running it</h2>
 
-<pre><code>uv sync
-uv run mtg-goldfish        <span class="comment"># starts the web UI on http://127.0.0.1:8000</span></code></pre>
-
-<p>Then in the browser:</p>
-<ol>
-  <li>Choose a format (Duel Commander) and paste a <strong>Moxfield deck URL</strong>. Commanders
-  and companions are detected automatically.</li>
-  <li>Define <a href="properties.html">properties</a> (trigger moment + English condition) and
-  how many mulligans to allow.</li>
-  <li>Compile, review the generated code, and run a simulation. Statistics stream live; each
-  successful game can be replayed on an MTGO-like board, and its full search tree opened.</li>
-</ol>
-
-<div class="panel callout blue">
-  <div class="title">Optional: LLM features</div>
-  <p style="margin:0">With an <code>ANTHROPIC_API_KEY</code> (or a local model via Ollama), the
-  simulator compiles English properties into code. Without one, a deterministic offline
-  stub handles simple conditions.</p>
-</div>
+<p>No programming experience needed — install one small free tool (<a href="https://docs.astral.sh/uv/">uv</a>,
+which brings its own Python), download the project, and run a single command:</p>
+<pre><code>uv run mtg-goldfish        <span class="comment"># then open http://127.0.0.1:8000 in your browser</span></code></pre>
+<p>The full step-by-step guide — installing <code>uv</code> on macOS / Windows / Linux, downloading
+the project (no Git required), running it, updating, and troubleshooting — is on the
+<a href="install.html"><strong>Install page</strong></a>.</p>
 
 </main>
 

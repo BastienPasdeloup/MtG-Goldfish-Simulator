@@ -180,6 +180,10 @@ class GameState:
     phase: Phase = Phase.UNTAP
     on_the_play: bool = True
     rng_seed: int = 0         # drives deterministic mid-game shuffles
+    #: Whether the search explores instant-speed plays (set from the config).
+    #: Cards can gate instant-speed-only options on it (e.g. countering your own
+    #: spell — see cards._common.counterspell).
+    instant_speed: bool = False
 
     # per-turn counters (reset at untap)
     lands_played_this_turn: int = 0
@@ -243,6 +247,7 @@ class GameState:
             phase=self.phase,
             on_the_play=self.on_the_play,
             rng_seed=self.rng_seed,
+            instant_speed=self.instant_speed,
             lands_played_this_turn=self.lands_played_this_turn,
             bonus_land_drops=self.bonus_land_drops,
             spells_cast_this_turn=self.spells_cast_this_turn,

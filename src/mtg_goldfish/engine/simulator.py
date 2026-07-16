@@ -90,6 +90,10 @@ class SimulationConfig:
     base_seed: int = 12345
     keep_success_logs: int = 25  # how many successful game logs to retain
     search_mode: str = "best_first"  # see SEARCH_MODES
+    #: Explore instant-speed plays: open decision windows in non-main steps
+    #: (instants/flash/abilities) AND allow countering your own spells. Off by
+    #: default — it multiplies the branching factor and is much slower.
+    instant_speed: bool = False
     #: Fixed-hand mode: force this exact opening hand (card names) and shuffle
     #: only the rest of the library. None = normal random hands + mulligans.
     fixed_hand: list[str] | None = None
@@ -140,10 +144,17 @@ class _SearchContext:
         properties: list[CompiledProperty],
         deadline: float,
         tree_cap: int | None = None,  # None = record the FULL explored tree
+        should_stop: Callable[[], bool] | None = None,
+        instant_speed: bool = False,
     ) -> None:
         self.properties = properties
         self.deadline = deadline
+        self.instant_speed = instant_speed  # explore instant-speed windows?
         self.timed_out = False
+        # Cooperative cancellation: when this returns True the current game is
+        # abandoned ASAP (checked in the search's hot path via budget_exceeded).
+        self._should_stop = should_stop
+        self.stopped = False
         self.ever_satisfied: set[str] = set()  # any line, this game
         self.success_log: list[str] | None = None
         self.max_rank = max(
@@ -193,7 +204,10 @@ class _SearchContext:
         return node
 
     def budget_exceeded(self) -> bool:
-        if self.timed_out:
+        if self.timed_out or self.stopped:
+            return True
+        if self._should_stop is not None and self._should_stop():
+            self.stopped = True  # user cancelled — abandon the current game now
             return True
         if time.monotonic() > self.deadline:
             self.timed_out = True
@@ -383,11 +397,13 @@ def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
 
         if state.phase in MAIN_PHASES:
             return "decision", satisfied
+        # The attack decision always matters; instant-speed windows only when the
+        # user opted into them (they explode the branching factor).
         if state.phase == Phase.DECLARE_ATTACKERS and (
-            combat_actions(state) or _has_instant_actions(state)
+            combat_actions(state) or (ctx.instant_speed and _has_instant_actions(state))
         ):
             return "decision", satisfied
-        if state.phase in INSTANT_STEPS and _has_instant_actions(state):
+        if ctx.instant_speed and state.phase in INSTANT_STEPS and _has_instant_actions(state):
             return "decision", satisfied
 
         _goto_next_phase(state)
@@ -466,7 +482,7 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         push = frontier.append
 
     while frontier:
-        if ctx.timed_out:
+        if ctx.timed_out or ctx.stopped:
             return False
         state, satisfied, node, kind, own = pop()
         if ctx.budget_exceeded():
@@ -516,8 +532,12 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             ctx.new_tree_node(node, "✗ dead end — a property can no longer be verified",
                               state, satisfied)
             continue  # some property can no longer be verified from here
-        sorcery_ok = state.phase in MAIN_PHASES
-        actions = list(legal_actions(state, sorcery_speed_ok=sorcery_ok))
+        if state.phase in MAIN_PHASES:
+            actions = list(legal_actions(state, sorcery_speed_ok=True))
+        elif ctx.instant_speed:
+            actions = list(legal_actions(state, sorcery_speed_ok=False))  # instant window
+        else:
+            actions = [PassPhase()]  # non-main step, instant plays disabled: just pass
         if state.phase == Phase.DECLARE_ATTACKERS:
             # The attack decision, alongside any instant-speed plays and pass.
             actions = list(combat_actions(state)) + actions
@@ -624,6 +644,7 @@ def simulate_game(
     properties: list[CompiledProperty],
     config: SimulationConfig,
     game_index: int,
+    should_stop: Callable[[], bool] | None = None,
 ) -> GameOutcome:
     rng = random.Random(config.base_seed + game_index)
     shuffled = list(base_state.library)
@@ -631,7 +652,8 @@ def simulate_game(
 
     hand_size = 7
     deadline = time.monotonic() + config.timeout_per_game_s
-    ctx = _SearchContext(properties, deadline)
+    ctx = _SearchContext(properties, deadline, should_stop=should_stop,
+                         instant_speed=config.instant_speed)
     # Root of the recorded search tree: the game before any hand is kept.
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root
@@ -720,8 +742,11 @@ def run_simulation(
     should_stop: Callable[[], bool] | None = None,
 ) -> SimulationStats:
     """Run `config.num_games` games, invoking `on_game` after each for live
-    reporting. `should_stop` allows cooperative cancellation."""
+    reporting. `should_stop` allows cooperative cancellation — it is checked
+    between games AND inside each game's search, so Stop abandons the game in
+    progress immediately rather than waiting for its timeout."""
     base_state = new_game_from_deck(deck, on_the_play=config.on_the_play)
+    base_state.instant_speed = config.instant_speed  # gates counter-your-own etc.
     stats = SimulationStats(total_games=config.num_games)
     stats.per_property = {p.id: 0 for p in properties}
 
@@ -729,7 +754,7 @@ def run_simulation(
         if should_stop and should_stop():
             break
         try:
-            outcome = simulate_game(base_state, properties, config, i)
+            outcome = simulate_game(base_state, properties, config, i, should_stop=should_stop)
         except Exception as exc:  # keep the run alive; report the game as buggy
             tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             outcome = GameOutcome(
@@ -737,6 +762,10 @@ def run_simulation(
                 bugs=[{"context": "game setup/search", "error": f"{type(exc).__name__}: {exc}",
                        "where": "?", "turn": None, "phase": None, "traceback": tb[-2000:]}],
             )
+        # If Stop fired during this game, abandon it: don't report a half-searched
+        # game as a result or count it.
+        if should_stop and should_stop():
+            break
         stats.games_run += 1
         if outcome.success:
             stats.successes += 1
