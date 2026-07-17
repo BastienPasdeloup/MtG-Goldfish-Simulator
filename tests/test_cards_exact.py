@@ -307,6 +307,44 @@ def test_decayed_token_sacrificed_at_end_of_combat():
     assert state.find_permanent(zombie.uid) is None  # sacrificed at end of combat
 
 
+def test_begin_combat_branching_trigger_fans_out():
+    """A phase-entry triggered ability that BRANCHES (Emperor of Bones'
+    begin-of-combat "exile up to one target from a graveyard", several choices)
+    must fan out into search branches — not raise "Branching triggered abilities
+    are unsupported during begin_combat triggers"."""
+    import time
+    from mtg_goldfish.engine.phases import Phase
+    from mtg_goldfish.engine.simulator import _SearchContext, _advance
+    from mtg_goldfish.properties.evaluator import CompiledProperty
+    from mtg_goldfish.properties.models import PropertySpec
+
+    state = _ellie([])
+    emp = state.put_on_battlefield(card("Emperor of Bones"), fire_etb=False)
+    emp.summoning_sick = False
+    state.graveyard.append(card("Gravecrawler"))
+    state.graveyard.append(card("Carrion Feeder"))
+    state.phase = Phase.BEGIN_COMBAT
+
+    prop = CompiledProperty(PropertySpec(
+        id="p1", timing="at", phase="end_step", turn=9, english="never",
+        code="def check(state):\n    return False", enabled=True))
+    ctx = _SearchContext(properties=[prop], deadline=time.monotonic() + 60)
+
+    status, satisfied, branches = _advance(state, ctx, frozenset())
+    assert status == "branch"
+    # "exile nothing" + one branch per distinct graveyard card.
+    assert len(branches) == 3
+    exiled = sorted(c.name for b in branches for c in b.exile)
+    assert exiled == ["Carrion Feeder", "Gravecrawler"]
+    # Each branch resumes advancing WITHOUT re-firing the trigger (no loop): it
+    # moves on to declare-attackers and returns a normal status.
+    for b in branches:
+        assert b._skip_step_entry == (b.turn, b.phase)
+        st, _sat, _br = _advance(b, ctx, satisfied)
+        assert st in ("decision", "unviable", "dead", "success")
+        assert b.phase != Phase.BEGIN_COMBAT  # advanced past the trigger step
+
+
 def test_evoke_fury_sacrifices_itself():
     state = _ellie([], hand=["Fury", "Lightning Bolt"])  # Lightning Bolt = red fuel
     evoke = next(a for a in legal_actions(state) if a.label.startswith("cast Fury (evoke"))
@@ -316,3 +354,48 @@ def test_evoke_fury_sacrifices_itself():
     assert not state.has_permanent_named("Fury")
     assert "Fury" in state.graveyard_names()
     assert "Lightning Bolt" in [c.name for c in state.exile]  # exiled as evoke cost
+
+
+# --- Tasigur deck: land cycles + dig + delve --------------------------------
+def test_check_land_drowned_catacomb():
+    impl = build_card(card("Drowned Catacomb"))
+    state = _state([])
+    assert impl.etb_tapped(state) is True             # no Island/Swamp
+    state.put_on_battlefield(card("Swamp"))
+    assert impl.etb_tapped(state) is False            # a Swamp is present
+
+
+def test_slow_fetch_bad_river():
+    state = _state(["Snow-Covered Island", "Plains"], hand_names=["Bad River"])
+    play = next(a for a in legal_actions(state) if a.label.startswith("play land Bad River"))
+    play.apply(state)
+    br = state.permanents_named("Bad River")[0]
+    assert br.tapped                                  # enters tapped
+    br.tapped = False                                 # (untap so we can activate)
+    fetches = [a for a in legal_actions(state) if "Bad River: fetch" in a.label]
+    # Only the Island qualifies (Island or Swamp); Plains does not.
+    assert len(fetches) == 1 and "Snow-Covered Island" in fetches[0].label
+    fetches[0].apply(state)
+    assert state.has_permanent_named("Snow-Covered Island")
+    assert "Bad River" in state.graveyard_names()     # sacrificed
+
+
+def test_stock_up_digs_two():
+    lib = ["Ponder", "Preordain", "Counterspell", "Cut Down", "Go for the Throat"]
+    state = _state(lib, hand_names=["Stock Up"])
+    for _ in range(3):
+        state.put_on_battlefield(card("Island")).summoning_sick = False
+    branches = next(a for a in legal_actions(state)
+                    if a.label == "cast Stock Up").apply(state)
+    # Every branch keeps exactly 2 of the top 5 in hand; the rest go to bottom.
+    assert branches and all(b.cards_in_hand() == 2 for b in branches)
+    assert all(len(b.library) == 3 for b in branches)  # 5 dug, 2 to hand, 3 to bottom
+
+
+def test_tasigur_delve_reduces_cost():
+    state = _state([])
+    impl = build_card(card("Tasigur, the Golden Fang"))
+    assert impl.cast_cost(state).cmc == 6             # {5}{B}, empty graveyard
+    for n in ("Ponder", "Preordain", "Cremate"):
+        state.graveyard.append(card(n))
+    assert impl.cast_cost(state).cmc == 3             # delve 3 -> {2}{B}

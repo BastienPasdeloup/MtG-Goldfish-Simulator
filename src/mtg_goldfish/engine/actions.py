@@ -338,6 +338,7 @@ class CastCommander(Action):
                           tag=f"commander, tax {tax}"):
             return
         state.commander_cast_count[card.name] = state.commander_cast_count.get(card.name, 0) + 1
+        state.commander_cast_this_game = True
         result = resolve_to_battlefield(state, card, is_commander=True)
         return state.settle(result)
 
@@ -395,6 +396,11 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
         if card.name in seen_cmd:
             continue
         seen_cmd.add(card.name)
+        # Only one commander may be cast per game: once one has been cast, a
+        # partner that was never cast is no longer castable (the already-cast
+        # commander may still be re-cast from the command zone under its tax).
+        if state.commander_cast_this_game and not state.commander_cast_count.get(card.name):
+            continue
         impl = _impl(card)
         tax = 2 * state.commander_cast_count.get(card.name, 0)
         base = impl.cast_cost(state)

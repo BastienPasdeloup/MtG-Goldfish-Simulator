@@ -237,7 +237,7 @@ class _SearchContext:
 # --------------------------------------------------------------------------
 # Turn progression
 # --------------------------------------------------------------------------
-def _apply_step_entry(state: GameState) -> None:
+def _apply_step_entry(state: GameState) -> list[GameState] | None:
     if state.phase == Phase.UNTAP:
         state.turn += 1
         state.reset_turn_counters()
@@ -277,8 +277,11 @@ def _apply_step_entry(state: GameState) -> None:
         state.check_deaths()
 
     # "At the beginning of <phase>" triggers (upkeep, combat, end step...).
+    # These may BRANCH (e.g. Emperor of Bones' begin-of-combat "exile up to one
+    # target from a graveyard"): settle() then returns several branch states,
+    # which _advance hands back to the search frontier.
     state.queue_phase_triggers(state.phase)
-    state.settle_nonbranching(f"{state.phase.value} triggers")
+    return state.settle()
 
 
 def _goto_next_phase(state: GameState) -> None:
@@ -380,9 +383,11 @@ def _progress_score(state: GameState, satisfied: frozenset[str]) -> int:
 def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
     """Advance the state deterministically (no choices) until a decision point,
     a success, or the search horizon. Mutates `state`. Returns
-    (status, satisfied) with status in {"success", "dead", "unviable",
-    "decision"} — "unviable" means a property can no longer be verified on this
-    line ("dead" is a budget cut).
+    (status, satisfied, branches) with status in {"success", "dead",
+    "unviable", "decision", "branch"} — "unviable" means a property can no
+    longer be verified on this line ("dead" is a budget cut). `branches` is None
+    except for "branch", where a phase-entry triggered ability fanned out into
+    several states the caller must push back onto the search frontier.
 
     A "decision" is returned in every main phase (full sorcery-speed plays), at
     declare-attackers (the attack decision, plus any instant-speed plays), and
@@ -392,30 +397,42 @@ def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
     every step."""
     while True:
         if ctx.budget_exceeded():
-            return "dead", satisfied
+            return "dead", satisfied, None
         if (state.turn, phase_index(state.phase)) > ctx.max_rank:
-            return "unviable", satisfied  # past every remaining trigger moment
+            return "unviable", satisfied, None  # past every remaining trigger moment
 
-        _apply_step_entry(state)
+        # Each branch of a fanned-out phase trigger resumes here with its
+        # step-entry already applied — skip re-applying it exactly once.
+        if state._skip_step_entry == (state.turn, state.phase):
+            state._skip_step_entry = None
+        else:
+            branches = _apply_step_entry(state)
+            if branches is not None:
+                # A phase-entry trigger branched (e.g. Emperor of Bones' exile).
+                # Hand each fully-settled branch back to the search to continue
+                # advancing; mark where it must skip the step-entry it just ran.
+                for b in branches:
+                    b._skip_step_entry = (b.turn, b.phase)
+                return "branch", satisfied, branches
 
         # One checkpoint per phase entry: evaluates "at" properties due right
         # here and "before" properties whose moment has not been reached yet.
         satisfied = _check_due(state, ctx, satisfied)
         if _all_satisfied(ctx, satisfied):
-            return "success", satisfied
+            return "success", satisfied, None
         if not _viable(state, ctx, satisfied):
-            return "unviable", satisfied  # some property can no longer be verified
+            return "unviable", satisfied, None  # some property can no longer be verified
 
         if state.phase in MAIN_PHASES:
-            return "decision", satisfied
+            return "decision", satisfied, None
         # The attack decision always matters; instant-speed windows only when the
         # user opted into them (they explode the branching factor).
         if state.phase == Phase.DECLARE_ATTACKERS and (
             combat_actions(state) or (ctx.instant_speed and _has_instant_actions(state))
         ):
-            return "decision", satisfied
+            return "decision", satisfied, None
         if ctx.instant_speed and state.phase in INSTANT_STEPS and _has_instant_actions(state):
-            return "decision", satisfied
+            return "decision", satisfied, None
 
         _goto_next_phase(state)
 
@@ -509,7 +526,7 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             # and shows up on the nodes created there (otherwise circles would
             # turn green one phase early in the tree).
             try:
-                status, satisfied = _advance(state, ctx, satisfied)
+                status, satisfied, branches = _advance(state, ctx, satisfied)
             except Exception as exc:  # a crash while stepping the game forward
                 ctx.record_bug(exc, state=state, context=f"advancing @ {state.phase.value}")
                 ctx.new_tree_node(node, "⚠ error advancing the game", state, satisfied)
@@ -524,6 +541,20 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                                   state, satisfied)
                 continue
             if status == "dead":
+                continue
+            if status == "branch":
+                # A phase-entry triggered ability fanned out (e.g. Emperor of
+                # Bones' begin-of-combat exile). Give each branch its own tree
+                # node and push it back to keep advancing from after the trigger.
+                ctx.branches_considered += len(branches)
+                details = (_option_details(branches, len(state.log))
+                           if len(branches) > 1 else [None])
+                for k, branch in enumerate(branches):
+                    label = f"{state.phase.value} trigger · option {k + 1}/{len(branches)}"
+                    if details[k]:
+                        label += f" — {details[k]}"
+                    child_node = ctx.new_tree_node(node, label, branch, satisfied)
+                    push((branch, satisfied, child_node or node, "advance", child_node is not None))
                 continue
             kind = status  # "decision"
 

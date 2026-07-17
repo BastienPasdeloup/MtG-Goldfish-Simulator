@@ -9,6 +9,7 @@
 <body>
   <header class="appbar">
     <span class="logo" id="home-logo" role="button" tabindex="0" title="Back to home">🐟 MtG Goldfish Simulator</span>
+    <span id="app-version" class="version-badge" title="installed version"></span>
     <span class="spacer"></span>
     <button id="bug-btn" class="hidden" title="Report a bug — the current session and run are attached">🐞 Report a bug</button>
     <button id="docs-btn" title="Open the documentation website ↗">📖 Documentation</button>
@@ -20,19 +21,13 @@
       <div class="card-box">
         <h2>New session</h2>
         <div class="row">
-          <div>
-            <label>Format</label><br />
-            <select id="format-select"></select>
-          </div>
-          <div class="grow">
+          <div style="flex:0 0 16rem">
             <label>Deck name</label><br />
-            <input id="deck-name" class="grow" style="width:100%" placeholder="My Duel Commander deck" />
+            <input id="deck-name" style="width:100%" placeholder="My Deck" />
           </div>
-        </div>
-        <div class="row" style="margin-top:.6rem">
           <div class="grow">
-            <label>Moxfield deck URL</label><br />
-            <input id="deck-url" style="width:100%" placeholder="https://www.moxfield.com/decks/xxxxxxxx" />
+            <label>Deck URL</label><br />
+            <input id="deck-url" style="width:100%" placeholder="https://www.moxfield.com/decks/xxxxxxxx  or  https://www.mtgtop8.com/event?e=..." />
           </div>
         </div>
         <div class="row" style="margin-top:.6rem">
@@ -167,6 +162,11 @@
     </section>
   </main>
 
+  <footer class="appfooter">
+    MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator" target="_blank" rel="noopener">source on GitHub</a>.
+    Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
+  </footer>
+
   <div id="hover-img"><img alt="" /><div class="hover-meta"></div></div>
 
   <div id="run-modal" class="modal-overlay hidden">
@@ -174,7 +174,8 @@
       <div class="modal-head">
         <b>Previous runs</b>
         <span class="spacer"></span>
-        <button id="run-modal-close">✕</button>
+        <span id="run-modal-actions" class="modal-head-actions"></span>
+        <button id="run-modal-close" class="modal-close" title="Close (Esc)">✕</button>
       </div>
       <div id="run-modal-body" class="modal-body"></div>
     </div>
@@ -185,7 +186,7 @@
       <div class="modal-head">
         <b>Model</b>
         <span class="spacer"></span>
-        <button id="model-modal-close">✕</button>
+        <button id="model-modal-close" class="modal-close" title="Close (Esc)">✕</button>
       </div>
       <div id="model-modal-body" class="modal-body">
         <div class="muted" style="font-size:12px;margin-bottom:.6rem">
@@ -204,7 +205,7 @@
       <div class="modal-head">
         <b>🐞 Report a bug</b>
         <span class="spacer"></span>
-        <button id="bug-modal-close">✕</button>
+        <button id="bug-modal-close" class="modal-close" title="Close (Esc)">✕</button>
       </div>
       <div class="modal-body">
         <ol class="bug-steps">

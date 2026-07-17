@@ -33,8 +33,5 @@ class DenOfTheBugbear(Card):
     def on_attack(self, state, perm):
         if perm.becomes is None:
             return
-        tok = state.make_token("Goblin", 1, 1, "Creature — Goblin")
-        tok.tapped = True
-        tok.summoning_sick = False
-        state.attackers.append(tok.uid)
+        state.make_token("Goblin", 1, 1, "Creature — Goblin", tapped=True, attacking=True)
         state.emit("Den of the Bugbear: create a 1/1 Goblin tapped and attacking")

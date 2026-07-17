@@ -90,8 +90,8 @@ async function init() {
   state.meta = await api("/api/meta");
   updateLlmUi();
 
-  const fs = $("format-select");
-  fs.replaceChildren(...state.meta.formats.map((f) => el("option", { value: f.id, textContent: f.name })));
+  // Software version badge next to the title.
+  if (state.meta.version) $("app-version").textContent = "v" + state.meta.version;
 
   // Clicking the title/logo goes home (there is no separate Home button).
   const logo = $("home-logo");
@@ -127,6 +127,12 @@ async function init() {
   $("model-btn").onclick = openModelModal;
   $("model-modal-close").onclick = () => $("model-modal").classList.add("hidden");
   $("model-modal").onclick = (e) => { if (e.target.id === "model-modal") $("model-modal").classList.add("hidden"); };
+  // Escape closes whichever popup is open.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const open = document.querySelector(".modal-overlay:not(.hidden)");
+    if (open) { e.preventDefault(); open.classList.add("hidden"); }
+  });
   $("sort-select").onchange = renderDeck;
   $("tab-sim").onclick = () => setSimMode("sim");
   $("tab-fixed").onclick = () => setSimMode("fixed");
@@ -153,8 +159,10 @@ async function init() {
   checkForUpdate();  // non-blocking: prompts if the repo has newer code
 }
 
-// On startup, ask the backend whether this checkout is behind the repository's
-// main branch; if so, show a dismissible "download the latest version" popup.
+// On startup, ask the backend whether a newer release exists (compares this
+// install's version against the version declared on the repo's main branch —
+// works for git checkouts and ZIP downloads alike). If so, show a dismissible
+// "download the latest version" popup.
 async function checkForUpdate() {
   let info;
   try { info = await api("/api/version-check"); } catch { return; }
@@ -162,11 +170,11 @@ async function checkForUpdate() {
   // Don't nag: once dismissed for a given remote version, stay quiet until a
   // newer one appears.
   if (localStorage.getItem("mtg-update-dismissed") === (info.remote || "")) return;
-  const n = info.behind_by || 0;
+  const ver = info.remote ? ` (v${info.remote})` : "";
   const bar = el("div", { id: "update-banner" },
     el("span", { className: "ic", textContent: "🔄" }),
     el("span", { className: "msg" },
-      document.createTextNode(`A newer version is available${n ? ` (${n} update${n === 1 ? "" : "s"} behind)` : ""}. `),
+      document.createTextNode(`A newer version is available${ver}. `),
       el("a", { href: info.download_url, target: "_blank", rel: "noopener", textContent: "Download latest ↗" }),
       document.createTextNode(" · "),
       el("a", { href: info.repo_url, target: "_blank", rel: "noopener", textContent: "GitHub" })),
@@ -186,20 +194,49 @@ function showHome() {
 }
 
 // ---------------------------------------------------------------- home
+// Friendly format label ("duel_commander" -> "Duel Commander"), from /api/meta
+// when available, else a title-cased fallback.
+function formatName(id) {
+  const f = (state.meta?.formats || []).find((x) => x.id === id);
+  if (f) return f.name;
+  return (id || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 async function loadSessionList() {
   const box = $("session-list");
   try {
     const { sessions } = await api("/api/sessions");
-    if (!sessions.length) { box.textContent = "No sessions yet."; return; }
-    box.replaceChildren(...sessions.map((s) => {
-      const open = el("button", { textContent: "Open", onclick: () => openSession(s.id) });
-      return el("div", { className: "session-list-item" },
-        el("b", { textContent: s.name }),
-        el("span", { className: "muted", textContent:
-          `${s.commanders.join(", ") || "no commander"} · ${s.num_results} runs` }),
-        el("span", { className: "grow" }), open);
-    }));
-  } catch (e) { box.textContent = "Error: " + e.message; }
+    if (!sessions.length) { box.textContent = "No sessions yet."; box.className = "muted"; return; }
+    box.className = "";
+    const head = el("tr", {},
+      el("th", { textContent: "Deck" }),
+      el("th", { textContent: "Format" }),
+      el("th", { textContent: "Created" }),
+      el("th", { textContent: "Last run" }),
+      el("th", { className: "numc", textContent: "Runs" }));
+    const rows = sessions.map((s) => {
+      const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
+      if (s.commanders.length) {
+        // One line per commander, each showing a card miniature on hover.
+        for (const c of s.commanders) {
+          const name = hoverable(el("span", { textContent: "⚔ " + c.name }), c.image);
+          fmtCell.append(el("div", { className: "muted sub" }, name));
+        }
+      } else {
+        fmtCell.append(el("div", { className: "muted sub", textContent: "no commander" }));
+      }
+      const tr = el("tr", { className: "session-row", title: "open this session",
+                            onclick: () => openSession(s.id) },
+        el("td", {}, el("b", { textContent: s.name })),
+        fmtCell,
+        el("td", { className: "muted nowrap", textContent: fmtDate(s.created_at).slice(0, 10) }),
+        el("td", { className: "muted nowrap", textContent: s.last_run ? fmtDate(s.last_run).slice(0, 10) : "—" }),
+        el("td", { className: "numc", textContent: String(s.num_results) }));
+      return tr;
+    });
+    box.replaceChildren(el("table", { className: "sessions-table" },
+      el("thead", {}, head), el("tbody", {}, ...rows)));
+  } catch (e) { box.textContent = "Error: " + e.message; box.className = "err"; }
 }
 
 function homeStatus(msg, isErr) {
@@ -209,7 +246,8 @@ function homeStatus(msg, isErr) {
 }
 
 async function doCreate() {
-  const body = JSON.stringify({ url: $("deck-url").value, name: $("deck-name").value, format_id: $("format-select").value });
+  // The format is inferred server-side from the deck source.
+  const body = JSON.stringify({ url: $("deck-url").value, name: $("deck-name").value });
   homeStatus("Creating session…");
   try {
     const payload = await api("/api/sessions", { method: "POST", body });
@@ -239,22 +277,33 @@ function enterSession(payload) {
   $("session-view").classList.remove("hidden");
   $("bug-btn").classList.remove("hidden");
   $("s-name").textContent = state.session.name;
-  $("s-commanders").textContent = "⚔ " + (state.cards.filter((c) => c.board === "commander").map((c) => c.name).join(", ") || "none");
-  $("s-format").textContent = state.session.format_id;
+  // One badge per commander (a partner pair shows two), each with a hover mini.
+  const cmdWrap = $("s-commanders");
+  cmdWrap.className = "cmd-pills";
+  const cmdCards = state.cards.filter((c) => c.board === "commander");
+  if (!cmdCards.length) {
+    cmdWrap.replaceChildren(el("span", { className: "pill", textContent: "⚔ none" }));
+  } else {
+    cmdWrap.replaceChildren(...cmdCards.map((c) =>
+      hoverable(el("span", { className: "pill", textContent: "⚔ " + c.name }),
+                c.image || (c.faces && c.faces[0] && c.faces[0].image))));
+  }
+  $("s-format").textContent = formatName(state.session.format_id);
   $("s-date").textContent = "📅 " + fmtDate(state.session.created_at).slice(0, 10);
   const srcLink = $("s-source");
   const srcUrl = state.session.deck && state.session.deck.source_url;
   srcLink.classList.toggle("hidden", !srcUrl);
   if (srcUrl) {
+    const src = /mtgtop8\.com/i.test(srcUrl) ? "MTGTop8" : "Moxfield";
     srcLink.href = srcUrl;
-    srcLink.textContent = "Moxfield ↗";
+    srcLink.textContent = src + " ↗";
     srcLink.title = srcUrl;
-    // Async: has the Moxfield list changed since this session imported it?
+    // Async: has the source list changed since this session imported it?
     api(`/api/sessions/${state.session.id}/deck-check`).then((r) => {
       if (r.checked && r.changed) {
-        srcLink.textContent = "⚠ Moxfield ↗";
+        srcLink.textContent = "⚠ " + src + " ↗";
         srcLink.classList.add("warn");
-        srcLink.title = "The Moxfield deck has changed since this session was imported";
+        srcLink.title = "The " + src + " deck has changed since this session was imported";
       }
     }).catch(() => {});
   }
@@ -290,11 +339,13 @@ async function openRunsModal() {
   } catch {}
   const results = state.session.results || [];
   const body = $("run-modal-body");
+  // Header actions: run count + "Delete all", on the same line as the title.
+  const actions = $("run-modal-actions");
   if (!results.length) {
+    actions.replaceChildren();
     body.replaceChildren(el("div", { className: "muted", textContent: "No runs yet." }));
   } else {
-    // Top bar: delete every stored run at once.
-    const topbar = el("div", { className: "runs-topbar" },
+    actions.replaceChildren(
       el("span", { className: "muted", textContent: `${results.length} run${results.length > 1 ? "s" : ""}` }),
       el("button", {
         className: "danger",
@@ -316,7 +367,12 @@ async function openRunsModal() {
       // Hand mode: fixed hands show a ✋ that previews the chosen cards.
       const fh = cfg.fixed_hand || [];
       let handCell;
+      // A fixed opening hand of size H is equivalent to 7 − H mulligans (you
+      // always draw 7 and bottom the rest), so show that instead of the raw 0.
+      let mulligansShown = cfg.mulligans ?? 0;
       if (fh.length) {
+        const handSize = cfg.fixed_hand_pad_to != null ? cfg.fixed_hand_pad_to : fh.length;
+        mulligansShown = Math.max(0, 7 - handSize);
         const icon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the fixed hand" });
         const backs = cfg.fixed_hand_pad_to != null ? Math.max(0, cfg.fixed_hand_pad_to - fh.length) : 0;
         hoverGrid(icon, fh, backs);
@@ -364,14 +420,14 @@ async function openRunsModal() {
           el("div", { className: "pp", textContent: `${st.successes || 0}/${gr}` })),
         el("td", { textContent: String(cfg.num_games ?? "") }),
         handCell,
-        el("td", { textContent: String(cfg.mulligans ?? 0) }),
+        el("td", { textContent: String(mulligansShown) }),
         el("td", { textContent: cfg.on_the_play === false ? "draw" : "play" }),
         el("td", { textContent: String(cfg.base_seed ?? "") }),
         actionsCell);
       tr.onclick = () => loadRun(r);
       tbody.append(tr);
     });
-    body.replaceChildren(topbar, el("table", { className: "runs" }, thead, tbody));
+    body.replaceChildren(el("table", { className: "runs" }, thead, tbody));
   }
   $("run-modal").classList.remove("hidden");
 }
@@ -647,7 +703,7 @@ function propRow(p, i) {
 
   const trigger = el("div", { className: "row trigger" }, timing, phase, "of turn", turn, del);
 
-  const ta = el("textarea", { rows: 2, placeholder: "e.g. the commander is in play and 4 non-creature spells have been cast this turn", value: p.english });
+  const ta = el("textarea", { rows: 2, placeholder: "There are at least 2 creatures in play", value: p.english });
   // Editing the English invalidates the compiled code and its confidence/note.
   ta.oninput = () => { p.english = ta.value; p.code = null; p.confidence = null; p.compile_note = null; };
 
@@ -980,7 +1036,7 @@ function runsTable(runs) {
   // [header, alignment-class, sortable] triples.
   const COLS = [["#", "numc", true], ["Result", "cc", true], ["Hand", "cc", false],
     ["Steps", "numc", true], ["Explored", "numc", true], ["Considered", "numc", true],
-    ["Tree", "cc", false], ["Bugs", "cc", false]];
+    ["Tree", "cc", false]];
   const { key, dir } = state.runsSort;
   const thead = el("thead", {}, el("tr", {},
     ...COLS.map(([h, cls, sortable]) => {
@@ -1024,7 +1080,7 @@ function runsTable(runs) {
     const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the opening hand" });
     hoverGrid(handIcon, run.hand || []);
 
-    const treeCell = (run.tree || run.tree_gz)
+    const treeCell = (run.tree || run.tree_gz || run.has_tree)
       ? (() => {
           const b = el("span", { className: "icon-btn", textContent: "🌳", title: "open the explored-states tree in a new tab" });
           b.onclick = (e) => { e.stopPropagation(); openTree(run, i); };
@@ -1032,47 +1088,50 @@ function runsTable(runs) {
         })()
       : el("span", { className: "muted", textContent: "—" });
 
-    // Bugs: exceptions hit during this game's search. An icon opens the detail.
+    // Bugs: exceptions hit during this game's search. When present, a 🐛 icon
+    // is shown in the Result cell (no dedicated column) and opens the detail.
     const nbugs = (run.bugs || []).length;
-    const bugCell = nbugs
-      ? (() => {
-          const b = el("span", { className: "icon-btn", textContent: "🐛",
-            title: `${nbugs} bug${nbugs > 1 ? "s" : ""} hit during the search — click for details` });
-          b.append(el("span", { className: "bug-count", textContent: String(nbugs) }));
-          b.onclick = (e) => { e.stopPropagation(); openBugs(run, i); };
-          return b;
-        })()
-      : el("span", { className: "muted", textContent: "—" });
+    const resultCell = el("td", { className: "cc status " + cls, title });
+    resultCell.append(el("span", { textContent: mark + suffix }));
+    if (nbugs) {
+      const b = el("span", { className: "icon-btn bug-icon", textContent: "🐛",
+        title: `${nbugs} bug${nbugs > 1 ? "s" : ""} hit during the search — click for details` });
+      b.append(el("span", { className: "bug-count", textContent: String(nbugs) }));
+      b.onclick = (e) => { e.stopPropagation(); openBugs(run, i); };
+      resultCell.append(b);
+    }
 
     const canReplay = run.frames.length > 0;
     const tr = el("tr", { className: "run-row" + (canReplay ? " replayable" : "") },
       el("td", { className: "numc", textContent: String(i + 1) }));
     tr.dataset.idx = i; // original game index (survives sorting)
     tr.append(
-      el("td", { className: "cc status " + cls, title, textContent: mark + suffix }),
+      resultCell,
       el("td", { className: "cc" }, handIcon),
       el("td", { className: "numc", title: "steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
       el("td", { className: "numc", textContent: num(run.branches_explored) }),
       el("td", { className: "numc", textContent: num(run.branches_considered) }),
-      el("td", { className: "cc" }, treeCell),
-      el("td", { className: "cc" }, bugCell));
+      el("td", { className: "cc" }, treeCell));
     if (canReplay) {
       tr.title = "click to replay the winning line below";
-      tr.onclick = () => { highlightGame(i); openBoard(i); };
+      tr.onclick = () => { highlightGame(i, true); openBoard(i); };
     }
     tbody.append(tr);
   });
   return el("table", { className: "runs viz-runs" }, thead, tbody);
 }
 
-function highlightGame(gi) {
+// `scroll` only when the user explicitly navigates (row click, keyboard) — NOT
+// on the automatic table re-render each game finishes, which would otherwise
+// keep yanking the view back to the games table mid-run.
+function highlightGame(gi, scroll = false) {
   state.vizIdx = gi;
   const tbody = $("viz-list").querySelector("tbody");
   if (!tbody) return;
   [...tbody.children].forEach((tr) => {
     const on = +tr.dataset.idx === gi;
     tr.classList.toggle("active", on);
-    if (on) tr.scrollIntoView({ block: "nearest" });
+    if (on && scroll) tr.scrollIntoView({ block: "nearest" });
   });
 }
 
@@ -1087,7 +1146,7 @@ function stepGame(d) {
   let pos = order.indexOf(state.vizIdx);
   if (pos === -1) pos = d > 0 ? -1 : order.length;  // step in from either end
   const next = order[Math.min(order.length - 1, Math.max(0, pos + d))];
-  if (next != null && next !== state.vizIdx) { highlightGame(next); openBoard(next); }
+  if (next != null && next !== state.vizIdx) { highlightGame(next, true); openBoard(next); }
 }
 
 // Floating grid of card images shown while hovering a hand icon.
@@ -1133,13 +1192,25 @@ async function inflateTree(b64) {
 
 // Open the explored-states search tree for a run in a new browser tab.
 async function openTree(run, i) {
-  if (!run.tree && !run.tree_gz) return;
+  if (!run.tree && !run.tree_gz && !run.has_tree) return;
   // window.open must happen synchronously in the click, before any await.
   const w = window.open("", "_blank");
   if (!w) { alert("Popup blocked — allow popups for this site to view the tree."); return; }
   let tree = run.tree;
   if (!tree) {
-    try { tree = await inflateTree(run.tree_gz); }
+    // Live runs carry the tree inline; reloaded runs have it stripped from the
+    // session payload (it can be enormous) — fetch just this game's tree.
+    let gz = run.tree_gz;
+    if (!gz) {
+      w.document.write("Loading search tree…");
+      try {
+        const gi = run.game_index ?? run._i ?? i;
+        const r = await api(`/api/sessions/${state.session.id}/results/${state.currentResultId}/runs/${gi}/tree`);
+        gz = r.tree_gz;
+        run.tree_truncated = r.tree_truncated; // for the viewer header
+      } catch (e) { w.document.write("Failed to load the tree: " + e.message); return; }
+    }
+    try { tree = await inflateTree(gz); }
     catch (e) { w.document.write("Failed to decode the stored tree: " + e); return; }
   }
   const payload = {

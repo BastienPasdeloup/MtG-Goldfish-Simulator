@@ -214,6 +214,10 @@ class GameState:
     # game-long bookkeeping
     cards_drawn: int = 0
     commander_cast_count: dict[str, int] = field(default_factory=dict)
+    # A commander has been cast from the command zone this game. With a partner
+    # pair only ONE commander may be cast per game — once one is cast the other
+    # is no longer castable (the already-cast one may still be re-cast).
+    commander_cast_this_game: bool = False
     storm_count: int = 0
     energy: int = 0           # energy counters (a pool — never emptied by phases)
     attackers: list[int] = field(default_factory=list)  # uids attacking this turn
@@ -234,6 +238,13 @@ class GameState:
     # resolving once the current resolution completes (nested settle calls
     # defer — see resolve_triggered_abilities / settle).
     _resolve_depth: int = 0
+    # Transient: when a phase-entry triggered ability BRANCHES (e.g. Emperor of
+    # Bones' begin-of-combat exile with several graveyard choices), the search
+    # fans the branches back onto its frontier as "advance" items. Each branch
+    # has already had its step-entry (phase logic + triggers) applied, so this
+    # marks the (turn, phase) at which _advance must SKIP re-applying step-entry
+    # once, resuming just after the trigger. Never carried across clone().
+    _skip_step_entry: tuple | None = None
     # Commander name(s) from the deck (stable — usable whether the commander is
     # in the command zone, on the battlefield or anywhere else).
     commander_names: tuple[str, ...] = ()
@@ -278,6 +289,7 @@ class GameState:
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
+            commander_cast_this_game=self.commander_cast_this_game,
             storm_count=self.storm_count,
             energy=self.energy,
             attackers=list(self.attackers),
@@ -611,13 +623,21 @@ class GameState:
 
     def make_token(
         self, name: str, power: int, toughness: int, type_line: str,
-        text: str | None = None,
+        text: str | None = None, tapped: bool = False, attacking: bool = False,
     ) -> Permanent:
         if text is None:
             text = _TOKEN_TEXT.get(name, "")
         data = CardData(name=name, type_line=type_line, power=str(power),
                         toughness=str(toughness), oracle_text=text)
         perm = self.put_on_battlefield(data, token=True, fire_etb=False)
+        # Set tap/attack state BEFORE emitting, so a token created tapped or
+        # attacking is depicted that way in its entering frame (no flash of an
+        # untapped, non-attacking token first).
+        if tapped:
+            perm.tapped = True
+        if attacking:
+            perm.summoning_sick = False
+            self.attackers.append(perm.uid)
         self.emit(f"create token {name} ({power}/{toughness})")
         return perm
 

@@ -14,8 +14,6 @@ class EllieBrickMaster(Card):
     card_name = "Ellie, Brick Master"
 
     def on_you_attack(self, state, perm):
-        tok = state.make_token("Cordyceps Infected", 1, 1, "Creature — Fungus Zombie")
-        tok.tapped = True
-        tok.summoning_sick = False
-        state.attackers.append(tok.uid)
+        state.make_token("Cordyceps Infected", 1, 1, "Creature — Fungus Zombie",
+                         tapped=True, attacking=True)
         state.emit("Distract the Horde: create a tapped, attacking 1/1 Fungus Zombie")

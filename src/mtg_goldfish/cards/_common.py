@@ -606,6 +606,147 @@ def sacrifice_outlet_actions(
     return [make(uid) for uid in victims.values()]
 
 
+def check_land(name: str, colors: tuple[str, str],
+               needed_types: tuple[str, ...]) -> type[Card]:
+    """Check land: enters tapped unless you control a land of one of
+    `needed_types` (Drowned Catacomb, Hinterland Harbor cycle)."""
+
+    @register
+    class _Check(Card):
+        card_name = name
+
+        def mana_abilities(self, state):
+            return [ManaAbility(amount=1, choices=colors)]
+
+        def etb_tapped(self, state):
+            return not any(p.is_land and perm_has_subtype(p, needed_types)
+                           for p in state.battlefield)
+
+    _Check.__name__ = name.replace(" ", "").replace("'", "")
+    _Check.__doc__ = f"{name} — check land: {colors}; tapped unless you control a {'/'.join(needed_types)}."
+    return _Check
+
+
+def surveil_land(name: str, colors: tuple[str, str]) -> type[Card]:
+    """Surveil dual: enters tapped, taps for either colour, ETB surveil 1
+    (Undercity Sewers / Hedge Maze cycle)."""
+
+    @register
+    class _Surveil(Card):
+        card_name = name
+
+        def mana_abilities(self, state):
+            return [ManaAbility(amount=1, choices=colors)]
+
+        def etb_tapped(self, state):
+            return True
+
+        def on_etb(self, state, permanent):
+            return surveil_branches(state, 1, name)
+
+    _Surveil.__name__ = name.replace(" ", "").replace("'", "")
+    _Surveil.__doc__ = f"{name} — surveil dual: enters tapped, {colors}, ETB surveil 1."
+    return _Surveil
+
+
+def slow_fetch_land(name: str, types: tuple[str, ...]) -> type[Card]:
+    """Old 'slow' fetchland (Flood Plain / Bad River cycle): enters tapped;
+    {T}, Sacrifice: search a <type> card onto the battlefield, then shuffle.
+    (No life cost, unlike the Zendikar fetches.)"""
+
+    @register
+    class _SlowFetch(Card):
+        card_name = name
+
+        def etb_tapped(self, state):
+            return True
+
+        def battlefield_actions(self, state, perm):
+            from .registry import build_card
+
+            if perm.tapped:
+                return []
+            acts: list[CardAction] = []
+            for target in state.search_library(
+                    lambda c: c.is_land and has_subtype(c, types)):
+                for mode in (build_card(target).etb_modes(state) or [None]):
+                    acts.append(self._fetch(perm, target.name, mode))
+            return acts
+
+        def _fetch(self, perm, target_name, mode):
+            from ..engine.actions import _apply_etb_mode
+
+            def pay(st):
+                p = st.find_permanent(perm.uid)
+                if p is None or p.tapped:
+                    return False
+                p.tapped = True
+                st.emit(f"{name}: tap, sacrifice")
+                st.leaves_battlefield(p, "graveyard")
+                return True
+
+            def resolve(st):
+                target = next((c for c in st.library if c.name == target_name), None)
+                if target is None:
+                    return None
+                st.take_from_library(target)
+                newp = st.put_on_battlefield(target, fire_etb=False)
+                _apply_etb_mode(st, newp, mode)
+                st.shuffle_library()
+                st.queue_entry_triggers([newp])
+                suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
+                st.emit(f"{name}: fetch {target_name}{suffix} — shuffle")
+                return None
+
+            suffix = f" ({mode['label']})" if mode and mode.get("label") else ""
+            return CardAction.activated(
+                f"{name}: fetch {target_name}{suffix}", pay, resolve,
+                source_name=name, ability_text=f"Fetch {target_name}{suffix}")
+
+    _SlowFetch.__name__ = name.replace(" ", "").replace("'", "")
+    _SlowFetch.__doc__ = (
+        f"{name} — Land, enters tapped. {{T}}, Sacrifice: search a "
+        f"{'/'.join(types)} card onto the battlefield, then shuffle.")
+    return _SlowFetch
+
+
+def dig_choose(state: "GameState", look_n: int, keep_n: int, *,
+               rest: str, source: str, to_hand: bool = True):
+    """Look at the top `look_n` cards; branch over choosing `keep_n` of them to
+    put into your hand (or on top, if to_hand is False), with the rest going to
+    `rest` ("bottom" / "graveyard" / "top"). Bounded — dig sizes are small."""
+    from itertools import combinations
+
+    top = state.library[:look_n]
+    if not top:
+        return None
+    keep_n = min(keep_n, len(top))
+    idx_combos = list(combinations(range(len(top)), keep_n)) or [()]
+
+    def fn(st, chosen_idx):
+        chosen = set(chosen_idx)
+        pool = st.library[:len(top)]
+        del st.library[:len(top)]
+        kept = [c for i, c in enumerate(pool) if i in chosen]
+        leftover = [c for i, c in enumerate(pool) if i not in chosen]
+        if to_hand:
+            st.hand.extend(kept)
+        else:  # keep on top, in order
+            st.library[:0] = kept
+        if rest == "graveyard":
+            for c in leftover:
+                st.to_graveyard(c)
+        elif rest == "top":
+            st.library[:0] = leftover
+        else:  # bottom
+            st.library.extend(leftover)
+        st.emit(f"{source}: look {len(pool)}, keep {len(kept)} "
+                f"({', '.join(c.name for c in kept) or 'none'})")
+        return None
+
+    return branch_over(state, idx_combos, fn)
+
+
 def counterspell(
     name: str, *, target: Callable[[CardData], bool] | None = None,
     dest: str = "graveyard", note: str = "",

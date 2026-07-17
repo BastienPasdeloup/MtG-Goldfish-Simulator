@@ -100,13 +100,18 @@ def fetch_deck_signature(url: str) -> list[tuple[str, str, int]]:
 def import_moxfield_deck(
     url: str,
     name: str,
-    format_id: str = "duel_commander",
+    format_id: str | None = None,
     scryfall: ScryfallClient | None = None,
 ) -> ImportResult:
-    """Import a public Moxfield deck and enrich it with Scryfall data."""
+    """Import a public Moxfield deck and enrich it with Scryfall data. When
+    `format_id` is None the format is inferred from Moxfield's own `format`
+    field (falling back to Duel Commander)."""
+    from ..formats import resolve_format_id  # deferred: avoids an import cycle
+
     scryfall = scryfall or ScryfallClient()
     public_id = extract_public_id(url)
     raw = _fetch_moxfield_json(public_id)
+    format_id = format_id or resolve_format_id(raw.get("format"))
 
     boards = raw.get("boards") or {}
     if not boards:

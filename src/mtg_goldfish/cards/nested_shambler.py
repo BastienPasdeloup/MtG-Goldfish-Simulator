@@ -14,5 +14,5 @@ class NestedShambler(Card):
         x = max(0, permanent.base_power() + permanent.counters.get("+1/+1", 0)
                 + permanent.temp_power)
         for _ in range(x):
-            state.make_token("Squirrel", 1, 1, "Creature — Squirrel").tapped = True
+            state.make_token("Squirrel", 1, 1, "Creature — Squirrel", tapped=True)
         state.emit(f"Nested Shambler: create {x} tapped 1/1 Squirrels")

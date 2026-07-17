@@ -181,3 +181,34 @@ def test_stub_ignores_card_listing():
         ["Some Random Card", "Another Card"],
         provider=StubProvider())
     assert "commander_in_play" in r["code"]
+
+
+def test_only_one_commander_castable_per_game():
+    """With a partner pair, once one commander is cast the other is no longer
+    offered as a legal action for the rest of the game."""
+    from mtg_goldfish.engine.actions import CastCommander, legal_actions
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+
+    a = _cd("Partner A", "{R}", "Legendary Creature — Goblin", ci=["R"], pt=("1", "1"))
+    b = _cd("Partner B", "{R}", "Legendary Creature — Goblin", ci=["R"], pt=("1", "1"))
+    deck = Deck(name="t", entries=[
+        DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=a),
+        DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=b),
+        DeckEntry(quantity=98, board=DeckBoard.MAINBOARD,
+                  card=_cd("Mountain", "", "Basic Land — Mountain")),
+    ])
+    state = new_game_from_deck(deck)
+    state.mana_pool.add("R", 5)  # enough to cast either
+
+    def commander_casts(st):
+        return {x.card_name for x in legal_actions(st) if isinstance(x, CastCommander)}
+
+    assert commander_casts(state) == {"Partner A", "Partner B"}
+
+    cast_a = next(x for x in legal_actions(state)
+                  if isinstance(x, CastCommander) and x.card_name == "Partner A")
+    cast_a.apply(state)
+    assert state.commander_cast_this_game
+
+    # Partner B may no longer be cast (it never was); the game is locked in.
+    assert "Partner B" not in commander_casts(state)

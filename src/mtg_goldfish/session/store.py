@@ -143,15 +143,18 @@ class SessionStore:
             except Exception as exc:
                 print(f"[sessions] skipping {path.name}: {exc}", file=sys.stderr)
                 continue
+            last_run = max((r.created_at for r in s.results), default=None)
             out.append(
                 {
                     "id": s.id,
                     "name": s.name,
                     "format_id": s.format_id,
                     "created_at": s.created_at,
-                    "commanders": [e.card.name for e in s.deck.commanders],
+                    "commanders": [{"name": e.card.name, "image": e.card.image}
+                                   for e in s.deck.commanders],
                     "num_properties": len(s.properties),
                     "num_results": len(s.results),
+                    "last_run": last_run,
                 }
             )
         out.sort(key=lambda d: d["created_at"], reverse=True)

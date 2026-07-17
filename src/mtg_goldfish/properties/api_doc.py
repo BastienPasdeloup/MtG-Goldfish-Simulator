@@ -96,6 +96,16 @@ resolution actually did):
     def check(state):
         return any(c.is_double_faced for c in
                    state.cards_put_by(state.commander_name(), via_kind="activated"))
+    # "Emperor of Bones uses its adapt ability, which puts a creature into play"
+    # — ONE assertion binds BOTH halves: an ACTIVATED ability of that card (its
+    # adapt) put a CREATURE onto the battlefield when it resolved. Do NOT split
+    # it into ability_activated(...) AND a separate creatures_in_play() check —
+    # that would pass even if some OTHER creature entered; the point is that THIS
+    # ability is what put the creature into play. Use permanents_put_by with
+    # via_kind="activated" (or cards_put_by, to test the creature's traits):
+    def check(state):
+        return state.permanents_put_by(
+            "Emperor of Bones", via_kind="activated", creature=True) >= 1
     # "Deadpool, Trading Card is played on turn 4" — with the property's own
     # trigger moment set LATER (e.g. at end_step of turn 6), so it must query
     # the game history, not the current board:

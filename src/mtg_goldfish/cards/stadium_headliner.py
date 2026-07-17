@@ -15,11 +15,9 @@ class StadiumHeadliner(Card):
     card_name = "Stadium Headliner"
 
     def on_attack(self, state, perm):
-        tok = state.make_token("Warrior", 1, 1, "Creature — Warrior")
-        tok.tapped = True
-        tok.summoning_sick = False
+        tok = state.make_token("Warrior", 1, 1, "Creature — Warrior",
+                               tapped=True, attacking=True)
         tok.counters["end_step_sac"] = 1
-        state.attackers.append(tok.uid)
         state.emit("Stadium Headliner: mobilize — tapped, attacking 1/1 Warrior")
 
     def battlefield_actions(self, state, perm):

@@ -36,6 +36,16 @@ game-history helpers above.
 - For "an ability activated / resolved / found something", use \
 ability_activated / trigger_resolved / ability_succeeded / cards_put_by / \
 cards_drawn_by, or count_events for anything else.
+- When the English says an ability DID something — "X uses its <ability>, which \
+puts a creature into play", "X's ability draws two cards" — BIND the outcome to \
+that ability in ONE assertion via the source + via_kind, e.g. \
+permanents_put_by(source, via_kind="activated"/"triggered", creature=True) or \
+cards_put_by(source, via_kind=...) / cards_drawn_by(source). Do NOT split it \
+into "the ability was activated" AND a separate board/global check (e.g. \
+ability_activated(X) and creatures_in_play() >= 1): that passes even when some \
+OTHER effect produced the result. The property is that THIS ability caused it. \
+"uses / activates its ability" -> via_kind="activated"; "its triggered ability / \
+when ... triggers" -> via_kind="triggered".
 
 OUTPUT FORMAT — respond with ONLY a single JSON object, no prose, no markdown:
 {{"code": "def check(state):\\n    return ...\\n",

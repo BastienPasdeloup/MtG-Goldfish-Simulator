@@ -14,9 +14,10 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .. import __version__
 from ..cards import is_implemented, load_all_cards
 from ..config import CONFIG
-from ..deck import MoxfieldError, ScryfallError, import_moxfield_deck
+from ..deck import MoxfieldError, MTGTop8Error, ScryfallError, import_deck
 from ..deck.models import Deck
 from ..engine.phases import phase_labels
 from ..formats import get_format, list_formats
@@ -64,7 +65,8 @@ def _origin_owner_repo() -> str:
 class ImportRequest(BaseModel):
     url: str
     name: str
-    format_id: str = "duel_commander"
+    # Inferred from the deck source when omitted (the UI no longer asks for it).
+    format_id: str | None = None
 
 
 class PropertiesUpdate(BaseModel):
@@ -151,8 +153,18 @@ def deck_flags(deck: Deck) -> dict:
 
 
 def session_payload(session: Session) -> dict:
+    data = session.model_dump()
+    # The per-run search trees (`tree_gz`) can total well over 1 GB across all
+    # results — far more than a browser can JSON.parse (strings are capped near
+    # 512 MB, so a huge payload fails to open with an opaque error). Strip them
+    # here and expose a `has_tree` flag; the tree viewer fetches a single run's
+    # tree on demand via the results/{id}/runs/{i}/tree endpoint.
+    for result in data.get("results", []):
+        for run in result.get("sample_runs", []):
+            run["has_tree"] = bool(run.get("tree_gz") or run.get("tree"))
+            run.pop("tree_gz", None)
     return {
-        "session": session.model_dump(),
+        "session": data,
         "cards": card_view(session.deck),
         "deck_flags": deck_flags(session.deck),
     }
@@ -169,6 +181,7 @@ def index() -> FileResponse:
 @app.get("/api/meta")
 def meta() -> dict:
     return {
+        "version": __version__,
         "formats": [{"id": f.id, "name": f.name} for f in list_formats()],
         "phases": phase_labels(),
         "property_api_doc": STATE_API_DOC,
@@ -178,42 +191,42 @@ def meta() -> dict:
     }
 
 
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Parse a version string like ``0.2.1`` into a comparable int tuple."""
+    return tuple(int(p) for p in re.findall(r"\d+", v or "")) or (0,)
+
+
 @app.get("/api/version-check")
 def version_check() -> dict:
-    """Is this checkout behind the repository's `main`? Compares the local git
-    HEAD to GitHub via the compare API, so a developer who is ahead or diverged
-    is NOT prompted. Returns `checked=False` when this is not a git checkout
-    (e.g. a downloaded ZIP), git is unavailable, or GitHub can't be reached —
-    the UI then simply shows nothing."""
+    """Is a newer release available? Compares this install's `__version__`
+    against the `__version__` declared on the repository's `main` branch (read
+    straight from GitHub's raw file view). This works for ANY install — git
+    checkout or downloaded ZIP — because it needs no local git history, only the
+    version string baked into the code. Returns `checked=False` when GitHub
+    can't be reached or the remote version can't be parsed, so the UI simply
+    shows nothing."""
     import httpx
 
-    local = _git("rev-parse", "HEAD")
-    if not local:
-        return {"checked": False}
     owner_repo = _origin_owner_repo()
     try:
         resp = httpx.get(
-            f"https://api.github.com/repos/{owner_repo}/compare/{local}...main",
-            headers={"Accept": "application/vnd.github+json",
-                     "User-Agent": "mtg-goldfish-simulator"},
+            f"https://raw.githubusercontent.com/{owner_repo}/main/src/mtg_goldfish/__init__.py",
+            headers={"User-Agent": "mtg-goldfish-simulator"},
             timeout=6.0,
         )
     except Exception:  # offline, DNS, timeout…
         return {"checked": False}
-    if resp.status_code != 200:  # e.g. local commit not on GitHub (unpushed dev)
+    if resp.status_code != 200:
         return {"checked": False}
-    data = resp.json()
-    status = data.get("status")            # ahead | behind | identical | diverged
-    ahead = int(data.get("ahead_by", 0))   # commits main is ahead of this checkout
-    tip = (data.get("commits") or [{}])[-1].get("sha") or ""
+    m = re.search(r"""__version__\s*=\s*['"]([^'"]+)['"]""", resp.text)
+    if not m:
+        return {"checked": False}
+    remote = m.group(1)
     return {
         "checked": True,
-        # Prompt only when main is strictly ahead (not when we're ahead/diverged).
-        "update_available": status == "ahead" and ahead > 0,
-        "behind_by": ahead,
-        "status": status,
-        "local": local[:7],
-        "remote": tip[:7],
+        "update_available": _version_tuple(remote) > _version_tuple(__version__),
+        "local": __version__,
+        "remote": remote,
         "repo_url": f"https://github.com/{owner_repo}",
         "download_url": f"https://github.com/{owner_repo}/archive/refs/heads/main.zip",
     }
@@ -225,10 +238,10 @@ def version_check() -> dict:
 @app.post("/api/deck/preview")
 def deck_preview(req: ImportRequest) -> dict:
     try:
-        result = import_moxfield_deck(req.url, req.name, req.format_id)
-    except (MoxfieldError, ScryfallError) as exc:
+        result = import_deck(req.url, req.name, req.format_id)
+    except (MoxfieldError, MTGTop8Error, ScryfallError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    problems = get_format(req.format_id).validate(result.deck)
+    problems = get_format(result.deck.format_id).validate(result.deck)
     return {
         "deck": result.deck.to_public(),
         "cards": card_view(result.deck),
@@ -240,13 +253,13 @@ def deck_preview(req: ImportRequest) -> dict:
 @app.post("/api/sessions")
 def create_session(req: ImportRequest) -> dict:
     try:
-        result = import_moxfield_deck(req.url, req.name, req.format_id)
-    except (MoxfieldError, ScryfallError) as exc:
+        result = import_deck(req.url, req.name, req.format_id)
+    except (MoxfieldError, MTGTop8Error, ScryfallError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session = Session(
         id=new_id(),
         name=req.name,
-        format_id=req.format_id,
+        format_id=result.deck.format_id,
         created_at=now_iso(),
         deck=result.deck,
     )
@@ -308,19 +321,35 @@ def delete_result(session_id: str, result_id: str) -> dict:
     return {"ok": True, "num_results": len(session.results)}
 
 
+@app.get("/api/sessions/{session_id}/results/{result_id}/runs/{game_index}/tree")
+def run_tree(session_id: str, result_id: str, game_index: int) -> dict:
+    """One game's gzip+base64 search tree, fetched on demand when the user opens
+    the tree viewer. Kept out of the session payload because these blobs can be
+    huge (see `session_payload`)."""
+    session = _load(session_id)
+    result = next((r for r in session.results if r.id == result_id), None)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = next((sr for sr in result.sample_runs
+                if sr.get("game_index") == game_index), None)
+    if run is None or not run.get("tree_gz"):
+        raise HTTPException(status_code=404, detail="No search tree for this game")
+    return {"tree_gz": run["tree_gz"], "tree_truncated": run.get("tree_truncated", False)}
+
+
 @app.get("/api/sessions/{session_id}/deck-check")
 def deck_check(session_id: str) -> dict:
-    """Compare the stored deck against its Moxfield source: has it changed
-    since it was imported? Called asynchronously by the UI (network-bound)."""
-    from ..deck.moxfield import deck_signature, fetch_deck_signature
+    """Compare the stored deck against its source (Moxfield/MTGTop8): has it
+    changed since it was imported? Called asynchronously by the UI."""
+    from ..deck import deck_signature, fetch_deck_signature
 
     session = _load(session_id)
     url = session.deck.source_url
     if not url:
         return {"checked": False}
     try:
-        current = fetch_deck_signature(url)
-    except MoxfieldError as exc:
+        current = fetch_deck_signature(url, session.deck.format_id)
+    except (MoxfieldError, MTGTop8Error) as exc:
         return {"checked": False, "error": str(exc)}
     return {"checked": True, "changed": current != deck_signature(session.deck)}
 

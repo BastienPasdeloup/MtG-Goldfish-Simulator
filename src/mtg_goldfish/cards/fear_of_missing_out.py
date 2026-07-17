@@ -26,6 +26,10 @@ class FearOfMissingOut(Card):
             if c is not None:
                 st.discard(c)
             st.draw(1)
+            # discard() already emitted a frame (with the pre-draw hand); emit
+            # again after the draw so the replay's final snapshot shows the
+            # newly drawn card in hand.
+            st.emit(f"Fear of Missing Out: discard {name}, draw 1")
             return None
 
         return branch_over(state, sorted(others), fn)
