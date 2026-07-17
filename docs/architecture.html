@@ -47,7 +47,7 @@ a script or from tests.</p>
   <text x="30" y="56" fill="#9aa3b2">thin shell: parses requests, streams progress, persists results</text>
 
   <!-- core row -->
-  <g stroke="#2e3340" fill="#1c1f27">
+  <g stroke="#2e3340" fill="#0f1116">
     <rect x="10"  y="110" width="160" height="80" rx="9"/>
     <rect x="195" y="110" width="160" height="80" rx="9"/>
     <rect x="380" y="110" width="160" height="80" rx="9"/>
@@ -81,7 +81,7 @@ a script or from tests.</p>
 <div class="table-scroll"><table>
   <tr><th>Package</th><th>Responsibility</th></tr>
   <tr><td><code>config</code></td><td>Environment and paths (<code>ANTHROPIC_API_KEY</code>, <code>MTG_DATA_DIR</code>, selected model).</td></tr>
-  <tr><td><code>deck</code></td><td><code>CardData</code>/<code>Deck</code> models, cached Scryfall client, Moxfield importer. Commander/companion roles come from Moxfield's boards, cross-checked against Scryfall facts.</td></tr>
+  <tr><td><code>deck</code></td><td><code>CardData</code>/<code>Deck</code> models, cached Scryfall client, Moxfield and MTGTop8 importers. Commander/companion roles come from the source's boards, cross-checked against Scryfall facts.</td></tr>
   <tr><td><code>formats</code></td><td><code>Format</code> rules (Duel Commander): starting life and hand, deck validation.</td></tr>
   <tr><td><code>cards</code></td><td>Runtime card <strong>behaviour</strong>. One file per card, auto-discovered; <code>build_card</code> returns the registered <code>Card</code> or an <code>UnimplementedCard</code> vanilla approximation.</td></tr>
   <tr><td><code>engine</code></td><td><code>GameState</code> (cloneable), turn <code>phases</code>, <code>mana</code> (+ payment planner), <code>actions</code>, and the exhaustive <code>simulator</code>.</td></tr>
@@ -155,7 +155,7 @@ is put there:</p>
       <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b2"/>
     </marker>
   </defs>
-  <g stroke="#2e3340" fill="#1c1f27">
+  <g stroke="#2e3340" fill="#0f1116">
     <rect x="10"  y="30"  width="200" height="60" rx="9"/>
     <rect x="10"  y="110" width="200" height="60" rx="9"/>
     <rect x="10"  y="190" width="200" height="60" rx="9"/>
@@ -187,8 +187,8 @@ is put there:</p>
 <figcaption>Permanents enter the battlefield on resolution; instants and sorceries apply their effect and go to the graveyard. Replacement effects and mana abilities bypass the stack entirely.</figcaption>
 </figure>
 
-<p>In code, an activated ability is a <code>CardAction.activated(label, pay_fn, resolve_fn)</code>:
-<code>pay_fn</code> pays all costs at activation (returning <code>False</code> aborts — nothing
+<p>In code, an activated ability is a <code>CardAction.activated(label, pre_fn, resolve_fn)</code>:
+<code>pre_fn</code> pays all costs at activation (returning <code>False</code> aborts — nothing
 is stacked), then the ability is pushed; <code>resolve_fn</code> applies the effect when it
 resolves. Resolution branches (a fetch enumerates its targets) simply return a list of successor
 states — the search explores them all.</p>
@@ -236,7 +236,7 @@ Wild Growth that add mana when the host is tapped, lands that sacrifice themselv
       <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b2"/>
     </marker>
   </defs>
-  <g stroke="#2e3340" fill="#1c1f27">
+  <g stroke="#2e3340" fill="#0f1116">
     <rect x="10"  y="60" width="170" height="70" rx="9"/>
     <rect x="250" y="60" width="180" height="70" rx="9"/>
     <rect x="500" y="60" width="180" height="70" rx="9"/>

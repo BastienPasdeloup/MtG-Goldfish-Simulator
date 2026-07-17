@@ -80,7 +80,7 @@ games where each property was satisfiable in <em>any</em> line.</p>
     <path d="M540,165 C590,165 590,165 640,165"/>
     <path d="M750,165 C790,165 790,165 820,165"/>
   </g>
-  <g stroke="#2e3340" fill="#1c1f27">
+  <g stroke="#2e3340" fill="#0f1116">
     <rect x="20"  y="130" width="100" height="40" rx="8"/>
     <rect x="220" y="40"  width="110" height="40" rx="8"/>
     <rect x="220" y="130" width="110" height="40" rx="8"/>
@@ -112,7 +112,7 @@ games where each property was satisfiable in <em>any</em> line.</p>
 <h2 id="pruning">Pruning &amp; bounds</h2>
 <ul>
   <li><strong>Viability pruning:</strong> a branch is dropped the moment any unsatisfied property
-  can no longer be verified on it (its “at” moment is past, or its “before” deadline reached) —
+  can no longer be verified on it (its “at the end of” moment is past, or its “before” deadline reached) —
   no descendant could make the game a success.</li>
   <li><strong>Sticky satisfaction:</strong> once a property holds at one of its checkpoints on a
   line, it stays satisfied on that line; the search stops as soon as every property is verified.</li>

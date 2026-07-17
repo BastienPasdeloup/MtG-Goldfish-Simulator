@@ -34,7 +34,8 @@ cards — from a basic land to abilities that use the stack.</p>
 <h2 id="session">Example session: “can my deck ramp?”</h2>
 
 <ol>
-  <li><strong>Import.</strong> Paste a Moxfield URL, pick Duel Commander, name the session.
+  <li><strong>Import.</strong> Paste a Moxfield or MTGTop8 URL and name the session — the format
+  (Duel Commander) is detected automatically.
   The decklist shows every card with its image; cards without a dedicated implementation are
   shown in red (they still play as a vanilla approximation).</li>
   <li><strong>Properties.</strong> Two properties:
@@ -130,8 +131,8 @@ and the hook body runs when the trigger <em>resolves</em>:</p>
             state.emit(<span class="str">"Lotus Cobra: landfall — add {G}"</span>)</code></pre>
 
 <h3 id="activated">An activated ability: pay at activation, effect at resolution</h3>
-<p>Activated abilities use <code>CardAction.activated(label, pay_fn, resolve_fn)</code>. The
-engine calls <code>pay_fn</code> <em>before</em> the ability goes on the stack — it pays every
+<p>Activated abilities use <code>CardAction.activated(label, pre_fn, resolve_fn)</code>. The
+engine calls <code>pre_fn</code> <em>before</em> the ability goes on the stack — it pays every
 cost and returns <code>True</code> (or <code>False</code> to abort). <code>resolve_fn</code>
 applies the effect when the ability resolves. Because the game state may have changed between
 the two, both re-find their objects by uid:</p>

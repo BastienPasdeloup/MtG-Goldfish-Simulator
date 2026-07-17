@@ -29,7 +29,7 @@
 
 <h1>Properties &amp; states</h1>
 <p class="lead">A <strong>property</strong> (or constraint) is an assertion about the game,
-checked at a specific moment: <em>“<strong>at</strong> the precombat main phase of
+checked at a specific moment: <em>“<strong>at the end of</strong> the precombat main phase of
 <strong>turn 3</strong>, the commander is in play and at least 4 lands are on the
 battlefield.”</em> The simulator measures how often your deck can make all of your properties
 true at once.</p>
@@ -40,7 +40,7 @@ true at once.</p>
 
 <div class="table-scroll"><table>
   <tr><th>Part</th><th>Values</th><th>Meaning</th></tr>
-  <tr><td><strong>Timing</strong></td><td>“at the end of” · “before”</td><td>When the condition is evaluated. (“at the end of” is the <code>at</code> timing — see below.)</td></tr>
+  <tr><td><strong>Timing</strong></td><td>“at the end of” · “before”</td><td>When the condition is evaluated (see Timing semantics below).</td></tr>
   <tr><td><strong>Phase</strong></td><td>untap, upkeep, draw, precombat main, …, end step</td><td>The phase of the trigger moment.</td></tr>
   <tr><td><strong>Turn</strong></td><td>1, 2, 3…</td><td>The turn of the trigger moment.</td></tr>
   <tr><td><strong>Condition</strong></td><td>plain English</td><td>Compiled to a Python <code>check(state)</code> function you can review.</td></tr>
@@ -62,23 +62,22 @@ against each state reached at the property's trigger moment; the game succeeds i
 every individual action at a priority window — a main phase, an instant-speed window, or the
 attack step (so “4 spells cast this turn” can be caught between two casts of the same phase).</p>
 
-<h2 id="timing">Timing semantics: <code>at</code> vs <code>before</code></h2>
+<h2 id="timing">Timing semantics: “at the end of” vs “before”</h2>
 
 <ul>
-  <li><strong><code>at</code> phase P of turn N</strong> — checked at every checkpoint where the
-  game is exactly at that phase of that turn (including after each action of a main phase).
-  In the UI this reads as “at the end of”, since the last checkpoint of the phase is the one
-  that usually matters.</li>
-  <li><strong><code>before</code> phase P of turn N</strong> — checked at <em>every</em>
+  <li><strong>“at the end of” phase P of turn N</strong> — checked at every checkpoint where the
+  game is exactly at that phase of that turn (including after each action of a main phase). It
+  reads as “at the end of” because the last such checkpoint is usually the one that matters.</li>
+  <li><strong>“before” phase P of turn N</strong> — checked at <em>every</em>
   checkpoint strictly earlier than that moment: any earlier phase, any earlier turn. Use it for
-  “X happens at some point in the first N turns”.</li>
+  “this happens at some point in the first N turns”.</li>
 </ul>
 
 <figure class="diagram">
 <svg viewBox="0 0 900 150" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace" font-size="12">
   <!-- timeline -->
   <line x1="30" y1="70" x2="870" y2="70" stroke="#3a4150" stroke-width="2"/>
-  <g fill="#1c1f27" stroke="#2e3340">
+  <g fill="#0f1116" stroke="#2e3340">
     <circle cx="110" cy="70" r="7"/><circle cx="230" cy="70" r="7"/>
     <circle cx="350" cy="70" r="7"/><circle cx="470" cy="70" r="7"/>
     <circle cx="590" cy="70" r="7"/><circle cx="710" cy="70" r="7" stroke="#d9a441" fill="#d9a441"/>
@@ -95,7 +94,7 @@ attack step (so “4 spells cast this turn” can be caught between two casts of
   <text x="370" y="20" fill="#4f8cff" text-anchor="middle">“before precombat main of turn 3” — every checkpoint in here</text>
   <!-- at marker -->
   <path d="M710,48 L710,58" stroke="#d9a441"/>
-  <text x="710" y="130" fill="#d9a441" text-anchor="middle">“at precombat main of turn 3” — exactly here</text>
+  <text x="710" y="130" fill="#d9a441" text-anchor="middle">“at the end of” — exactly here</text>
 </svg>
 </figure>
 
@@ -104,8 +103,8 @@ attack step (so “4 spells cast this turn” can be caught between two casts of
   <li><strong>Sticky satisfaction.</strong> Once a property holds at one of its checkpoints on a
   line, it stays satisfied on that line — it does not need to remain true afterwards.</li>
   <li><strong>Viability pruning.</strong> A line is abandoned as soon as an unsatisfied property
-  can no longer be verified on it (its <code>at</code> moment is past, or its
-  <code>before</code> deadline reached). The search tree viewer shows exactly where each dead
+  can no longer be verified on it (its “at the end of” moment is past, or its
+  “before” deadline reached). The search tree viewer shows exactly where each dead
   line died, and why, with one status circle per property.</li>
 </ul>
 
@@ -151,11 +150,11 @@ state.creatures_with_power_at_least(n: int) -> int</code></pre>
 state.creature_spells_cast_this_turn -> int
 state.noncreature_spells_cast_this_turn -> int
 state.lands_played_this_turn -> int
-state.cards_drawn_this_turn -> int
-state.storm_count -> int</code></pre>
+state.cards_drawn_this_turn -> int</code></pre>
 
 <h3>Game-long</h3>
 <pre><code>state.cards_drawn -> int          <span class="comment"># total cards drawn this game</span>
+state.storm_count -> int          <span class="comment"># accumulates across the game</span>
 state.life -> int
 state.turn -> int</code></pre>
 
@@ -189,18 +188,6 @@ state.events_matching(...same filters...) -> list[dict]  <span class="comment">#
 Event <code>kind</code>s include <code>cast</code>, <code>play_land</code>,
 <code>enter_battlefield</code>/<code>leave_battlefield</code>, <code>draw</code>,
 <code>activated</code>, <code>trigger_resolved</code>, <code>spell_resolved</code>.</p>
-
-<div class="panel callout blue">
-  <div class="title">“Played / cast” is <em>not</em> “entered the battlefield”</div>
-  <p style="margin:0">Playing or casting is an <strong>action you take</strong>; entering the
-  battlefield is what happens to a permanent — <em>however</em> it got there. They often coincide,
-  but not always: a land you <strong>fetch</strong> enters play but was never <em>played</em>; a
-  creature you <strong>reanimate</strong> or a <strong>token</strong> enters but was never
-  <em>cast</em>; a spell that is <strong>countered</strong> was <em>cast</em> but never entered.
-  Use <code>played_on</code>/<code>cast_on</code> for “X was played/cast”, and
-  <code>entered_battlefield</code> (or <code>permanents_put_by</code>) for “X came into play”.
-  The English → code compiler is taught this distinction and picks the matching helper.</p>
-</div>
 
 <h3>Past states / per-turn history</h3>
 <p>These describe what happened on <em>earlier</em> turns of the same line — the state carries
@@ -261,14 +248,11 @@ state.some_turn(pred) -> bool    <span class="comment"># … for at least one tu
 
 <ul>
   <li><strong>Pick the right timing.</strong> “I can have it by turn 3” is usually
-  <code>before end step of turn 3</code> (any moment counts), not <code>at</code> — with
-  <code>at</code>, the condition must hold at that exact phase.</li>
+  <code>before end step of turn 3</code> (any moment counts), not “at the end of” — with
+  “at the end of”, the condition must hold at that exact phase.</li>
   <li><strong>Approximate card names are fine.</strong> The compiler resolves them against your
   deck (“Nick Fury” → the full name), so you rarely need to type the exact string. If a name is
   ambiguous or not in the deck it lowers confidence and says so — check the note.</li>
-  <li><strong>Say what you mean: played vs. entered.</strong> “I cast/play X” and “X is in play /
-  entered play” compile to different helpers (see the callout above). A fetched land, a token, or
-  a reanimated creature <em>entered</em> without being <em>played</em>.</li>
   <li><strong>Each property is checked independently.</strong> Two properties don't need to hold
   at the same instant — they each have their own trigger moment; the game succeeds if one line
   satisfies all of them at their respective moments.</li>
