@@ -1,5 +1,6 @@
 :root {
-  --bg: #14161b;
+  color-scheme: dark;   /* dark UA scrollbars/controls (no white scrollbar strips) */
+  --bg: #0f1116;        /* page — same dark as the documentation site */
   --panel: #1c1f27;
   --panel-2: #232732;
   --border: #2e3340;
@@ -14,6 +15,11 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+/* Page background is the dark `--bg` (#0f1116, same as the docs site) so the
+   content cards / header / footer (`--panel`) stand out against it. The root/
+   canvas takes `--panel` so the browser's over-scroll areas above the header
+   and below the footer match those bars instead of flashing the page colour. */
+html { background: var(--panel); }
 body {
   background: var(--bg);
   color: var(--text);
@@ -64,7 +70,10 @@ header.appbar .spacer { flex: 1; }
 .pill { font-size: 11px; padding: .15rem .5rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); }
 .pill.warn { border-color: var(--accent); color: var(--accent); }
 
-main { padding: 1.2rem; max-width: 1400px; margin: 0 auto; width: 100%; box-sizing: border-box; flex: 1 0 auto; }
+/* `main` grows to keep the footer at the window bottom (flex:1) and paints the
+   page background itself so the empty space below short content is the solid
+   page colour — no big filler box, no darker void. */
+main { padding: 1.2rem; max-width: 1400px; margin: 0 auto; width: 100%; box-sizing: border-box; flex: 1 0 auto; background: var(--bg); }
 
 footer.appfooter {
   border-top: 1px solid var(--border); background: var(--panel); color: var(--muted);
