@@ -5,4 +5,4 @@ user-defined properties, it exhaustively explores lines of play and reports
 how often the properties can be satisfied.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
