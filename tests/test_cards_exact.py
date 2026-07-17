@@ -418,3 +418,51 @@ def test_tasigur_delve_reduces_cost():
     for n in ("Ponder", "Preordain", "Cremate"):
         state.graveyard.append(card(n))
     assert impl.cast_cost(state).cmc == 3             # delve 3 -> {2}{B}
+
+
+def test_moonmist_transforms_humans_and_prevents_nonwolf_damage():
+    """Transform all Humans (DFC-only); this turn only Wolves deal combat damage."""
+    from mtg_goldfish.engine.actions import deal_combat_damage
+
+    state = _state([], hand_names=["Moonmist"])
+    bruce = state.put_on_battlefield(
+        card("Bruce Banner // The Incredible Hulk"), fire_etb=False)
+    wasp = state.put_on_battlefield(
+        card("The Wasp, Winsome Avenger"), fire_etb=False)
+    state.mana_pool.add("G", 1)
+    state.mana_pool.add("C", 1)
+    cast = next(a for a in legal_actions(state) if a.label.startswith("cast Moonmist"))
+    cast.apply(state)
+    # Bruce (a Human with a back face) flipped into the Hulk; the Wasp is a
+    # Human but single-faced — untouched.
+    assert bruce.transformed and bruce.name == "The Incredible Hulk"
+    assert not wasp.transformed
+
+    # Prevention: the (non-Wolf) Wasp attacks — no combat damage this turn...
+    wasp.summoning_sick = False
+    state.attackers = [wasp.uid]
+    opp = state.opponent_life
+    deal_combat_damage(state)
+    assert state.opponent_life == opp
+    # ...and the effect ends with the turn.
+    state.reset_turn_counters()
+    assert not state.prevent_nonwolf_combat_damage
+    state.attackers = [wasp.uid]
+    deal_combat_damage(state)
+    assert state.opponent_life == opp - 2
+
+
+def test_the_wasp_is_flash_flying_vanilla():
+    """2/1 flash flyer; its goldfish-irrelevant triggers add no stack items."""
+    from mtg_goldfish.engine.actions import _is_instant_speed
+
+    data = card("The Wasp, Winsome Avenger")
+    assert _is_instant_speed(data)  # Flash
+    state = _state([], hand_names=["The Wasp, Winsome Avenger"])
+    state.mana_pool.add("U", 1)
+    state.mana_pool.add("C", 1)
+    cast = next(a for a in legal_actions(state) if a.label.startswith("cast The Wasp"))
+    cast.apply(state)
+    perm = state.permanents_named("The Wasp, Winsome Avenger")[0]
+    assert state.effective_power(perm) == 2
+    assert not state.stack  # ETB modelled as a no-op: nothing queued

@@ -568,6 +568,10 @@ def deal_combat_damage(state: GameState) -> None:
         perm = state.find_permanent(uid)
         if perm is None:
             continue
+        # Moonmist: this turn only Werewolves and Wolves deal combat damage
+        # ("Werewolf" contains "wolf", so one subtype check covers both).
+        if state.prevent_nonwolf_combat_damage and "wolf" not in perm.type_line.lower():
+            continue
         dmg = max(0, state.effective_power(perm))
         # No blockers in a goldfish, so double strike is simply twice the damage
         # (first-strike + normal combat damage steps both connect).

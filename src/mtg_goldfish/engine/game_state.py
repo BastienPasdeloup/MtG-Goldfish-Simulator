@@ -252,6 +252,9 @@ class GameState:
     crimes_this_turn: int = 0  # times you committed a crime (targeted an opponent)
     attacked_this_turn: bool = False  # you declared one or more attackers this turn
     left_graveyard_this_turn: bool = False  # a card left your graveyard this turn
+    # Moonmist: combat damage by creatures other than Werewolves/Wolves is
+    # prevented this turn (checked in deal_combat_damage).
+    prevent_nonwolf_combat_damage: bool = False
 
     # game-long bookkeeping
     cards_drawn: int = 0
@@ -331,6 +334,7 @@ class GameState:
             crimes_this_turn=self.crimes_this_turn,
             attacked_this_turn=self.attacked_this_turn,
             left_graveyard_this_turn=self.left_graveyard_this_turn,
+            prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
             commander_cast_this_game=self.commander_cast_this_game,
@@ -470,6 +474,7 @@ class GameState:
         self.crimes_this_turn = 0
         self.attacked_this_turn = False
         self.left_graveyard_this_turn = False
+        self.prevent_nonwolf_combat_damage = False
         for p in self.battlefield:
             p.turn_flags.clear()
 
