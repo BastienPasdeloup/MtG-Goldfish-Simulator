@@ -77,6 +77,24 @@ resolution actually did):
       #   "entered play between turns 2 and 4" -> entered_battlefield(name, min_turn=2, max_turn=4)
   state.spell_resolved(name: str, turn=None) -> bool   # cast AND resolved (not countered)
   state.trigger_resolved(source: str, turn=None) -> bool  # a triggered ability resolved
+
+  ==== the commander leaving play / the command zone ====
+  In commander formats, when a commander LEAVES the battlefield (dies, is
+  exiled, bounced...) its owner MAY return it to the command zone. The
+  simulator explores BOTH: on one line it stays where it went, on another it is
+  returned to the command zone (having briefly passed through the zone it left
+  to, so leave/dies triggers still saw it there).
+  state.commander_left_play(turn=None, min_turn=None, max_turn=None) -> bool
+      # a commander left the battlefield (to ANY zone), on/within the turn(s)
+  state.commander_returned_to_command_zone(turn=None, min_turn=None, max_turn=None) -> bool
+      # a commander left play AND was returned to the command zone
+  Examples:
+    # "the commander leaves play and returns to the command zone"
+    def check(state):
+        return state.commander_returned_to_command_zone()
+    # "the commander dies (or otherwise leaves the battlefield) by turn 5"
+    def check(state):
+        return state.commander_left_play(max_turn=5)
   Examples:
     # "the commander is in play, and its triggered ability has put at least
     #  2 lands into play"

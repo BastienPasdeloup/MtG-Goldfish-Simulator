@@ -169,6 +169,37 @@ class StackAbility:
         }
 
 
+def _commander_return_trigger(card: CardData, from_zone: str) -> "StackAbility":
+    """A commander that left the battlefield may be returned to the command zone
+    by its owner (it briefly passed through `from_zone`). Resolves as a BRANCH:
+    one line leaves it in `from_zone`, one moves it to the command zone (noting
+    an ``enter_command_zone`` event so properties can see the return)."""
+    def resolve(st: "GameState"):
+        from ..cards._common import branch_over
+
+        def fn(branch: "GameState", choice: str):
+            zone = {"graveyard": branch.graveyard, "exile": branch.exile,
+                    "hand": branch.hand}.get(from_zone)
+            if choice == "command" and zone is not None and card in zone:
+                zone.remove(card)
+                branch.command_zone.append(card)
+                branch.note_event("enter_command_zone", card.name, is_commander=True)
+                branch.emit(f"{card.name}: return to the command zone")
+            else:
+                branch.emit(f"{card.name}: stay in the {from_zone}")
+            return None
+
+        return branch_over(st, ["command", "stay"], fn)
+
+    return StackAbility(
+        label=f"{card.name}: return to command zone?",
+        resolve=resolve,
+        source_name=card.name,
+        kind="triggered",
+        trigger_text="a commander left play",
+    )
+
+
 @dataclass
 class GameState:
     format_id: str = "duel_commander"
@@ -652,9 +683,10 @@ class GameState:
             return
         self.battlefield.remove(perm)
         self.permanent_left_battlefield_this_turn = True
+        is_commander = perm.card.name in self.commander_names
         self.note_event("leave_battlefield", perm.name, to=to, reason=reason,
                         is_land=perm.is_land, is_creature=perm.is_creature_now,
-                        is_token=perm.is_token, card=perm.card)
+                        is_token=perm.is_token, is_commander=is_commander, card=perm.card)
         # Auras attached to it die; equipment merely unattaches.
         for att in list(self.battlefield):
             if att.attached_to == perm.uid:
@@ -681,6 +713,13 @@ class GameState:
             self.hand.append(perm.card)
         elif to == "command":
             self.command_zone.append(perm.card)
+        # Commander leaving play (to any zone other than the command zone): its
+        # owner MAY return it to the command zone. It has already gone through
+        # the destination zone above, so the dies/leave triggers queued just
+        # now see it there; a branching triggered ability then models the choice
+        # to leave it there or move it to the command zone.
+        if is_commander and to in ("graveyard", "exile", "hand"):
+            self.push_triggered_abilities([_commander_return_trigger(perm.card, to)])
 
     def check_deaths(self) -> None:
         """State-based check: creatures with toughness <= 0 or lethal damage die."""
@@ -918,6 +957,29 @@ class GameState:
     def trigger_resolved(self, source: str, turn: int | None = None) -> bool:
         """A triggered ability from `source` resolved."""
         return bool(self.events_matching("trigger_resolved", source, turn))
+
+    def commander_left_play(self, turn: int | None = None,
+                            min_turn: int | None = None,
+                            max_turn: int | None = None) -> bool:
+        """A commander LEFT the battlefield (to any zone). In commander formats
+        its owner may then return it to the command zone — see
+        `commander_returned_to_command_zone`. Restrict the moment with `turn` or
+        an inclusive `min_turn`/`max_turn` range."""
+        in_range = self._turn_range_pred(min_turn, max_turn)
+        return bool(self.events_matching(
+            kind="leave_battlefield", turn=turn,
+            pred=lambda e: in_range(e) and e.get("is_commander")))
+
+    def commander_returned_to_command_zone(self, turn: int | None = None,
+                                           min_turn: int | None = None,
+                                           max_turn: int | None = None) -> bool:
+        """A commander LEFT play and was RETURNED to the command zone (having
+        first passed through the zone it left to, so leave/dies triggers saw it
+        there). Restrict the moment with `turn` or an inclusive
+        `min_turn`/`max_turn` range."""
+        in_range = self._turn_range_pred(min_turn, max_turn)
+        return bool(self.events_matching(
+            kind="enter_command_zone", turn=turn, pred=in_range))
 
     # ==== property-facing query API (keep stable) ==========================
     def battlefield_cards(self) -> list[CardData]:

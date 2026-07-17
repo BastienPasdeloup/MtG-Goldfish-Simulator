@@ -307,6 +307,25 @@ def test_decayed_token_sacrificed_at_end_of_combat():
     assert state.find_permanent(zombie.uid) is None  # sacrificed at end of combat
 
 
+def test_commander_leaving_play_branches_stay_vs_command_zone():
+    """When a commander leaves the battlefield, the search must explore BOTH
+    leaving it in the destination zone AND returning it to the command zone."""
+    state = _ellie([])
+    cmd = state.put_on_battlefield(card("Ellie, Vengeful Hunter"),
+                                   is_commander=True, fire_etb=False)
+    state.leaves_battlefield(cmd, "graveyard", reason="dies")
+    branches = state.settle()
+    assert branches is not None and len(branches) == 2
+    # both lines agree the commander left play...
+    assert all(b.commander_left_play() for b in branches)
+    # ...one returns it to the command zone, one leaves it in the graveyard.
+    returned = [b for b in branches if b.commander_returned_to_command_zone()]
+    stayed = [b for b in branches if not b.commander_returned_to_command_zone()]
+    assert len(returned) == 1 and len(stayed) == 1
+    assert any(c.name == "Ellie, Vengeful Hunter" for c in returned[0].command_zone)
+    assert "Ellie, Vengeful Hunter" in stayed[0].graveyard_names()
+
+
 def test_begin_combat_branching_trigger_fans_out():
     """A phase-entry triggered ability that BRANCHES (Emperor of Bones'
     begin-of-combat "exile up to one target from a graveyard", several choices)

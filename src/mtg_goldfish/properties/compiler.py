@@ -46,6 +46,11 @@ ability_activated(X) and creatures_in_play() >= 1): that passes even when some \
 OTHER effect produced the result. The property is that THIS ability caused it. \
 "uses / activates its ability" -> via_kind="activated"; "its triggered ability / \
 when ... triggers" -> via_kind="triggered".
+- Commander leaving play / the command zone: "the commander leaves play / dies / \
+is exiled" -> commander_left_play(...); "the commander leaves play AND returns \
+to the command zone" (or just "returns to the command zone") -> \
+commander_returned_to_command_zone(...). Do NOT invent has_permanent-in-command-zone \
+checks for this — use these helpers.
 
 OUTPUT FORMAT — respond with ONLY a single JSON object, no prose, no markdown:
 {{"code": "def check(state):\\n    return ...\\n",
