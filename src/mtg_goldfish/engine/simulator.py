@@ -189,6 +189,12 @@ class _SearchContext:
         # recurring fault doesn't flood the list.
         self.bugs: list[dict] = []
         self._bug_keys: set[tuple] = set()
+        # ---- within-game parallel split (see _simulate_game_split) ----
+        # When set, children created at (or past) this depth are NOT pushed
+        # onto the frontier — they are collected in depth_leaves for handing to
+        # the workers (or for another expansion round).
+        self.stop_depth: int | None = None
+        self.depth_leaves: list[tuple] = []
 
     def new_tree_node(
         self, parent: dict | None, label: str, state: GameState,
@@ -496,11 +502,13 @@ def _strip_parents(node: dict) -> None:
 
 
 def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
-    """Search over game states. `items` are (state, satisfied, node, kind, own)
-    seeds, where kind is "advance" (state must first be advanced through
+    """Search over game states. `items` are (state, satisfied, node, kind, own,
+    depth) seeds, where kind is "advance" (state must first be advanced through
     non-choice steps) or "decision" (the player holds priority — a main phase,
     declare-attackers, or an instant-speed window); `own` says whether `node`
-    was created for this very state (vs. a truncation fallback).
+    was created for this very state (vs. a truncation fallback); `depth` counts
+    how many child states separate it from the game root (used to split the
+    tree across worker processes — see _simulate_game_split).
 
     Every branch state created by an action gets its own tree node — including
     passing priority — so the recorded tree shows ALL states created during
@@ -524,10 +532,23 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         pop = lambda: heapq.heappop(frontier)[2]  # noqa: E731
         push = lambda it: heapq.heappush(frontier, (_progress_score(it[0], it[1]), next(seq), it))  # noqa: E731
 
+    def offer_child(branch, satisfied, parent_node, label, ckind, child_depth):
+        """Give a newly created child state its tree node and route it: onto
+        the frontier (normal), or into the split collection (during a split
+        expansion, children at the collection depth are handed back to the
+        caller — for the workers, or for another expansion round — instead of
+        being explored here)."""
+        node = ctx.new_tree_node(parent_node, label, branch, satisfied)
+        if ctx.stop_depth is not None and child_depth >= ctx.stop_depth:
+            ctx.depth_leaves.append(
+                (branch, satisfied, node, ckind, node is not None, child_depth))
+            return
+        push((branch, satisfied, node or parent_node, ckind, node is not None, child_depth))
+
     while frontier:
         if ctx.timed_out or ctx.stopped:
             return False
-        state, satisfied, node, kind, own = pop()
+        state, satisfied, node, kind, own, depth = pop()
         if ctx.budget_exceeded():
             return False
         ctx.branches_explored += 1  # a state actually processed
@@ -570,8 +591,7 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                     label = f"{state.phase.value} trigger · option {k + 1}/{len(branches)}"
                     if details[k]:
                         label += f" — {details[k]}"
-                    child_node = ctx.new_tree_node(node, label, branch, satisfied)
-                    push((branch, satisfied, child_node or node, "advance", child_node is not None))
+                    offer_child(branch, satisfied, node, label, "advance", depth + 1)
                 continue
             kind = status  # "decision"
 
@@ -603,7 +623,6 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             actions.sort(key=_action_priority, reverse=True)
         ctx.branches_considered += len(actions)
 
-        children: list[tuple] = []
         for action in actions:
             child = state.clone()
             try:
@@ -637,14 +656,10 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                     ckind = "advance"
                 else:
                     ckind = "decision"
-                # Every created state gets a node; past the recording cap we
-                # keep the nearest recorded ancestor for success marking (but
-                # flag it as not-owned so its "sat" isn't overwritten).
-                new_node = ctx.new_tree_node(node, label, branch, satisfied)
-                children.append((branch, satisfied, new_node or node, ckind, new_node is not None))
-
-        for it in children:
-            push(it)
+                # Every created state gets a node (inside offer_child); past
+                # the recording cap the nearest recorded ancestor is kept for
+                # success marking (flagged not-owned so "sat" isn't overwritten).
+                offer_child(branch, satisfied, node, label, ckind, depth + 1)
     return False
 
 
@@ -736,19 +751,26 @@ def _fixed_opening_hand(
     return [(hand, lib, [])]
 
 
-def simulate_game(
+def _seed_game(
     base_state: GameState,
     properties: list[CompiledProperty],
     config: SimulationConfig,
     game_index: int,
     should_stop: Callable[[], bool] | None = None,
-) -> GameOutcome:
+    deadline: float | None = None,
+) -> tuple[_SearchContext, dict, list[tuple], list[tuple], list]:
+    """Deterministically set up one game: the shuffled library, the search
+    context/tree root, and the opening-keep frontier seeds. Everything derives
+    from `config.base_seed + game_index`, so the master process and its
+    subtree workers rebuild the exact same game independently — no game state
+    ever crosses a process boundary."""
     rng = random.Random(config.base_seed + game_index)
     shuffled = list(base_state.library)
     rng.shuffle(shuffled)
 
     hand_size = 7
-    deadline = time.monotonic() + config.timeout_per_game_s
+    if deadline is None:
+        deadline = time.monotonic() + config.timeout_per_game_s
     ctx = _SearchContext(properties, deadline, should_stop=should_stop,
                          instant_speed=config.instant_speed)
     # Root of the recorded search tree: the game before any hand is kept.
@@ -800,20 +822,22 @@ def simulate_game(
         if hand_node is not None:
             hand_node["hand"] = hand_names  # shown when hovering the initial state
         keep_nodes.append((hand_node, hand_names))
-        items.append((variant, frozenset(), hand_node, "advance", hand_node is not None))
+        items.append((variant, frozenset(), hand_node, "advance", hand_node is not None, 0))
 
     ctx.branches_considered += len(items)  # the keeps are candidates too
-    try:
-        success = _search(items, ctx, config.search_mode)
-    except Exception as exc:  # a crash in the search itself, not a single action
-        ctx.record_bug(exc, context="search")
-        success = False
+    return ctx, root, items, keep_nodes, shuffled
+
+
+def _assemble_outcome(
+    ctx: _SearchContext, root: dict, keep_nodes: list[tuple], shuffled: list,
+    config: SimulationConfig, game_index: int, success: bool,
+) -> GameOutcome:
     root["success"] = success
     _strip_parents(root)
 
     # For failed games there is no single "kept" hand — report the 7 drawn
     # (or the fixed hand in fixed-hand mode).
-    winning_hand = keep_nodes[0][1] if config.fixed_hand else [c.name for c in shuffled[:hand_size]]
+    winning_hand = keep_nodes[0][1] if config.fixed_hand else [c.name for c in shuffled[:7]]
     if success:
         for hand_node, hand_names in keep_nodes:
             if hand_node is not None and hand_node["success"]:
@@ -833,6 +857,23 @@ def simulate_game(
         tree_truncated=ctx.tree_truncated,
         bugs=ctx.bugs,
     )
+
+
+def simulate_game(
+    base_state: GameState,
+    properties: list[CompiledProperty],
+    config: SimulationConfig,
+    game_index: int,
+    should_stop: Callable[[], bool] | None = None,
+) -> GameOutcome:
+    ctx, root, items, keep_nodes, shuffled = _seed_game(
+        base_state, properties, config, game_index, should_stop=should_stop)
+    try:
+        success = _search(items, ctx, config.search_mode)
+    except Exception as exc:  # a crash in the search itself, not a single action
+        ctx.record_bug(exc, context="search")
+        success = False
+    return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index, success)
 
 
 def _buggy_outcome(game_index: int, exc: BaseException) -> GameOutcome:
@@ -855,16 +896,22 @@ def _count_game(stats: SimulationStats, outcome: GameOutcome) -> None:
         stats.per_property[pid] = stats.per_property.get(pid, 0) + 1
 
 
-# ---- parallel workers ------------------------------------------------------
-# Games are independent (each is seeded by base_seed + game_index), so they
-# run across CPU cores in one process per worker. Each worker builds its own
-# base state and recompiles the properties from their (picklable) specs — the
-# compiled `check` functions come from exec'd code and can't cross a process
-# boundary.
+# ---- within-game parallel search -------------------------------------------
+# Games run SEQUENTIALLY (results stream in game order), but each game's tree
+# is explored across CPU cores. Mid-game states can't cross a process boundary
+# (card implementations are factory-built classes, unpicklable), so nothing is
+# shipped: every worker deterministically REBUILDS the same game from the seed,
+# replays the same shallow search the master did, and explores only its
+# assigned share of the subtrees hanging at a chosen split depth. Subtree
+# numbering is by creation order, which is identical in every process, so the
+# master can graft the returned subtrees back into its own tree.
 _WORKER: dict = {}
 
+#: Don't split deeper than this many levels looking for enough subtrees.
+_SPLIT_MAX_DEPTH = 12
 
-def _worker_init(deck, specs, config: SimulationConfig, stop_event) -> None:
+
+def _worker_init(deck, specs, config: SimulationConfig, stop_event, found_event) -> None:
     from ..cards import load_all_cards
     from ..properties.evaluator import compile_all
 
@@ -873,16 +920,15 @@ def _worker_init(deck, specs, config: SimulationConfig, stop_event) -> None:
     base.instant_speed = config.instant_speed
     base.fake_shuffle = config.fake_shuffle
     _WORKER["base"] = base
-    _WORKER["props"] = compile_all(specs)
+    _WORKER["props"] = compile_all(specs)  # exec'd check fns can't be pickled
     _WORKER["config"] = config
-    _WORKER["stop"] = stop_event
+    _WORKER["stop"] = stop_event    # the user pressed Stop
+    _WORKER["found"] = found_event  # another worker found this game's success
 
 
-def _throttled_stop(event, interval: float = 0.15) -> Callable[[], bool] | None:
-    """Wrap a cross-process Event in a time-throttled checker: `is_set()` on a
+def _throttled_stop(*events, interval: float = 0.15) -> Callable[[], bool]:
+    """Wrap cross-process Events in a time-throttled checker: `is_set()` on a
     manager proxy is an IPC round-trip, far too slow for the search's hot path."""
-    if event is None:
-        return None
     memo = {"t": 0.0, "hit": False}
 
     def check() -> bool:
@@ -891,78 +937,199 @@ def _throttled_stop(event, interval: float = 0.15) -> Callable[[], bool] | None:
         now = time.monotonic()
         if now - memo["t"] >= interval:
             memo["t"] = now
-            memo["hit"] = event.is_set()
+            memo["hit"] = any(e.is_set() for e in events)
         return memo["hit"]
 
     return check
 
 
-def _worker_run(game_index: int) -> GameOutcome:
+def _expand_to_split(
+    ctx: _SearchContext, items: list[tuple], mode: str, min_leaves: int,
+) -> tuple[str, list[tuple], int]:
+    """Shallow expansion shared by the master and the workers: process the
+    search level by level, collecting the children at the smallest depth that
+    offers at least `min_leaves` subtrees. Because the master and every worker
+    run this EXACT procedure on the EXACT same (seed-rebuilt) game, they end up
+    with the same leaves in the same order — that shared numbering is what lets
+    a worker's subtrees be grafted back onto the master's tree without any game
+    state ever crossing a process boundary.
+
+    Returns (status, leaves, depth) with status "split" (leaves ready to
+    distribute), "success" (all properties satisfied while still shallow) or
+    "done" (frontier drained / budget cut — nothing left to split)."""
+    depth, current = 1, items
+    while True:
+        ctx.stop_depth = depth
+        ctx.depth_leaves = []
+        success = _search(current, ctx, mode)
+        leaves = ctx.depth_leaves
+        ctx.stop_depth = None
+        ctx.depth_leaves = []
+        if success:
+            return "success", leaves, depth
+        if not leaves or ctx.timed_out or ctx.stopped:
+            return "done", leaves, depth
+        if len(leaves) >= min_leaves or depth >= _SPLIT_MAX_DEPTH:
+            return "split", leaves, depth
+        current = leaves  # not enough parallelism there — expand one level deeper
+        depth += 1
+
+
+def _tree_worker(game_index: int, min_leaves: int, num_parts: int, part: int,
+                 remaining_s: float) -> dict:
+    """Explore this worker's share of one game's subtrees and return them
+    (plus counters/bugs/success data) for the master to merge. The game and
+    its shallow expansion are rebuilt from the seed — deterministically
+    identical to the master's."""
     config: SimulationConfig = _WORKER["config"]
+    deadline = time.monotonic() + remaining_s
+    ctx, root, items, keep_nodes, shuffled = _seed_game(
+        _WORKER["base"], _WORKER["props"], config, game_index,
+        should_stop=_throttled_stop(_WORKER["stop"], _WORKER["found"]),
+        deadline=deadline,
+    )
+    success = False
+    subtrees: dict[int, dict] = {}
     try:
-        outcome = simulate_game(
-            _WORKER["base"], _WORKER["props"], config, game_index,
-            should_stop=_throttled_stop(_WORKER["stop"]),
-        )
-    except Exception as exc:  # keep the run alive; report the game as buggy
-        outcome = _buggy_outcome(game_index, exc)
-    # Compress the tree in the worker: pickling the raw tree dict back to the
-    # parent costs far more than shipping the ~20x smaller gzip.
-    if outcome.tree is not None:
-        outcome.tree_gz = compress_tree(outcome.tree)
-        outcome.tree = None
-    return outcome
+        status, leaves, depth = _expand_to_split(ctx, items, config.search_mode, min_leaves)
+        if status == "split":
+            assigned = [(j, leaves[j]) for j in range(len(leaves)) if j % num_parts == part]
+            success = _search([it for _, it in assigned], ctx, config.search_mode)
+            for j, it in assigned:
+                node = it[2]
+                if node is not None:
+                    _strip_parents(node)  # the "_p" chain would drag the whole tree
+                    subtrees[j] = node
+        else:
+            # Shouldn't happen (the master only launches workers after finding
+            # a split), but stay graceful: report what this replay concluded.
+            success = status == "success"
+    except Exception as exc:
+        ctx.record_bug(exc, context="search")
+    return {
+        "part": part,
+        "success": success,
+        "success_log": ctx.success_log or [],
+        "satisfied": sorted(ctx.ever_satisfied),
+        "timed_out": ctx.timed_out,
+        "explored": ctx.branches_explored,
+        "considered": ctx.branches_considered,
+        "bugs": ctx.bugs,
+        "subtrees": subtrees,
+    }
 
 
-def _run_parallel(
-    deck,
+def _clear_success(node: dict) -> None:
+    """Unmark a subtree's success flags (iterative — trees can be deep)."""
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        n["success"] = False
+        stack.extend(n.get("children") or [])
+
+
+def _simulate_game_split(
+    base_state: GameState,
     properties: list[CompiledProperty],
     config: SimulationConfig,
-    indices: list[int],
-    stats: SimulationStats,
+    game_index: int,
+    pool,
     workers: int,
-    on_game: Callable[[GameOutcome, SimulationStats], None] | None,
+    stop_event,
+    found_event,
     should_stop: Callable[[], bool] | None,
-) -> SimulationStats:
-    import multiprocessing as mp
-    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+) -> GameOutcome | None:
+    """One game, its tree explored in parallel. The master expands the search
+    level by level until enough subtrees hang at some depth (or the search
+    finishes inline for tiny games), then hands each worker its share. Returns
+    None when the user stopped mid-game (the game is abandoned, not counted)."""
+    from concurrent.futures import wait as futures_wait
 
-    specs = [p.spec for p in properties]
-    ctx = mp.get_context("spawn")  # fork is unsafe under a threaded web server
-    manager = ctx.Manager()
+    ctx, root, items, keep_nodes, shuffled = _seed_game(
+        base_state, properties, config, game_index, should_stop=should_stop)
+
+    # Phase 1 — shallow expansion in this process: process everything above
+    # the split depth, collecting the children AT it instead of exploring them.
+    min_leaves = 3 * workers  # enough subtrees for decent load balance
     try:
-        stop_event = manager.Event()
-        with ProcessPoolExecutor(
-            max_workers=min(workers, len(indices)), mp_context=ctx,
-            initializer=_worker_init, initargs=(deck, specs, config, stop_event),
-        ) as pool:
-            by_future = {pool.submit(_worker_run, i): i for i in indices}
-            pending = set(by_future)
-            stopped = False
-            while pending:
-                if not stopped and should_stop and should_stop():
-                    # Cancel queued games; in-flight ones see the event via
-                    # their throttled should_stop and abandon within ~0.15 s.
-                    stopped = True
-                    stop_event.set()
-                    for f in pending:
-                        f.cancel()
-                done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
-                for fut in done:
-                    if fut.cancelled():
-                        continue
-                    try:
-                        outcome = fut.result()
-                    except Exception as exc:  # worker died / unpicklable result
-                        outcome = _buggy_outcome(by_future[fut], exc)
-                    if stopped:
-                        continue  # abandoned mid-search — don't report or count
-                    _count_game(stats, outcome)
-                    if on_game:
-                        on_game(outcome, stats)
-    finally:
-        manager.shutdown()
-    return stats
+        status, leaves, depth = _expand_to_split(ctx, items, config.search_mode, min_leaves)
+    except Exception as exc:
+        ctx.record_bug(exc, context="search")
+        return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index, False)
+    if status != "split":
+        # Solved (or exhausted/cut) within the shallow region — no workers.
+        if ctx.stopped and should_stop and should_stop():
+            return None  # user abort — don't report a half-searched game
+        return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index,
+                                 status == "success")
+
+    # Phase 2 — fan the subtrees out to the workers.
+    shallow_explored = ctx.branches_explored
+    shallow_considered = ctx.branches_considered
+    found_event.clear()
+    remaining = max(0.05, ctx.deadline - time.monotonic())
+    num_parts = min(workers, len(leaves))
+    futures = [pool.submit(_tree_worker, game_index, min_leaves, num_parts, part, remaining)
+               for part in range(num_parts)]
+    results: list[dict] = []
+    pending = set(futures)
+    while pending:
+        if should_stop and should_stop():
+            stop_event.set()  # workers wind down within ~0.15 s
+        done, pending = futures_wait(pending, timeout=0.2)
+        for fut in done:
+            try:
+                r = fut.result()
+            except Exception as exc:  # worker died / unpicklable result
+                ctx.record_bug(exc, context="parallel subtree worker")
+                continue
+            results.append(r)
+            if r["success"]:
+                found_event.set()  # the others can stop — the game is solved
+    if should_stop and should_stop():
+        return None  # user abort — don't report a half-searched game
+
+    # Phase 3 — merge. One winner is chosen (lowest part index for
+    # determinism); other workers' incidental successes are unmarked so the
+    # tree shows a single gold line.
+    by_part = {r["part"]: r for r in results}
+    success_parts = sorted(p for p, r in by_part.items() if r["success"])
+    winner = by_part[success_parts[0]] if success_parts else None
+    for r in results:
+        if winner is not None and r is not winner:
+            for node in r["subtrees"].values():
+                _clear_success(node)
+
+    seen_bugs = {(b["context"], b["error"], b["where"]) for b in ctx.bugs}
+    for r in results:
+        # Workers replay the master's shallow search, so their counters include
+        # it — count that shared prefix once, plus each worker's own subtrees.
+        ctx.branches_explored += max(0, r["explored"] - shallow_explored)
+        ctx.branches_considered += max(0, r["considered"] - shallow_considered)
+        ctx.ever_satisfied |= set(r["satisfied"])
+        for b in r["bugs"]:  # shallow-region bugs are seen by every worker
+            key = (b["context"], b["error"], b["where"])
+            if key not in seen_bugs:
+                seen_bugs.add(key)
+                ctx.bugs.append(b)
+
+    for j, leaf in enumerate(leaves):
+        node = leaf[2]
+        r = by_part.get(j % num_parts)
+        sub = (r or {}).get("subtrees", {}).get(j)
+        if node is None or sub is None:
+            continue  # worker died or was stopped before reaching this subtree
+        node["children"] = sub.get("children", [])
+        node["sat"] = sub.get("sat", node["sat"])
+        if sub.get("success"):
+            node["success"] = True
+            _mark_success(node)  # light the winning line up to the root
+
+    success = winner is not None
+    if success:
+        ctx.success_log = winner["success_log"]
+    ctx.timed_out = (not success) and (ctx.timed_out or any(r["timed_out"] for r in results))
+    return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index, success)
 
 
 def run_simulation(
@@ -976,12 +1143,13 @@ def run_simulation(
     initial_stats: dict | None = None,
 ) -> SimulationStats:
     """Run the games of `game_indices` (default: all `config.num_games`),
-    invoking `on_game` after each for live reporting. Games run in parallel
-    across CPU cores when possible (see SimulationConfig.parallel_workers), so
-    `on_game` may be called out of game-index order. `should_stop` allows
-    cooperative cancellation — it is checked between games AND inside each
-    game's search, so Stop abandons the games in progress immediately rather
-    than waiting for their timeout.
+    invoking `on_game` after each for live reporting. Games run STRICTLY IN
+    ORDER, one at a time — but each game's tree search is spread across CPU
+    cores when possible (see SimulationConfig.parallel_workers and
+    `_simulate_game_split`). `should_stop` allows cooperative cancellation —
+    it is checked between games AND inside each game's search (including the
+    subtree workers), so Stop abandons the game in progress immediately rather
+    than waiting for its timeout.
 
     `game_indices` + `initial_stats` support RESUMING a partial run: pass the
     not-yet-run indices and the stored stats dict, and the counts continue
@@ -998,32 +1166,55 @@ def run_simulation(
     indices = (list(game_indices) if game_indices is not None
                else list(range(config.num_games)))
 
-    workers = (config.parallel_workers if config.parallel_workers
-               else max(1, (os.cpu_count() or 2) - 1))
-    # The parallel path needs the properties' specs to recompile in the
-    # workers; hand-built property objects (tests) fall back to sequential.
-    can_parallel = all(getattr(p, "spec", None) is not None for p in properties)
-    if workers > 1 and len(indices) > 1 and can_parallel:
-        return _run_parallel(deck, properties, config, indices, stats,
-                             workers, on_game, should_stop)
-
     base_state = new_game_from_deck(deck, on_the_play=config.on_the_play)
     base_state.instant_speed = config.instant_speed  # gates counter-your-own etc.
     base_state.fake_shuffle = config.fake_shuffle
 
-    for i in indices:
-        if should_stop and should_stop():
-            break
-        try:
-            outcome = simulate_game(base_state, properties, config, i, should_stop=should_stop)
-        except Exception as exc:  # keep the run alive; report the game as buggy
-            outcome = _buggy_outcome(i, exc)
-        # If Stop fired during this game, abandon it: don't report a half-searched
-        # game as a result or count it.
-        if should_stop and should_stop():
-            break
-        _count_game(stats, outcome)
-        if on_game:
-            on_game(outcome, stats)
+    workers = (config.parallel_workers if config.parallel_workers
+               else max(1, (os.cpu_count() or 2) - 1))
+    # The workers recompile the properties from their specs; hand-built
+    # property objects (tests) don't have one — those run fully sequentially.
+    can_parallel = all(getattr(p, "spec", None) is not None for p in properties)
+
+    pool = manager = stop_event = found_event = None
+    if workers > 1 and indices and can_parallel:
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor
+
+        mp_ctx = mp.get_context("spawn")  # fork is unsafe under a threaded server
+        manager = mp_ctx.Manager()
+        stop_event = manager.Event()
+        found_event = manager.Event()
+        pool = ProcessPoolExecutor(
+            max_workers=workers, mp_context=mp_ctx, initializer=_worker_init,
+            initargs=(deck, [p.spec for p in properties], config, stop_event, found_event),
+        )
+
+    try:
+        for i in indices:
+            if should_stop and should_stop():
+                break
+            try:
+                if pool is not None:
+                    outcome = _simulate_game_split(
+                        base_state, properties, config, i, pool, workers,
+                        stop_event, found_event, should_stop)
+                else:
+                    outcome = simulate_game(base_state, properties, config, i,
+                                            should_stop=should_stop)
+            except Exception as exc:  # keep the run alive; report the game as buggy
+                outcome = _buggy_outcome(i, exc)
+            # If Stop fired during this game, abandon it: don't report a
+            # half-searched game as a result or count it.
+            if outcome is None or (should_stop and should_stop()):
+                break
+            _count_game(stats, outcome)
+            if on_game:
+                on_game(outcome, stats)
+    finally:
+        if pool is not None:
+            stop_event.set()  # hurry any straggling workers along
+            pool.shutdown(wait=True, cancel_futures=True)
+            manager.shutdown()
 
     return stats

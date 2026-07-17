@@ -67,16 +67,22 @@ domain logic have no web dependency and can be driven from a script or tests.
   first — the per-game wall-clock **timeout**, every property satisfied on some
   line, or no remaining branch able to satisfy the properties (the frontier
   drains).
-- **Parallel games:** games are independent (seeded by `base_seed + index`), so
-  `run_simulation` fans them out across CPU cores (`ProcessPoolExecutor`,
-  spawn context, one worker per core minus one). Workers rebuild the base
-  state and recompile the properties from their picklable `PropertySpec`s
-  (compiled `check` functions can't cross a process boundary), and gzip each
-  game's search tree in place before returning it. Stop is cooperative
-  cross-process (a manager Event, checked time-throttled in the search's hot
-  path). Results stream back out of game order; aggregates are identical to a
-  sequential run.
-- **Fake shuffling** (optional, off by default): `GameState.shuffle_library`
+- **Parallel tree exploration:** games run strictly in order, one at a time,
+  but each game's tree is explored across CPU cores (`ProcessPoolExecutor`,
+  spawn context, one worker per core minus one, pool reused for the whole
+  run). Mid-game states are unpicklable (factory-built card classes), so no
+  state crosses a process boundary: the master expands the tree level by
+  level until enough subtrees hang at some depth (`_expand_to_split`), and
+  each worker deterministically REBUILDS the same game from the seed, replays
+  that exact expansion (same helper → same leaves in the same order), and
+  explores only its share (`leaf j` goes to worker `j % num_parts`). Subtrees
+  graft back into the master's tree — state-for-state identical to a
+  sequential search. Workers recompile properties from their picklable
+  `PropertySpec`s. The first success sets a manager Event that stops the
+  other workers; user Stop is a second Event, both checked time-throttled in
+  the search's hot path. Tiny games that drain during the shallow expansion
+  never touch the workers.
+- **Fake shuffling** (a UI toggle, on by default): `GameState.shuffle_library`
   never reorders the library — only the cards whose position the player knows
   (`mark_known_in_library`: Brainstorm put-backs, tutor tops, scry/mulligan
   bottoms) are reinserted at random spots. Keeps the library near-constant

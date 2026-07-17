@@ -57,7 +57,7 @@
           <div id="s-warnings" class="warnings"></div>
         </div>
         <button id="load-run-btn">Previous runs</button>
-        <button id="delete-session" class="danger">Delete</button>
+        <button id="delete-session" class="danger">Delete session</button>
       </div>
 
       <div class="session-grid">
@@ -138,11 +138,11 @@
               </div>
               <div><label>Instant speed</label><br />
                 <button id="instant-speed-toggle" data-on="0"
-                        title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Forbidden by default.">Forbid</button>
+                        title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Disabled by default.">Disabled</button>
               </div>
               <div><label>Fake shuffling</label><br />
-                <button id="fake-shuffle-toggle" data-on="0"
-                        title="When enabled, the library is never really shuffled mid-game: a 'shuffle' only reinserts the cards whose position you know (put on top by a Brainstorm, bottomed by a mulligan or a scry...) at random places, and every other card keeps its order. This keeps the library near-constant across all lines of play, avoiding over-evaluated probabilities when different lines shuffle differently (see the Properties help ? for details). Disabled by default (real shuffles).">Disabled</button>
+                <button id="fake-shuffle-toggle" data-on="1"
+                        title="When enabled, the library is never really shuffled mid-game: a 'shuffle' only reinserts the cards whose position you know (put on top by a Brainstorm, bottomed by a mulligan or a scry...) at random places, and every other card keeps its order. This keeps the library near-constant across all lines of play, avoiding over-evaluated probabilities when different lines shuffle differently (see the Properties help ? for details). Enabled by default.">Enabled</button>
               </div>
             </div>
             <div class="row" style="margin-top:.6rem">

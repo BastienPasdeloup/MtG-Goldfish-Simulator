@@ -259,10 +259,10 @@ def test_fake_shuffle_flag_survives_clone():
 
 
 # --------------------------------------------------------------------------
-# Parallel simulation: same games, same seeds, same aggregate results as the
-# sequential path — just spread across worker processes.
+# Parallel simulation: games run strictly IN ORDER; each game's tree is
+# explored across worker processes, with results identical to sequential.
 # --------------------------------------------------------------------------
-def test_parallel_run_matches_sequential():
+def test_parallel_run_matches_sequential_and_stays_in_order():
     deck = _mono_red_deck()
     spec = PropertySpec(
         id="p1", timing=Timing.AT, phase="postcombat_main", turn=3,
@@ -270,10 +270,14 @@ def test_parallel_run_matches_sequential():
         code="def check(state):\n    return state.commander_in_play()\n",
     )
     props = compile_all([spec])
+    order: list[int] = []
     seq = run_simulation(deck, props, SimulationConfig(
         num_games=6, timeout_per_game_s=3, base_seed=42, parallel_workers=1)).as_dict()
     par = run_simulation(deck, props, SimulationConfig(
-        num_games=6, timeout_per_game_s=3, base_seed=42, parallel_workers=2)).as_dict()
+        num_games=6, timeout_per_game_s=3, base_seed=42, parallel_workers=2),
+        on_game=lambda o, s: order.append(o.game_index)).as_dict()
+    # Games are reported strictly in game order (the table fills 1, 2, 3...).
+    assert order == list(range(6))
     assert par["games_run"] == 6
     assert par["successes"] == seq["successes"]
     assert par["per_property"] == seq["per_property"]

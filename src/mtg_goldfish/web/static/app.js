@@ -113,7 +113,7 @@ async function init() {
     const b = e.currentTarget;
     const on = b.dataset.on === "1";
     b.dataset.on = on ? "0" : "1";
-    b.textContent = on ? "Forbid" : "Allow";
+    b.textContent = on ? "Disabled" : "Enabled";
   };
   $("fake-shuffle-toggle").onclick = (e) => {
     const b = e.currentTarget;
@@ -467,7 +467,7 @@ function loadRun(r) {
   if (sm.value !== (cfg.search_mode ?? "best_first")) sm.value = "best_first";
   const isb = $("instant-speed-toggle"), ison = !!cfg.instant_speed;
   isb.dataset.on = ison ? "1" : "0";
-  isb.textContent = ison ? "Allow" : "Forbid";
+  isb.textContent = ison ? "Enabled" : "Disabled";
   const fsb = $("fake-shuffle-toggle"), fson = !!cfg.fake_shuffle;
   fsb.dataset.on = fson ? "1" : "0";
   fsb.textContent = fson ? "Enabled" : "Disabled";
@@ -493,12 +493,19 @@ function loadRun(r) {
 }
 
 // Show the Resume button when `r` is a resumable run (stopped by the user or
-// interrupted by a crash, with games still missing), hide it otherwise.
+// interrupted by a crash, with games still missing), hide it otherwise. The
+// button only appears on the tab the run was made from (fixed vs random hand).
 function setResumable(r) {
   const missing = r && (((r.stats || {}).games_run || 0) < ((r.config || {}).num_games || 0));
   const ok = !!(r && missing && (r.status === "stopped" || r.status === "interrupted"));
   state.resumableId = ok ? r.id : null;
-  $("resume-btn").classList.toggle("hidden", !ok);
+  state.resumableMode = ok ? (((r.config || {}).fixed_hand || []).length ? "fixed" : "sim") : null;
+  updateResumeButton();
+}
+
+function updateResumeButton() {
+  const show = !!state.resumableId && state.resumableMode === state.simMode;
+  $("resume-btn").classList.toggle("hidden", !show);
 }
 
 async function resumeRun() {
@@ -825,6 +832,7 @@ function setSimMode(mode) {
   $("tab-fixed").classList.toggle("active", mode === "fixed");
   $("fixed-builder").classList.toggle("hidden", mode !== "fixed");
   $("mull-field").classList.toggle("hidden", mode === "fixed");
+  updateResumeButton(); // Resume only shows on the tab its run was made from
   if (mode === "fixed") renderFixedBuilder();
 }
 

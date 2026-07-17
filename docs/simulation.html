@@ -135,11 +135,16 @@ so winning lines are found sooner and timeouts bite later:</p>
   <tr><td><code>bfs</code></td><td>Breadth-first — shallowest lines first.</td></tr>
 </table></div>
 
-<h2 id="parallel">Parallel games</h2>
-<p>Games are independent (each is seeded by <code>base_seed + game index</code>), so a run spreads
-them across CPU cores — one worker process per core, keeping one core free for the UI. Results are
-identical to a sequential run; they just stream in out of game order. Stopping a run reaches into
-every worker within a fraction of a second, and games abandoned mid-search are not counted.</p>
+<h2 id="parallel">Parallel tree exploration</h2>
+<p>Games run one at a time, in order — but within each game the search tree is explored across CPU
+cores (one worker process per core, keeping one core free for the UI). The trick is that no game
+state ever crosses a process boundary: everything about a game derives deterministically from its
+seed, so the master process expands the tree just deep enough to find a level with enough
+subtrees, and each worker <em>rebuilds the same game from the seed</em>, replays that same shallow
+expansion, and exhaustively explores only its share of the subtrees. The pieces are then grafted
+back into one tree — identical, state for state, to what a sequential search would have produced.
+The first worker to satisfy every property makes the others stop, and stopping a run reaches into
+every worker within a fraction of a second.</p>
 
 <h2 id="fake-shuffling">Fake shuffling</h2>
 <p>Distinct lines of play can shuffle the library differently (a fetch land cracked at different
@@ -148,7 +153,7 @@ moments, say) — then each line effectively gets a fresh top of library, which 
 library near-constant instead: a “shuffle” never reorders it, except that the cards whose position
 the player actually knows — put on top by a Brainstorm or a tutor, bottomed by a mulligan or a
 scry — are pulled out and reinserted at random places (after a real shuffle you wouldn't know where
-they went). Disabled by default (real seeded shuffles).</p>
+they went). Enabled by default; disable it to get real seeded shuffles.</p>
 
 <h2 id="resume">Crash-safe runs &amp; resume</h2>
 <p>A run's entry is persisted after every completed game, so if the app dies mid-run the games
