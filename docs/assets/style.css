@@ -10,16 +10,19 @@
   --accent2: #4f8cff;  /* blue */
   --ok: #4bbf73;
   --ko: #e05561;
-  /* Code blocks share the PAGE background (delineated only by their border) so
-     the content column reads as ONE flat colour — no muddy third shade between
-     the page and the elevated --panel surface (header/footer/diagrams). */
-  --code-bg: var(--bg);
+  /* Code (inline + blocks) is a distinct shade DARKER than the page, so it
+     reads as sunken code everywhere — on the page and inside the --panel
+     diagram figures alike. */
+  --code-bg: #0a0b0e;
   --radius: 10px;
+  color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f7f7f5; --bg2: #efefeb; --panel: #ffffff; --border: #d8d8d2;
     --text: #1c1e24; --muted: #5c6470; --accent: #a87415; --accent2: #2563eb;
+    --code-bg: #ecebe3;  /* darker than the light page */
+    color-scheme: light;
   }
 }
 * { box-sizing: border-box; }

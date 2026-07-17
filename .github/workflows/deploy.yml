@@ -1,0 +1,71 @@
+name: Deploy docs & bump version
+
+# Runs on every push to main: bumps the patch version everywhere (code + docs),
+# commits it back, then publishes docs/ to GitHub Pages.
+#
+# ONE-TIME SETUP: in the repo, Settings -> Pages -> "Build and deployment" ->
+# Source -> select "GitHub Actions" (instead of "Deploy from a branch"), so the
+# deploy step below is what publishes the site.
+on:
+  push:
+    branches: [main]
+
+# The bump commit needs contents:write; the Pages deploy needs pages/id-token.
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let an in-flight one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Skip the run triggered by our own "[skip ci]" bump commit (belt-and-braces;
+    # GitHub also natively skips CI for [skip ci] messages).
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version (code + docs)
+        run: |
+          set -euo pipefail
+          cur=$(sed -n 's/^__version__ *= *"\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/p' src/mtg_goldfish/__init__.py)
+          if [ -z "$cur" ]; then echo "could not read __version__"; exit 1; fi
+          IFS='.' read -r MA MI PA <<< "$cur"
+          new="$MA.$MI.$((PA + 1))"
+          echo "Bumping $cur -> $new"
+          cur_esc=${cur//./\\.}
+          sed -i "s/^__version__ = \"$cur\"/__version__ = \"$new\"/" src/mtg_goldfish/__init__.py
+          sed -i "s/^version = \"$cur\"/version = \"$new\"/" pyproject.toml
+          sed -i "s/v$cur_esc/v$new/g" docs/*.html
+
+      - name: Commit & push the bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          # Only commit if the bump actually changed something.
+          git diff --cached --quiet || git commit -m "chore: bump version [skip ci]"
+          git push
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload docs/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
