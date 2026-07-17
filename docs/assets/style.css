@@ -65,7 +65,10 @@ header.site .gh { justify-self: end; color: var(--muted); font-size: .9rem; whit
 }
 
 /* ---- layout ---- */
-main { max-width: 980px; margin: 0 auto; padding: 2rem 1.2rem 4rem; }
+/* `main` paints its own page background so the content column is always the
+   solid page colour, independent of the root/canvas (which is `--panel` for the
+   over-scroll areas) — this is what keeps the top/bottom from reading darker. */
+main { max-width: 980px; margin: 0 auto; padding: 2rem 1.2rem 4rem; background: var(--bg); }
 h1 { font-size: 1.9rem; line-height: 1.25; margin: .4rem 0 .6rem; }
 h1 + p.lead { color: var(--muted); font-size: 1.08rem; margin-top: 0; }
 h2 { font-size: 1.35rem; margin: 2.4rem 0 .6rem; padding-top: .4rem; border-top: 1px solid var(--border); }
