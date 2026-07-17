@@ -1,6 +1,6 @@
 [project]
 name = "mtg-goldfish-simulator"
-version = "0.1.0"
+version = "0.1.1"
 description = "Solitaire (goldfish) Magic: the Gathering simulator that exhaustively explores lines of play to check user-defined properties on a deck."
 readme = "README.md"
 requires-python = ">=3.11"
