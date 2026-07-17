@@ -23,7 +23,11 @@ flipped double-faced card matches its back face's name and types):
   state.count_permanents(type_contains=None, name_contains=None, tapped=None,
                          transformed=None, token=None, commander=None) -> int
   # string filters: case-insensitive substrings of the type line / name;
-  # state filters: optional booleans. Examples:
+  # state filters: optional booleans. "flipped" / "transformed" / "on its back
+  # side (or face)" all mean a double-faced permanent currently on its BACK
+  # face -> transformed=True. Examples:
+  #   "there is a flipped creature in play"
+  #       state.count_permanents(type_contains="Creature", transformed=True) >= 1
   #   "a flipped Hero creature is in play"
   #       state.count_permanents(type_contains="Hero", transformed=True) >= 1
   #   "at least two untapped artifact tokens"

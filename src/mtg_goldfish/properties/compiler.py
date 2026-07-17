@@ -33,6 +33,10 @@ lower your confidence.
 English literally. Only use has_permanent_named/state.turn for "X is on the \
 battlefield right now"; for anything that HAPPENED on/by/before a turn, use the \
 game-history helpers above.
+- "flipped" / "transformed" / "on its back side (or face)" describe a \
+double-faced permanent currently showing its BACK face: use \
+count_permanents(..., transformed=True). E.g. "there is a flipped creature in \
+play" -> state.count_permanents(type_contains="Creature", transformed=True) >= 1.
 - For "an ability activated / resolved / found something", use \
 ability_activated / trigger_resolved / ability_succeeded / cards_put_by / \
 cards_drawn_by, or count_events for anything else.

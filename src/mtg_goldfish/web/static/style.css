@@ -402,3 +402,7 @@ table.viz-runs tbody tr.run-row.active { background: rgba(217,164,65,.14); outli
 
 /* ---- resume button (shown for stopped / interrupted runs) ---- */
 #resume-btn { border-color: var(--good); color: var(--good); }
+
+/* run-status badges in the previous-runs table */
+.pill.good { border-color: var(--good); color: var(--good); }
+.pill.bad { border-color: var(--bad); color: var(--bad); }

@@ -405,12 +405,15 @@ async function openRunsModal() {
           el("div", { className: "pp", textContent: `↳ ${cnt}/${gr} (${rate}%)` }));
       });
       const dateCell = el("td", { textContent: fmtDate(r.created_at) });
-      if (r.status === "running") {
-        dateCell.append(el("div", {}, el("span", { className: "pill warn", textContent: "⏳ running…" })));
-      } else if (r.status === "stopped") {
-        dateCell.append(el("div", {}, el("span", { className: "pill", textContent: "stopped — load to resume" })));
-      } else if (r.status === "interrupted") {
-        dateCell.append(el("div", {}, el("span", { className: "pill warn", textContent: "⚡ interrupted — load to resume" })));
+      // One status badge per run: completed / stopped / failed (⏳ while live).
+      const badge = {
+        running: ["⏳ running…", "pill warn"],
+        done: ["completed", "pill good"],
+        stopped: ["stopped", "pill"],
+        interrupted: ["failed", "pill bad"],
+      }[r.status];
+      if (badge) {
+        dateCell.append(el("div", {}, el("span", { className: badge[1], textContent: badge[0] })));
       }
       const actionsCell = el("td", { className: "run-actions" },
         el("button", {
@@ -437,7 +440,8 @@ async function openRunsModal() {
         el("td", {},
           el("span", { className: "big", textContent: `${((st.success_rate || 0) * 100).toFixed(1)}%` }),
           el("div", { className: "pp", textContent: `${st.successes || 0}/${gr}` })),
-        el("td", { textContent: String(cfg.num_games ?? "") }),
+        el("td", { title: "games completed / games asked",
+                   textContent: `${gr}/${cfg.num_games ?? "?"}` }),
         handCell,
         el("td", { textContent: String(mulligansShown) }),
         el("td", { textContent: cfg.on_the_play === false ? "draw" : "play" }),
@@ -506,6 +510,20 @@ function setResumable(r) {
 function updateResumeButton() {
   const show = !!state.resumableId && state.resumableMode === state.simMode;
   $("resume-btn").classList.toggle("hidden", !show);
+  // With a resumable run pending, Run means "discard that continuation and
+  // start over" — say so on the button.
+  $("run-btn").textContent = state.resumableId ? "Run (reset)" : "Run";
+}
+
+// Back to a clean slate — same reset a fresh Run does: clear the games table,
+// the progress box and any pending Resume offer.
+function resetRunState() {
+  resetViz();
+  $("progress-box").classList.add("hidden");
+  $("sim-stats").innerHTML = "";
+  $("sim-seed").textContent = "";
+  state.currentResultId = null;
+  setResumable(null);
 }
 
 async function resumeRun() {
@@ -811,6 +829,9 @@ async function compileProps() {
     state.props = r.properties.map((p) => ({ ...p }));
     renderProps();
     showPropWarnings(r.warnings);
+    // The properties (may) have changed: the shown run no longer reflects
+    // them — start from a clean slate, exactly like clicking Run does.
+    resetRunState();
   } catch (e) { alert("Compile failed: " + e.message); }
   finally { btn.disabled = false; btn.textContent = "Compile → review code"; }
 }
@@ -946,16 +967,17 @@ function onSimEvent(msg) {
     if (msg.run) appendLiveRun(msg.run); // populate the games table on the fly
   } else if (msg.type === "done") {
     $("run-btn").disabled = false; $("stop-btn").disabled = true;
-    // Replace the (possibly fetched mid-run) entry rather than duplicating it.
+    // msg.result is LEAN — no per-game rows (each was already streamed live
+    // via a progress event; resending them all could reach hundreds of MB and
+    // crash the tab). The games table already shows everything: keep it, and
+    // just finalize the stats, the stored entry and the Resume offer.
     const rs = state.session.results = state.session.results || [];
     const at = rs.findIndex((x) => x.id === msg.result.id);
     if (at >= 0) rs[at] = msg.result; else rs.push(msg.result);
     $("load-run-btn").disabled = false;
-    setResumable(msg.result); // a stopped, incomplete run offers Resume
+    setResumable(msg.result); // a stopped/failed, incomplete run offers Resume
     $("sim-seed").textContent = `seed: ${msg.result.config?.base_seed}`;
     renderStats(msg.result.stats);
-    // Final table render; keep the board the user is already watching.
-    renderViz(msg.result, { keepOpenBoard: state.vizLiveOpened });
   }
 }
 
@@ -1408,6 +1430,13 @@ function prunePass(n) {
   n.children = out;
 }
 prunePass(DATA.tree);
+// The terminal "✓ all properties satisfied" marker node is display noise: the
+// winning line already ends gold on the state that satisfied everything.
+function pruneFinal(n) {
+  n.children = (n.children || []).filter(c => !(c.label || "").startsWith("✓ all properties satisfied"));
+  n.children.forEach(pruneFinal);
+}
+pruneFinal(DATA.tree);
 // ✗ dead-end leaves are display noise: next to real branches they are
 // dropped, and a node whose only continuation is a dead end ABSORBS it — the
 // child is hidden and the node's circles take the dead end's status (its
@@ -1427,6 +1456,27 @@ function openWin(nodes) {
   for (const n of nodes) if (n.success) { n._open = true; openWin(n.children || []); }
 }
 openWin(roots);
+// A property is also dead (red) at a node when EVERY explored child is dead
+// for it — no continuation from here can verify it anymore. Computed bottom-up
+// over the whole tree (iterative post-order: trees can be thousands deep).
+function markDeadProps(rootNodes) {
+  const stack = rootNodes.map(n => [n, 0]);
+  while (stack.length) {
+    const top = stack[stack.length - 1];
+    const n = top[0], kids = n.children || [];
+    if (top[1] < kids.length) { stack.push([kids[top[1]++], 0]); continue; }
+    stack.pop();
+    n._deadProps = {};
+    for (const p of PROPS) {
+      const [cls] = propStatus(n._dead || n, p);
+      if (cls === "ko" ||
+          (cls === "todo" && kids.length && kids.every(c => c._deadProps[p.id]))) {
+        n._deadProps[p.id] = true;
+      }
+    }
+  }
+}
+markDeadProps(roots);
 let baseW = 0, baseH = 0, scale = 1;
 
 const kidsOf = n => (n._open ? (n.children || []) : []);
@@ -1471,7 +1521,13 @@ function drawNode(n) {
     PROPS.forEach((p, i) => {
       const c = document.createElementNS(NS, "circle");
       c.setAttribute("cx", px(n) + i * CGAP); c.setAttribute("cy", py(n)); c.setAttribute("r", R);
-      const [cls, why] = propStatus(src, p);
+      let [cls, why] = propStatus(src, p);
+      // Bubbled-up death: every explored continuation below is a dead end for
+      // this property, so it can't be verified from here either.
+      if (cls === "todo" && n._deadProps && n._deadProps[p.id]) {
+        cls = "ko";
+        why = "can no longer be verified — every explored line below is a dead end for it";
+      }
       c.setAttribute("class", cls);
       const tt = document.createElementNS(NS, "title");
       tt.textContent = (p.timing || "at") + " " + (p.phase || "").replace(/_/g, " ") +

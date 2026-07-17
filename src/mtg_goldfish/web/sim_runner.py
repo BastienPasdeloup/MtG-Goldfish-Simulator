@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import traceback
 
 from ..cards import is_implemented, load_all_cards
 from ..deck.models import DeckBoard
@@ -258,9 +259,18 @@ class SimulationRunner:
                 )
                 last_stats = stats.as_dict()
                 status = "stopped" if handle.stop.is_set() else "done"
+            except Exception:  # noqa: BLE001 - the run must NEVER die silently
+                # An unexpected crash: keep the games persisted so far and mark
+                # the run interrupted (shown as "failed", resumable) — and still
+                # fall through to the done broadcast so the UI recovers.
+                traceback.print_exc()
+                status = "interrupted"
             finally:
                 # Final (or crash/cancel) state of the entry.
-                persist(status)
+                try:
+                    persist(status)
+                except Exception:  # noqa: BLE001 - never block the done signal
+                    traceback.print_exc()
 
             result = SimResult(
                 id=result_id,
@@ -269,15 +279,18 @@ class SimulationRunner:
                 status=status,
                 properties=properties,
                 stats=last_stats,
-                sample_runs=sample_runs,
-                sample_success_logs=[r["log"] for r in sample_runs if r["success"]],
             )
+            # LEAN done message: the per-game rows (incl. their compressed
+            # search trees) were already streamed one by one as the games
+            # finished — resending them all here can reach hundreds of MB on a
+            # long run and crash the browser tab (which also swallowed the
+            # UI's stop/Resume handling, since it lives in this handler).
             HUB.broadcast_threadsafe(
                 loop,
                 session.id,
                 {
                     "type": "done",
-                    "result": result.model_dump(),
+                    "result": result.model_dump(exclude={"sample_runs", "sample_success_logs"}),
                     "stopped": handle.stop.is_set(),
                 },
             )
