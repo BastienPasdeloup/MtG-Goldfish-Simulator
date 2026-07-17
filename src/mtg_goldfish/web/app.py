@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import __version__
+from .. import __version__, __version_base__
 from ..cards import is_implemented, load_all_cards
 from ..config import CONFIG
 from ..deck import MoxfieldError, MTGTop8Error, ScryfallError, import_deck
@@ -191,40 +191,37 @@ def meta() -> dict:
     }
 
 
-def _version_tuple(v: str) -> tuple[int, ...]:
-    """Parse a version string like ``0.2.1`` into a comparable int tuple."""
-    return tuple(int(p) for p in re.findall(r"\d+", v or "")) or (0,)
-
-
 @app.get("/api/version-check")
 def version_check() -> dict:
-    """Is a newer release available? Compares this install's `__version__`
-    against the `__version__` declared on the repository's `main` branch (read
-    straight from GitHub's raw file view). This works for ANY install — git
-    checkout or downloaded ZIP — because it needs no local git history, only the
-    version string baked into the code. Returns `checked=False` when GitHub
-    can't be reached or the remote version can't be parsed, so the UI simply
-    shows nothing."""
+    """Is the repository's `main` ahead of this checkout? Since the version is
+    derived from the git commit count (not a literal in the code), this compares
+    the local git HEAD to `main` via GitHub's compare API. Returns
+    `checked=False` for a non-git install (ZIP download), an unpushed local
+    commit, or when GitHub is unreachable, so the UI simply shows nothing."""
     import httpx
 
+    local_sha = _git("rev-parse", "HEAD")
+    if not local_sha:
+        return {"checked": False}  # not a git checkout (e.g. a ZIP download)
     owner_repo = _origin_owner_repo()
     try:
         resp = httpx.get(
-            f"https://raw.githubusercontent.com/{owner_repo}/main/src/mtg_goldfish/__init__.py",
-            headers={"User-Agent": "mtg-goldfish-simulator"},
+            f"https://api.github.com/repos/{owner_repo}/compare/{local_sha}...main",
+            headers={"User-Agent": "mtg-goldfish-simulator",
+                     "Accept": "application/vnd.github+json"},
             timeout=6.0,
         )
     except Exception:  # offline, DNS, timeout…
         return {"checked": False}
-    if resp.status_code != 200:
+    if resp.status_code != 200:  # e.g. the local commit isn't on GitHub yet
         return {"checked": False}
-    m = re.search(r"""__version__\s*=\s*['"]([^'"]+)['"]""", resp.text)
-    if not m:
-        return {"checked": False}
-    remote = m.group(1)
+    behind = int(resp.json().get("behind_by") or 0)
+    local_count = _git("rev-list", "--count", "HEAD")
+    remote = (f"{__version_base__}.{int(local_count) + behind}"
+              if local_count and local_count.isdigit() else __version__)
     return {
         "checked": True,
-        "update_available": _version_tuple(remote) > _version_tuple(__version__),
+        "update_available": behind > 0,
         "local": __version__,
         "remote": remote,
         "repo_url": f"https://github.com/{owner_repo}",

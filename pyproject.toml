@@ -1,6 +1,10 @@
 [project]
 name = "mtg-goldfish-simulator"
-version = "0.1.4"
+# Fixed packaging version — NEVER bumped by CI, so pyproject.toml and uv.lock
+# never drift (nothing to pull/re-lock after a push). The user-facing version
+# (app badge + docs) is derived from the git commit count at runtime/deploy;
+# see src/mtg_goldfish/__init__.py.
+version = "0.1.0"
 description = "Solitaire (goldfish) Magic: the Gathering simulator that exhaustively explores lines of play to check user-defined properties on a deck."
 readme = "README.md"
 requires-python = ">=3.11"

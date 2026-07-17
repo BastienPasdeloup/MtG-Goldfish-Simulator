@@ -1,31 +1,26 @@
-name: Deploy docs & bump version
+name: Deploy docs
 
-# Runs on every push to main: bumps the patch version everywhere (code + docs),
-# commits it back, then publishes docs/ to GitHub Pages.
+# On every push to main, publish docs/ to GitHub Pages. The displayed version
+# (0.1.<commit-count>) is injected into the docs at deploy time only — NOTHING
+# is committed back, so pyproject.toml / uv.lock never move and your local repo
+# always matches the server (nothing to pull after a push).
 #
-# ONE-TIME SETUP: in the repo, Settings -> Pages -> "Build and deployment" ->
-# Source -> select "GitHub Actions" (instead of "Deploy from a branch"), so the
-# deploy step below is what publishes the site.
+# ONE-TIME SETUP: repo Settings -> Pages -> "Build and deployment" -> Source ->
+# "GitHub Actions".
 on:
   push:
     branches: [main]
 
-# The bump commit needs contents:write; the Pages deploy needs pages/id-token.
 permissions:
-  contents: write
   pages: write
   id-token: write
 
-# Never run two deploys at once; let an in-flight one finish.
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  release:
-    # Skip the run triggered by our own "[skip ci]" bump commit (belt-and-braces;
-    # GitHub also natively skips CI for [skip ci] messages).
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+  deploy:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -34,29 +29,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # full history so the commit count is correct
 
-      - name: Bump patch version (code + docs)
+      - name: Stamp the version into the docs (artifact only, not committed)
         run: |
           set -euo pipefail
-          cur=$(sed -n 's/^__version__ *= *"\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/p' src/mtg_goldfish/__init__.py)
-          if [ -z "$cur" ]; then echo "could not read __version__"; exit 1; fi
-          IFS='.' read -r MA MI PA <<< "$cur"
-          new="$MA.$MI.$((PA + 1))"
-          echo "Bumping $cur -> $new"
-          cur_esc=${cur//./\\.}
-          sed -i "s/^__version__ = \"$cur\"/__version__ = \"$new\"/" src/mtg_goldfish/__init__.py
-          sed -i "s/^version = \"$cur\"/version = \"$new\"/" pyproject.toml
-          sed -i "s/v$cur_esc/v$new/g" docs/*.html
-
-      - name: Commit & push the bump
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          # Only commit if the bump actually changed something.
-          git diff --cached --quiet || git commit -m "chore: bump version [skip ci]"
-          git push
+          ver="0.1.$(git rev-list --count HEAD)"
+          echo "Docs version: v$ver"
+          sed -i -E "s#(<span class=\"ver\">)v[0-9]+\.[0-9]+\.[0-9]+(</span>)#\1v${ver}\2#" docs/*.html
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
