@@ -227,6 +227,17 @@ class GameState:
     #: Cards can gate instant-speed-only options on it (e.g. countering your own
     #: spell — see cards._common.counterspell).
     instant_speed: bool = False
+    #: Fake shuffling (set from the config): when True, "shuffle" never really
+    #: reorders the library — only the cards whose position the player KNOWS
+    #: (put on top by a Brainstorm, bottomed by a mulligan/scry...) are pulled
+    #: out and reinserted at random spots; everything else keeps its order. The
+    #: goal is a near-constant library across all lines of play, so lines that
+    #: shuffle differently (e.g. via a fetch land) don't each get a fresh top of
+    #: library (which over-evaluates "find X" probabilities).
+    fake_shuffle: bool = False
+    #: id()s of library cards whose position the player currently knows (see
+    #: mark_known_in_library). Cleared by every shuffle, real or fake.
+    known_library_ids: set = field(default_factory=set)
 
     # per-turn counters (reset at untap)
     lands_played_this_turn: int = 0
@@ -306,6 +317,8 @@ class GameState:
             on_the_play=self.on_the_play,
             rng_seed=self.rng_seed,
             instant_speed=self.instant_speed,
+            fake_shuffle=self.fake_shuffle,
+            known_library_ids=set(self.known_library_ids),
             lands_played_this_turn=self.lands_played_this_turn,
             bonus_land_drops=self.bonus_land_drops,
             spells_cast_this_turn=self.spells_cast_this_turn,
@@ -593,11 +606,39 @@ class GameState:
             self.queue_draw_triggers(nth)
 
     # ---- library search / shuffle -------------------------------------------
+    def mark_known_in_library(self, *cards) -> None:
+        """Record that the player knows WHERE these library cards sit (put on
+        top by a Brainstorm/tutor, kept on top by a scry/surveil, bottomed by a
+        mulligan...). With fake shuffling on, a "shuffle" reinserts exactly
+        these cards at random spots and leaves the rest of the library in
+        order. Identity-based: duplicate copies of a card share one CardData
+        object, so marking one marks them all — harmless, since identical
+        copies are interchangeable."""
+        for c in cards:
+            self.known_library_ids.add(id(c))
+
     def shuffle_library(self) -> None:
-        """Deterministic per branch: seeded by game seed + uid counter."""
+        """Deterministic per branch: seeded by game seed + uid counter.
+
+        With `fake_shuffle` on, the library is NOT reordered: only the cards
+        whose position the player knows (see mark_known_in_library) are pulled
+        out and reinserted at random places — after a real shuffle the player
+        wouldn't know where they are, so they must move — while every other
+        card keeps its relative order. This keeps the library near-constant
+        across the lines of play of a game."""
         rng = random.Random(self.rng_seed * 1_000_003 + self._next_uid)
         self._next_uid += 1
+        if self.fake_shuffle:
+            if self.known_library_ids:
+                known = [c for c in self.library if id(c) in self.known_library_ids]
+                rest = [c for c in self.library if id(c) not in self.known_library_ids]
+                for c in known:
+                    rest.insert(rng.randrange(len(rest) + 1), c)
+                self.library = rest
+            self.known_library_ids.clear()
+            return
         rng.shuffle(self.library)
+        self.known_library_ids.clear()  # nobody knows anything after a real shuffle
 
     def search_library(self, pred) -> list[CardData]:
         """Distinct-by-name candidates matching `pred` (branch choices)."""

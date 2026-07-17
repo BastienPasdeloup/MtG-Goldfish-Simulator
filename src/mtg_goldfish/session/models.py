@@ -17,6 +17,10 @@ class SimConfig(BaseModel):
     # Explore instant-speed plays (instants/flash/abilities in non-main steps,
     # and countering your own spells). Off by default — much larger search.
     instant_speed: bool = False
+    # Fake shuffling: "shuffles" never really reorder the library — only the
+    # cards whose position the player knows are reinserted at random spots, so
+    # the library stays near-constant across all lines of play.
+    fake_shuffle: bool = False
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
@@ -29,7 +33,9 @@ class SimResult(BaseModel):
     config: SimConfig
     # "running" while the simulation is in progress (the entry is created as
     # soon as the run starts and updated as games finish), then "done" or
-    # "stopped" (cancelled). Old files default to "done".
+    # "stopped" (cancelled), or "interrupted" (the app died mid-run; the games
+    # persisted so far are kept, and the run can be resumed). Old files
+    # default to "done".
     status: str = "done"
     # Snapshot of the properties checked in this run (for later review).
     properties: list[PropertySpec] = Field(default_factory=list)

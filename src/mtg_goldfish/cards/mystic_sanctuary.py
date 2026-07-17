@@ -36,6 +36,7 @@ class MysticSanctuary(Card):
                 if c is not None:
                     st.graveyard.remove(c)
                     st.library.insert(0, c)
+                    st.mark_known_in_library(c)  # player knows it's on top
                     st.emit(f"Mystic Sanctuary: put {name} on top of library")
             return None
 

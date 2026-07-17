@@ -399,6 +399,7 @@ def surveil_branches(state: "GameState", n: int, source: str) -> list["GameState
                 binned.append(card)
         del st.library[:len(combo)]
         st.library[:0] = keep_stack
+        st.mark_known_in_library(*keep_stack)  # player saw what stays on top
         for card in binned:
             st.to_graveyard(card)
         if binned:
@@ -733,13 +734,16 @@ def dig_choose(state: "GameState", look_n: int, keep_n: int, *,
             st.hand.extend(kept)
         else:  # keep on top, in order
             st.library[:0] = kept
+            st.mark_known_in_library(*kept)  # player knows what's on top
         if rest == "graveyard":
             for c in leftover:
                 st.to_graveyard(c)
         elif rest == "top":
             st.library[:0] = leftover
+            st.mark_known_in_library(*leftover)
         else:  # bottom
             st.library.extend(leftover)
+            st.mark_known_in_library(*leftover)  # player knows they're at the bottom
         st.emit(f"{source}: look {len(pool)}, keep {len(kept)} "
                 f"({', '.join(c.name for c in kept) or 'none'})")
         return None
@@ -800,6 +804,7 @@ def counterspell(
                             st.stack.remove(victim)
                         if dest == "library_top":
                             st.library.insert(0, victim)
+                            st.mark_known_in_library(victim)  # player knows it's on top
                             st.emit(f"{name}: counter {victim_name} — to top of library")
                         else:
                             st.to_graveyard(victim)
@@ -844,6 +849,7 @@ def counterspell(
                                 st.stack.remove(victim)
                             if dest == "library_top":
                                 st.library.insert(0, victim)
+                                st.mark_known_in_library(victim)  # player knows it's on top
                                 st.emit(f"{name}: counter own {target_name} — to top of library")
                             else:
                                 st.to_graveyard(victim)

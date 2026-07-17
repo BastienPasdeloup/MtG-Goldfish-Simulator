@@ -26,8 +26,12 @@ branch point.
 """
 from __future__ import annotations
 
+import base64
+import gzip
 import heapq
 import itertools
+import json
+import os
 import random
 import time
 import traceback
@@ -98,6 +102,15 @@ class SimulationConfig:
     #: Fixed-hand mode: if set, pad the forced hand with random cards from the
     #: (shuffled) rest of the library up to this total hand size.
     fixed_hand_pad_to: int | None = None
+    #: Fake shuffling: mid-game "shuffles" never really reorder the library —
+    #: only cards whose position the player knows (Brainstorm put-backs, scry
+    #: bottoms...) are reinserted at random spots. Keeps the library
+    #: near-constant across all lines of play (see GameState.fake_shuffle).
+    fake_shuffle: bool = False
+    #: Games run in parallel across CPU cores (one process per worker). None =
+    #: automatic (all cores but one, to keep the machine responsive); 1 = fully
+    #: sequential in-process.
+    parallel_workers: int | None = None
 
 
 @dataclass
@@ -112,6 +125,10 @@ class GameOutcome:
     branches_explored: int = 0
     branches_considered: int = 0
     tree: dict | None = None
+    # gzip+base64 of dumps_tree(tree): parallel workers pre-compress the tree
+    # (pickling a raw multi-MB tree dict back to the parent costs far more than
+    # gzipping it in the worker) and null out `tree`.
+    tree_gz: str | None = None
     tree_truncated: bool = False
     # Exceptions hit during this game's search (see _SearchContext.record_bug).
     bugs: list[dict] = field(default_factory=list)
@@ -632,6 +649,50 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Search-tree serialization (used by the web runner and the parallel workers)
+# --------------------------------------------------------------------------
+def dumps_tree(root: dict) -> str:
+    """Compact-JSON-encode a search tree iteratively.
+
+    The tree can be thousands of nodes deep (DFS lines), and `json.dumps`
+    recurses one C frame per nesting level — deep trees blow the recursion
+    limit. Every node field is shallow except "children" (the only recursive
+    link), so we dump each node's shallow fields with `json.dumps` and stitch
+    the `children` nesting together with an explicit stack."""
+    parts: list[str] = []
+    # LIFO of work items: ("open", node) emits a node; ("raw", s) emits text.
+    stack: list[tuple] = [("open", root)]
+    while stack:
+        kind, val = stack.pop()
+        if kind == "raw":
+            parts.append(val)
+            continue
+        node = val
+        shallow = {k: v for k, v in node.items() if k != "children"}
+        head = json.dumps(shallow, separators=(",", ":"))
+        children = node.get("children") or []
+        # Re-append "children" as the final key of the object.
+        open_obj = ('{"children":[' if head == "{}"
+                    else head[:-1] + ',"children":[')
+        if not children:
+            parts.append(open_obj + "]}")
+            continue
+        parts.append(open_obj)
+        stack.append(("raw", "]}"))
+        # Push children reversed with commas so they emit as c0,c1,...,cN.
+        for i in range(len(children) - 1, -1, -1):
+            stack.append(("open", children[i]))
+            if i > 0:
+                stack.append(("raw", ","))
+    return "".join(parts)
+
+
+def compress_tree(root: dict) -> str:
+    """gzip+base64 a search tree (highly repetitive JSON, ~20x smaller)."""
+    return base64.b64encode(gzip.compress(dumps_tree(root).encode(), 6)).decode("ascii")
+
+
+# --------------------------------------------------------------------------
 # Mulligans + per-game driver
 # --------------------------------------------------------------------------
 def _opening_hands(
@@ -720,6 +781,10 @@ def simulate_game(
         variant.turn = 0
         variant.phase = Phase.UNTAP
         variant.rng_seed = config.base_seed + game_index  # mid-game shuffles
+        if bottomed:
+            # The player saw the bottomed cards go under: with fake shuffling
+            # on, the next "shuffle" reinserts exactly these at random spots.
+            variant.mark_known_in_library(*bottomed)
         play_draw = "on the play" if variant.on_the_play else "on the draw"
         if config.fixed_hand:
             variant.emit(f"fixed opening hand ({play_draw}): {[c.name for c in hand]}")
@@ -770,45 +835,194 @@ def simulate_game(
     )
 
 
+def _buggy_outcome(game_index: int, exc: BaseException) -> GameOutcome:
+    """A placeholder outcome for a game whose setup/search crashed outright."""
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return GameOutcome(
+        game_index=game_index, success=False,
+        bugs=[{"context": "game setup/search", "error": f"{type(exc).__name__}: {exc}",
+               "where": "?", "turn": None, "phase": None, "traceback": tb[-2000:]}],
+    )
+
+
+def _count_game(stats: SimulationStats, outcome: GameOutcome) -> None:
+    stats.games_run += 1
+    if outcome.success:
+        stats.successes += 1
+    if outcome.timed_out:
+        stats.timeouts += 1
+    for pid in outcome.satisfied:
+        stats.per_property[pid] = stats.per_property.get(pid, 0) + 1
+
+
+# ---- parallel workers ------------------------------------------------------
+# Games are independent (each is seeded by base_seed + game_index), so they
+# run across CPU cores in one process per worker. Each worker builds its own
+# base state and recompiles the properties from their (picklable) specs — the
+# compiled `check` functions come from exec'd code and can't cross a process
+# boundary.
+_WORKER: dict = {}
+
+
+def _worker_init(deck, specs, config: SimulationConfig, stop_event) -> None:
+    from ..cards import load_all_cards
+    from ..properties.evaluator import compile_all
+
+    load_all_cards()
+    base = new_game_from_deck(deck, on_the_play=config.on_the_play)
+    base.instant_speed = config.instant_speed
+    base.fake_shuffle = config.fake_shuffle
+    _WORKER["base"] = base
+    _WORKER["props"] = compile_all(specs)
+    _WORKER["config"] = config
+    _WORKER["stop"] = stop_event
+
+
+def _throttled_stop(event, interval: float = 0.15) -> Callable[[], bool] | None:
+    """Wrap a cross-process Event in a time-throttled checker: `is_set()` on a
+    manager proxy is an IPC round-trip, far too slow for the search's hot path."""
+    if event is None:
+        return None
+    memo = {"t": 0.0, "hit": False}
+
+    def check() -> bool:
+        if memo["hit"]:
+            return True
+        now = time.monotonic()
+        if now - memo["t"] >= interval:
+            memo["t"] = now
+            memo["hit"] = event.is_set()
+        return memo["hit"]
+
+    return check
+
+
+def _worker_run(game_index: int) -> GameOutcome:
+    config: SimulationConfig = _WORKER["config"]
+    try:
+        outcome = simulate_game(
+            _WORKER["base"], _WORKER["props"], config, game_index,
+            should_stop=_throttled_stop(_WORKER["stop"]),
+        )
+    except Exception as exc:  # keep the run alive; report the game as buggy
+        outcome = _buggy_outcome(game_index, exc)
+    # Compress the tree in the worker: pickling the raw tree dict back to the
+    # parent costs far more than shipping the ~20x smaller gzip.
+    if outcome.tree is not None:
+        outcome.tree_gz = compress_tree(outcome.tree)
+        outcome.tree = None
+    return outcome
+
+
+def _run_parallel(
+    deck,
+    properties: list[CompiledProperty],
+    config: SimulationConfig,
+    indices: list[int],
+    stats: SimulationStats,
+    workers: int,
+    on_game: Callable[[GameOutcome, SimulationStats], None] | None,
+    should_stop: Callable[[], bool] | None,
+) -> SimulationStats:
+    import multiprocessing as mp
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+
+    specs = [p.spec for p in properties]
+    ctx = mp.get_context("spawn")  # fork is unsafe under a threaded web server
+    manager = ctx.Manager()
+    try:
+        stop_event = manager.Event()
+        with ProcessPoolExecutor(
+            max_workers=min(workers, len(indices)), mp_context=ctx,
+            initializer=_worker_init, initargs=(deck, specs, config, stop_event),
+        ) as pool:
+            by_future = {pool.submit(_worker_run, i): i for i in indices}
+            pending = set(by_future)
+            stopped = False
+            while pending:
+                if not stopped and should_stop and should_stop():
+                    # Cancel queued games; in-flight ones see the event via
+                    # their throttled should_stop and abandon within ~0.15 s.
+                    stopped = True
+                    stop_event.set()
+                    for f in pending:
+                        f.cancel()
+                done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    if fut.cancelled():
+                        continue
+                    try:
+                        outcome = fut.result()
+                    except Exception as exc:  # worker died / unpicklable result
+                        outcome = _buggy_outcome(by_future[fut], exc)
+                    if stopped:
+                        continue  # abandoned mid-search — don't report or count
+                    _count_game(stats, outcome)
+                    if on_game:
+                        on_game(outcome, stats)
+    finally:
+        manager.shutdown()
+    return stats
+
+
 def run_simulation(
     deck,
     properties: list[CompiledProperty],
     config: SimulationConfig,
     on_game: Callable[[GameOutcome, SimulationStats], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    *,
+    game_indices: list[int] | None = None,
+    initial_stats: dict | None = None,
 ) -> SimulationStats:
-    """Run `config.num_games` games, invoking `on_game` after each for live
-    reporting. `should_stop` allows cooperative cancellation — it is checked
-    between games AND inside each game's search, so Stop abandons the game in
-    progress immediately rather than waiting for its timeout."""
-    base_state = new_game_from_deck(deck, on_the_play=config.on_the_play)
-    base_state.instant_speed = config.instant_speed  # gates counter-your-own etc.
+    """Run the games of `game_indices` (default: all `config.num_games`),
+    invoking `on_game` after each for live reporting. Games run in parallel
+    across CPU cores when possible (see SimulationConfig.parallel_workers), so
+    `on_game` may be called out of game-index order. `should_stop` allows
+    cooperative cancellation — it is checked between games AND inside each
+    game's search, so Stop abandons the games in progress immediately rather
+    than waiting for their timeout.
+
+    `game_indices` + `initial_stats` support RESUMING a partial run: pass the
+    not-yet-run indices and the stored stats dict, and the counts continue
+    from there (per-game seeds only depend on the index, so a resumed game is
+    identical to what it would have been in the original run)."""
     stats = SimulationStats(total_games=config.num_games)
     stats.per_property = {p.id: 0 for p in properties}
+    if initial_stats:
+        stats.games_run = int(initial_stats.get("games_run") or 0)
+        stats.successes = int(initial_stats.get("successes") or 0)
+        stats.timeouts = int(initial_stats.get("timeouts") or 0)
+        for pid, n in (initial_stats.get("per_property") or {}).items():
+            stats.per_property[pid] = int(n)
+    indices = (list(game_indices) if game_indices is not None
+               else list(range(config.num_games)))
 
-    for i in range(config.num_games):
+    workers = (config.parallel_workers if config.parallel_workers
+               else max(1, (os.cpu_count() or 2) - 1))
+    # The parallel path needs the properties' specs to recompile in the
+    # workers; hand-built property objects (tests) fall back to sequential.
+    can_parallel = all(getattr(p, "spec", None) is not None for p in properties)
+    if workers > 1 and len(indices) > 1 and can_parallel:
+        return _run_parallel(deck, properties, config, indices, stats,
+                             workers, on_game, should_stop)
+
+    base_state = new_game_from_deck(deck, on_the_play=config.on_the_play)
+    base_state.instant_speed = config.instant_speed  # gates counter-your-own etc.
+    base_state.fake_shuffle = config.fake_shuffle
+
+    for i in indices:
         if should_stop and should_stop():
             break
         try:
             outcome = simulate_game(base_state, properties, config, i, should_stop=should_stop)
         except Exception as exc:  # keep the run alive; report the game as buggy
-            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            outcome = GameOutcome(
-                game_index=i, success=False,
-                bugs=[{"context": "game setup/search", "error": f"{type(exc).__name__}: {exc}",
-                       "where": "?", "turn": None, "phase": None, "traceback": tb[-2000:]}],
-            )
+            outcome = _buggy_outcome(i, exc)
         # If Stop fired during this game, abandon it: don't report a half-searched
         # game as a result or count it.
         if should_stop and should_stop():
             break
-        stats.games_run += 1
-        if outcome.success:
-            stats.successes += 1
-        if outcome.timed_out:
-            stats.timeouts += 1
-        for pid in outcome.satisfied:
-            stats.per_property[pid] = stats.per_property.get(pid, 0) + 1
+        _count_game(stats, outcome)
         if on_game:
             on_game(outcome, stats)
 

@@ -1,15 +1,15 @@
 """Runs simulations on a background thread and streams progress over the Hub.
 
-The engine is synchronous and CPU-bound, so each run executes in its own thread.
-Progress is pushed to WebSocket clients via `Hub.broadcast_threadsafe`, and the
-finished `SimResult` is appended to the session and persisted.
+The engine parallelizes the games across CPU cores (see engine.simulator);
+this runner owns the run's lifecycle on a coordinating thread. Progress is
+pushed to WebSocket clients via `Hub.broadcast_threadsafe`, and the run's
+entry in the session is re-persisted after every completed game, so a crash
+never loses more than the games in flight — the partial run stays loadable
+(and resumable) from "Previous runs".
 """
 from __future__ import annotations
 
 import asyncio
-import base64
-import gzip
-import json
 import threading
 import time
 
@@ -19,47 +19,13 @@ from ..engine.simulator import (
     GameOutcome,
     SimulationConfig,
     SimulationStats,
+    compress_tree,
+    dumps_tree,  # noqa: F401 - re-exported (historical home of this helper)
     run_simulation,
 )
 from ..properties import compile_all
 from ..session import Session, SessionCorrupt, SessionStore, SimConfig, SimResult, new_id, now_iso
 from .hub import HUB
-
-
-def dumps_tree(root: dict) -> str:
-    """Compact-JSON-encode a search tree iteratively.
-
-    The tree can be thousands of nodes deep (DFS lines), and `json.dumps`
-    recurses one C frame per nesting level — deep trees blow the recursion
-    limit. Every node field is shallow except "children" (the only recursive
-    link), so we dump each node's shallow fields with `json.dumps` and stitch
-    the `children` nesting together with an explicit stack."""
-    parts: list[str] = []
-    # LIFO of work items: ("open", node) emits a node; ("raw", s) emits text.
-    stack: list[tuple] = [("open", root)]
-    while stack:
-        kind, val = stack.pop()
-        if kind == "raw":
-            parts.append(val)
-            continue
-        node = val
-        shallow = {k: v for k, v in node.items() if k != "children"}
-        head = json.dumps(shallow, separators=(",", ":"))
-        children = node.get("children") or []
-        # Re-append "children" as the final key of the object.
-        open_obj = ('{"children":[' if head == "{}"
-                    else head[:-1] + ',"children":[')
-        if not children:
-            parts.append(open_obj + "]}")
-            continue
-        parts.append(open_obj)
-        stack.append(("raw", "]}"))
-        # Push children reversed with commas so they emit as c0,c1,...,cN.
-        for i in range(len(children) - 1, -1, -1):
-            stack.append(("open", children[i]))
-            if i > 0:
-                stack.append(("raw", ","))
-    return "".join(parts)
 
 
 class RunHandle:
@@ -82,15 +48,7 @@ class SimulationRunner:
         if h:
             h.stop.set()
 
-    def start(
-        self,
-        session: Session,
-        config: SimConfig,
-        loop: asyncio.AbstractEventLoop,
-    ) -> str:
-        if self.is_running(session.id):
-            raise RuntimeError("A simulation is already running for this session.")
-
+    def _check_deck_implemented(self, session: Session) -> None:
         # Every card that can enter the game must have a real implementation;
         # unimplemented cards would silently play as vanilla approximations and
         # skew the results. Sideboard cards never enter the game, so ignore them.
@@ -107,14 +65,21 @@ class SimulationRunner:
                 f"before running a simulation: {preview}{more}"
             )
 
+    def start(
+        self,
+        session: Session,
+        config: SimConfig,
+        loop: asyncio.AbstractEventLoop,
+    ) -> str:
+        if self.is_running(session.id):
+            raise RuntimeError("A simulation is already running for this session.")
+        self._check_deck_implemented(session)
+
         compiled = compile_all(session.properties)
         if not compiled:
             raise ValueError("No compiled properties to check. Compile them first.")
 
-        handle = RunHandle()
-        self._runs[session.id] = handle
         result_id = new_id()
-
         # The run appears in "previous runs" the moment it starts (seed is
         # decided): create + persist the entry NOW, then keep updating it for
         # as long as the run is running.
@@ -131,14 +96,83 @@ class SimulationRunner:
         fresh.results.append(initial)
         self.store.save(fresh)
 
+        self._launch(session, config, result_id, initial.created_at,
+                     initial.properties, sample_runs=[], initial_stats=initial.stats,
+                     game_indices=None, loop=loop)
+        return result_id
+
+    def resume(
+        self,
+        session: Session,
+        result_id: str,
+        loop: asyncio.AbstractEventLoop,
+    ) -> str:
+        """Continue a stopped / interrupted run: re-run exactly the games that
+        never completed (per-game seeds depend only on the game index, so each
+        resumed game is identical to what it would have been), appending to the
+        stored entry."""
+        if self.is_running(session.id):
+            raise RuntimeError("A simulation is already running for this session.")
+        result = next((r for r in session.results if r.id == result_id), None)
+        if result is None:
+            raise ValueError("Run not found.")
+        if result.status == "running":
+            raise ValueError("This run is still in progress.")
+        self._check_deck_implemented(session)
+
+        # Compile the RUN's property snapshot (not the session's current
+        # properties): a resumed run must check exactly what it started with.
+        compiled = compile_all(result.properties)
+        if not compiled:
+            raise ValueError("This run has no compiled properties to resume with.")
+
+        done = {r.get("game_index") for r in result.sample_runs}
+        remaining = [i for i in range(result.config.num_games) if i not in done]
+        if not remaining:
+            raise ValueError("This run is already complete — nothing to resume.")
+
+        # Mark it running again and persist so the UI reflects it immediately.
+        fresh = self.store.load(session.id)
+        stored = next((r for r in fresh.results if r.id == result_id), None)
+        if stored is None:
+            raise ValueError("Run not found.")
+        stored.status = "running"
+        self.store.save(fresh)
+
+        self._launch(session, result.config, result_id, result.created_at,
+                     result.properties, sample_runs=list(result.sample_runs),
+                     initial_stats=dict(result.stats), game_indices=remaining,
+                     loop=loop, compiled=compiled)
+        return result_id
+
+    def _launch(
+        self,
+        session: Session,
+        config: SimConfig,
+        result_id: str,
+        created_at: str,
+        properties: list,
+        *,
+        sample_runs: list[dict],
+        initial_stats: dict,
+        game_indices: list[int] | None,
+        loop: asyncio.AbstractEventLoop,
+        compiled: list | None = None,
+    ) -> None:
+        compiled = compiled if compiled is not None else compile_all(session.properties)
+        handle = RunHandle()
+        self._runs[session.id] = handle
+
         def worker() -> None:
-            sample_runs: list[dict] = []
-            last_stats: dict = initial.stats
+            last_stats: dict = initial_stats
             last_save = time.monotonic()
+            save_cost = 0.0  # duration of the last persist (adaptive back-off)
 
             def persist(status: str) -> None:
                 # Reload to avoid clobbering concurrent edits, then update the
                 # entry in place and save.
+                nonlocal last_save, save_cost
+                t0 = time.monotonic()
                 try:
                     fresh = self.store.load(session.id)
                 except (FileNotFoundError, SessionCorrupt):
@@ -153,17 +187,19 @@ class SimulationRunner:
                         r.status = status
                         break
                 self.store.save(fresh)
+                last_save = time.monotonic()
+                save_cost = last_save - t0
 
             def on_game(outcome: GameOutcome, stats: SimulationStats) -> None:
                 # Every game gets a row (successes carry their winning line).
                 # Trees carry a board snapshot per node, so they are stored
                 # gzip+base64 compressed (highly repetitive JSON, ~20x smaller);
-                # the frontend inflates them with DecompressionStream.
-                nonlocal last_stats, last_save
-                tree_gz = None
-                if outcome.tree is not None:
-                    raw = dumps_tree(outcome.tree).encode()
-                    tree_gz = base64.b64encode(gzip.compress(raw, 6)).decode("ascii")
+                # the frontend inflates them with DecompressionStream. Parallel
+                # workers pre-compress the tree; sequential games compress here.
+                nonlocal last_stats
+                tree_gz = outcome.tree_gz
+                if tree_gz is None and outcome.tree is not None:
+                    tree_gz = compress_tree(outcome.tree)
                 run = {
                     "game_index": outcome.game_index,
                     "success": outcome.success,
@@ -178,9 +214,11 @@ class SimulationRunner:
                 }
                 sample_runs.append(run)
                 last_stats = stats.as_dict()
-                # Persist progress (throttled — the session file is sizeable).
-                if time.monotonic() - last_save > 2.0:
-                    last_save = time.monotonic()
+                # Persist after EVERY completed game, so a crash never loses
+                # more than the games in flight — backing off only when saving
+                # itself is slow (huge sessions): wait at least 2x the last
+                # save's own cost before saving again.
+                if time.monotonic() - last_save >= 2 * save_cost:
                     persist("running")
                 HUB.broadcast_threadsafe(
                     loop,
@@ -203,6 +241,7 @@ class SimulationRunner:
                 base_seed=config.base_seed,
                 search_mode=config.search_mode,
                 instant_speed=config.instant_speed,
+                fake_shuffle=config.fake_shuffle,
                 fixed_hand=config.fixed_hand,
                 fixed_hand_pad_to=config.fixed_hand_pad_to,
             )
@@ -214,6 +253,8 @@ class SimulationRunner:
                     sim_config,
                     on_game=on_game,
                     should_stop=handle.stop.is_set,
+                    game_indices=game_indices,
+                    initial_stats=initial_stats,
                 )
                 last_stats = stats.as_dict()
                 status = "stopped" if handle.stop.is_set() else "done"
@@ -223,10 +264,10 @@ class SimulationRunner:
 
             result = SimResult(
                 id=result_id,
-                created_at=initial.created_at,
+                created_at=created_at,
                 config=config,
                 status=status,
-                properties=initial.properties,
+                properties=properties,
                 stats=last_stats,
                 sample_runs=sample_runs,
                 sample_success_logs=[r["log"] for r in sample_runs if r["success"]],
@@ -243,4 +284,3 @@ class SimulationRunner:
 
         handle.thread = threading.Thread(target=worker, daemon=True)
         handle.thread.start()
-        return result_id

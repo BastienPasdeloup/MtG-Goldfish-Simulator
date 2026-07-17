@@ -86,6 +86,7 @@ class SimulateRequest(BaseModel):
     base_seed: int | None = None  # random when omitted
     search_mode: str = "best_first"  # see engine.simulator.SEARCH_MODES
     instant_speed: bool = False  # explore instant-speed plays (see SimConfig)
+    fake_shuffle: bool = False  # never really reorder the library (see SimConfig)
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
@@ -176,6 +177,15 @@ def session_payload(session: Session) -> dict:
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    """Fallback for pages without a <link rel="icon"> (e.g. the tree viewer
+    tabs opened via document.write): browsers then request /favicon.ico from
+    the site root, and every modern browser accepts an SVG there as long as
+    the media type says so."""
+    return FileResponse(_STATIC / "favicon.svg", media_type="image/svg+xml")
 
 
 @app.get("/api/meta")
@@ -274,13 +284,17 @@ def list_sessions() -> dict:
 @app.get("/api/sessions/{session_id}")
 def get_session(session_id: str) -> dict:
     session = _load(session_id)
-    # A result still marked "running" while no simulation is live is a FAILED
-    # run (the app or the run crashed mid-flight): drop it so the session
-    # always loads clean instead of showing a ghost run forever.
+    # A result still marked "running" while no simulation is live means the
+    # app (or the run) crashed mid-flight. The run is persisted after every
+    # completed game, so KEEP what was saved: mark it "interrupted" — it stays
+    # loadable from "Previous runs" and can be resumed.
     if not runner.is_running(session_id):
-        alive = [r for r in session.results if r.status != "running"]
-        if len(alive) != len(session.results):
-            session.results = alive
+        changed = False
+        for r in session.results:
+            if r.status == "running":
+                r.status = "interrupted"
+                changed = True
+        if changed:
             store.save(session)
     return session_payload(session)
 
@@ -525,6 +539,7 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
         base_seed=seed,
         search_mode=req.search_mode,
         instant_speed=req.instant_speed,
+        fake_shuffle=req.fake_shuffle,
         fixed_hand=(req.fixed_hand or None),
         fixed_hand_pad_to=(req.fixed_hand_pad_to if req.fixed_hand else None),
     )
@@ -533,6 +548,20 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "result_id": result_id, "seed": seed}
+
+
+@app.post("/api/sessions/{session_id}/results/{result_id}/resume")
+async def resume_simulation(session_id: str, result_id: str) -> dict:
+    """Continue a stopped or interrupted run: re-runs exactly the games that
+    never completed, appending to the stored entry (same seeds, same config)."""
+    session = _load(session_id)
+    loop = asyncio.get_running_loop()
+    try:
+        runner.resume(session, result_id, loop)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = next(r for r in session.results if r.id == result_id)
+    return {"ok": True, "result_id": result_id, "seed": result.config.base_seed}
 
 
 @app.post("/api/sessions/{session_id}/simulate/stop")

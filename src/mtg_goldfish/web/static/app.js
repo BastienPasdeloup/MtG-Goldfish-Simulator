@@ -115,7 +115,23 @@ async function init() {
     b.dataset.on = on ? "0" : "1";
     b.textContent = on ? "Forbid" : "Allow";
   };
+  $("fake-shuffle-toggle").onclick = (e) => {
+    const b = e.currentTarget;
+    const on = b.dataset.on === "1";
+    b.dataset.on = on ? "0" : "1";
+    b.textContent = on ? "Disabled" : "Enabled";
+  };
   $("stop-btn").onclick = () => api(`/api/sessions/${state.session.id}/simulate/stop`, { method: "POST" });
+  $("resume-btn").onclick = resumeRun;
+  $("prop-help-btn").onclick = () => $("prop-help-modal").classList.remove("hidden");
+  $("prop-help-close").onclick = () => $("prop-help-modal").classList.add("hidden");
+  $("prop-help-modal").onclick = (e) => { if (e.target.id === "prop-help-modal") $("prop-help-modal").classList.add("hidden"); };
+  // Card names mentioned in the help text show the card image on hover
+  // (fetched from Scryfall by exact name — these cards need not be in the deck).
+  for (const n of document.querySelectorAll(".card-ref")) {
+    hoverable(n, "https://api.scryfall.com/cards/named?exact=" +
+      encodeURIComponent(n.dataset.card) + "&format=image&version=normal");
+  }
   $("delete-session").onclick = deleteSession;
   $("load-run-btn").onclick = openRunsModal;
   $("run-modal-close").onclick = closeRunsModal;
@@ -320,6 +336,7 @@ function enterSession(payload) {
   state.vizNav = null;
   state.fixedHand = [];
   setSimMode("sim");
+  setResumable(null);
   $("load-run-btn").disabled = !(state.session.results || []).length;
   openWs();
 }
@@ -391,7 +408,9 @@ async function openRunsModal() {
       if (r.status === "running") {
         dateCell.append(el("div", {}, el("span", { className: "pill warn", textContent: "⏳ running…" })));
       } else if (r.status === "stopped") {
-        dateCell.append(el("div", {}, el("span", { className: "pill", textContent: "stopped" })));
+        dateCell.append(el("div", {}, el("span", { className: "pill", textContent: "stopped — load to resume" })));
+      } else if (r.status === "interrupted") {
+        dateCell.append(el("div", {}, el("span", { className: "pill warn", textContent: "⚡ interrupted — load to resume" })));
       }
       const actionsCell = el("td", { className: "run-actions" },
         el("button", {
@@ -449,6 +468,9 @@ function loadRun(r) {
   const isb = $("instant-speed-toggle"), ison = !!cfg.instant_speed;
   isb.dataset.on = ison ? "1" : "0";
   isb.textContent = ison ? "Allow" : "Forbid";
+  const fsb = $("fake-shuffle-toggle"), fson = !!cfg.fake_shuffle;
+  fsb.dataset.on = fson ? "1" : "0";
+  fsb.textContent = fson ? "Enabled" : "Disabled";
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -467,6 +489,31 @@ function loadRun(r) {
   $("sim-seed").textContent = `seed: ${cfg.base_seed}`;
   renderStats(r.stats || {});
   renderViz(r); // offers to visualize the games (shows the board viewer)
+  setResumable(r); // stopped/interrupted runs with missing games offer Resume
+}
+
+// Show the Resume button when `r` is a resumable run (stopped by the user or
+// interrupted by a crash, with games still missing), hide it otherwise.
+function setResumable(r) {
+  const missing = r && (((r.stats || {}).games_run || 0) < ((r.config || {}).num_games || 0));
+  const ok = !!(r && missing && (r.status === "stopped" || r.status === "interrupted"));
+  state.resumableId = ok ? r.id : null;
+  $("resume-btn").classList.toggle("hidden", !ok);
+}
+
+async function resumeRun() {
+  if (!state.resumableId) return;
+  try {
+    const r = await api(`/api/sessions/${state.session.id}/results/${state.resumableId}/resume`,
+      { method: "POST" });
+    state.currentResultId = r.result_id;
+    $("sim-seed").textContent = `seed: ${r.seed}`;
+    $("run-btn").disabled = true; $("stop-btn").disabled = false;
+    $("load-run-btn").disabled = false;
+    setResumable(null);
+    // Keep the already-loaded rows: resumed games stream in alongside them
+    // (merged by game index), so no resetViz here.
+  } catch (e) { alert("Cannot resume: " + e.message); }
 }
 
 // ---- decklist
@@ -866,6 +913,7 @@ async function runSim() {
     base_seed: seedField === "" ? null : parseInt(seedField),
     search_mode: $("search-mode").value,
     instant_speed: $("instant-speed-toggle").dataset.on === "1",
+    fake_shuffle: $("fake-shuffle-toggle").dataset.on === "1",
     fixed_hand: fixed ? state.fixedHand.slice() : null,
     fixed_hand_pad_to: fixed && $("fixed-pad").checked
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)
@@ -876,6 +924,7 @@ async function runSim() {
     state.currentResultId = r.result_id;
     $("sim-seed").textContent = `seed: ${r.seed}` + (seedField === "" ? " (random)" : "");
     $("run-btn").disabled = true; $("stop-btn").disabled = false;
+    setResumable(null);
     // The run's entry exists (and updates) in "previous runs" from this moment.
     $("load-run-btn").disabled = false;
     resetViz();
@@ -894,6 +943,7 @@ function onSimEvent(msg) {
     const at = rs.findIndex((x) => x.id === msg.result.id);
     if (at >= 0) rs[at] = msg.result; else rs.push(msg.result);
     $("load-run-btn").disabled = false;
+    setResumable(msg.result); // a stopped, incomplete run offers Resume
     $("sim-seed").textContent = `seed: ${msg.result.config?.base_seed}`;
     renderStats(msg.result.stats);
     // Final table render; keep the board the user is already watching.
@@ -994,8 +1044,9 @@ function appendLiveRun(raw) {
 }
 
 function renderViz(result, opts = {}) {
-  // One row per game, in game order.
-  const runs = normalizeRuns(result).map((r, i) => normalizeRun(r, i));
+  // One row per game, keyed by the game's index (a resumed run's games can be
+  // stored out of order — fall back to the position for old results).
+  const runs = normalizeRuns(result).map((r, i) => normalizeRun(r, r.game_index ?? i));
 
   state.vizRuns = runs;
   state.vizProps = result.properties || []; // for the tree's status circles
@@ -1011,9 +1062,9 @@ function renderViz(result, opts = {}) {
   if (opts.keepOpenBoard) return;
   state.vizNav = null; // reset until a board is (re)opened below
   // Open the first replayable (successful) game, if any.
-  const first = runs.findIndex((r) => r.frames.length);
+  const first = runs.find((r) => r.frames.length);
   $("viz-log").replaceChildren();
-  if (first >= 0) { highlightGame(first); openBoard(first); }
+  if (first) { highlightGame(first._i); openBoard(first._i); }
 }
 
 function renderRunsTable() {

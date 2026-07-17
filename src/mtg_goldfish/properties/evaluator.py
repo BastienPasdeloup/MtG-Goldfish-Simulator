@@ -32,6 +32,10 @@ class CompiledProperty:
     def __init__(self, spec: PropertySpec) -> None:
         if not spec.code:
             raise CompilationError(f"Property {spec.id!r} has no compiled code.")
+        # The originating spec is kept around: it is picklable (the compiled
+        # `check` function is not), so parallel simulation workers recompile
+        # from it on their side of the process boundary.
+        self.spec = spec
         self.id = spec.id
         self.description = spec.describe()
         self.timing = spec.timing.value

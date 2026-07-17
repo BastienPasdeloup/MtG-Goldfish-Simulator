@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MtG Goldfish Simulator</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -83,6 +84,7 @@
           <div class="card-box">
             <div class="row">
               <h3 style="margin:0">Properties</h3>
+              <button id="prop-help-btn" class="help-btn" title="Tips: writing properties the LLM understands, and interpreting the resulting probabilities">?</button>
               <button id="add-prop">+ Add property</button>
               <span class="spacer"></span>
               <span id="llm-pill" class="pill" title="the model that compiles English properties into code"></span>
@@ -97,6 +99,7 @@
           </div>
 
           <div class="card-box">
+            <h3 style="margin:0 0 .5rem 0">Simulation</h3>
             <div class="tabs">
               <button id="tab-sim" class="tab active" data-mode="sim">Random hand</button>
               <button id="tab-fixed" class="tab" data-mode="fixed">Fixed hand</button>
@@ -137,10 +140,15 @@
                 <button id="instant-speed-toggle" data-on="0"
                         title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Forbidden by default.">Forbid</button>
               </div>
+              <div><label>Fake shuffling</label><br />
+                <button id="fake-shuffle-toggle" data-on="0"
+                        title="When enabled, the library is never really shuffled mid-game: a 'shuffle' only reinserts the cards whose position you know (put on top by a Brainstorm, bottomed by a mulligan or a scry...) at random places, and every other card keeps its order. This keeps the library near-constant across all lines of play, avoiding over-evaluated probabilities when different lines shuffle differently (see the Properties help ? for details). Disabled by default (real shuffles).">Disabled</button>
+              </div>
             </div>
             <div class="row" style="margin-top:.6rem">
               <button id="run-btn" class="primary">Run</button>
               <button id="stop-btn" class="danger" disabled>Stop</button>
+              <button id="resume-btn" class="hidden" title="Continue this run: only the games that never completed are (re)run, with the same seed and settings">▶ Resume</button>
             </div>
           </div>
 
@@ -233,6 +241,64 @@
             description, then submit.
           </li>
         </ol>
+      </div>
+    </div>
+  </div>
+
+  <div id="prop-help-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <b>Writing properties — tips &amp; pitfalls</b>
+        <span class="spacer"></span>
+        <button id="prop-help-close" class="modal-close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="modal-body help-body">
+        <h4>If the LLM has trouble converting your properties into code</h4>
+        <ul>
+          <li><b>Reformulate your prompt</b> — You can try
+            “The commander is in play; it has +1/+1 markers on it” instead of
+            “The commander is on play with +1/+1 markers”, or other versions.</li>
+          <li><b>Change to another equivalent test</b> —
+            “<span class="card-ref" data-card="The Fantasticar">The Fantasticar</span>'s ability
+            that puts tokens into play triggers” is in most cases equivalent to
+            “Four 4/4 tokens arrived into play in a single turn”.</li>
+        </ul>
+
+        <h4>Beware your interpretation of probabilities</h4>
+        <p>For instance, consider that you want to approximate the hit probability of
+          <span class="card-ref" data-card="Nick Fury, Agent of S.H.I.E.L.D.">Nick Fury, Agent of S.H.I.E.L.D.</span>
+          at turn 5. Here are some possible pitfalls:</p>
+        <ul>
+          <li>If you start with a fully random hand, you will instead approximate the
+            probability that, by turn 5, you manage to have
+            <span class="card-ref" data-card="Nick Fury, Agent of S.H.I.E.L.D.">Nick</span> into play,
+            one mana of each color available, and a successful hit.</li>
+          <li>If you start with a hand that includes 5 well-chosen lands, you will instead
+            compute the probability that
+            <span class="card-ref" data-card="Nick Fury, Agent of S.H.I.E.L.D.">Nick</span> is in play
+            and hits successfully when activated. However, keep in mind how the tool works
+            and its limitations: it will try all possible lines of play until it finds a
+            solution (success), explores everything or timeouts (failure). This means that
+            if there are distinct lines of play that have shuffled the library differently
+            (e.g. using a fetch land), then each of these lines will try activating
+            <span class="card-ref" data-card="Nick Fury, Agent of S.H.I.E.L.D.">Nick</span> with a
+            different top of library configuration, which may over-evaluate the probability
+            of success.</li>
+          <li>Note that this is not possible to fully solve this issue. Indeed, stopping the
+            search when
+            <span class="card-ref" data-card="Nick Fury, Agent of S.H.I.E.L.D.">Nick</span>'s ability
+            is activated for the first time would solve the shuffling problem; however,
+            maybe there was another (still unexplored) line that involved playing a
+            <span class="card-ref" data-card="Worldly Tutor">Worldly Tutor</span> putting a valid
+            hit on top of the library before
+            <span class="card-ref" data-card="Nick Fury, Agent of S.H.I.E.L.D.">Nick</span>'s
+            activation... Still, you can mitigate this issue by enabling the fake shuffling
+            option, which will keep the library in a near-constant order across all possible
+            lines (with the exception of cards known to the user along the line, which are
+            reinserted at random places when shuffling is needed).</li>
+          <li><b>Conclusion</b> → In all cases, results will be approximated, so be wary of
+            your approximations!</li>
+        </ul>
       </div>
     </div>
   </div>

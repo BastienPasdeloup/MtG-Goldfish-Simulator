@@ -73,6 +73,7 @@ class AangsIceberg(Card):
                 bottom = [c for i, c in enumerate(pool) if to_bottom[i]]
                 s.library[:0] = keep
                 s.library.extend(bottom)
+                s.mark_known_in_library(*keep, *bottom)  # player saw both piles
                 s.emit(f"Aang's Iceberg: scry 2 — bottom {len(bottom)}")
                 return None
 

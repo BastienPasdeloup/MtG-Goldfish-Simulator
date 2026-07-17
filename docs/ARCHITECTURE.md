@@ -67,6 +67,27 @@ domain logic have no web dependency and can be driven from a script or tests.
   first — the per-game wall-clock **timeout**, every property satisfied on some
   line, or no remaining branch able to satisfy the properties (the frontier
   drains).
+- **Parallel games:** games are independent (seeded by `base_seed + index`), so
+  `run_simulation` fans them out across CPU cores (`ProcessPoolExecutor`,
+  spawn context, one worker per core minus one). Workers rebuild the base
+  state and recompile the properties from their picklable `PropertySpec`s
+  (compiled `check` functions can't cross a process boundary), and gzip each
+  game's search tree in place before returning it. Stop is cooperative
+  cross-process (a manager Event, checked time-throttled in the search's hot
+  path). Results stream back out of game order; aggregates are identical to a
+  sequential run.
+- **Fake shuffling** (optional, off by default): `GameState.shuffle_library`
+  never reorders the library — only the cards whose position the player knows
+  (`mark_known_in_library`: Brainstorm put-backs, tutor tops, scry/mulligan
+  bottoms) are reinserted at random spots. Keeps the library near-constant
+  across lines so differently-shuffled lines don't over-evaluate "find X"
+  probabilities.
+- **Crash-safe & resumable runs:** the web runner persists the run's entry
+  after every completed game (adaptive back-off when saving is slow); a run
+  found dangling as "running" is marked **interrupted**, not dropped, and both
+  stopped and interrupted runs can be **resumed** — `run_simulation` re-runs
+  exactly the missing game indices with the stored stats as the starting
+  counts (identical seeds ⇒ identical games).
 
 ## What is real vs. approximate
 

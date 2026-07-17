@@ -382,3 +382,23 @@ table.viz-runs tbody tr.run-row.active { background: rgba(217,164,65,.14); outli
   background: radial-gradient(ellipse at center, #5a4634 0%, #3a2d20 60%, #241b12 100%);
   display: flex; align-items: center; justify-content: center; }
 #hover-grid .gback::after { content: ""; width: 68%; height: 55%; border-radius: 50%; border: 2px solid rgba(217, 164, 65, .35); }
+
+/* ---- properties help popup ---- */
+.help-btn {
+  width: 1.5rem; height: 1.5rem; padding: 0;
+  border-radius: 50%; font-weight: 700; color: var(--muted);
+}
+.help-btn:hover { color: var(--accent); }
+.help-body h4 { margin: 1rem 0 .4rem; color: var(--accent); }
+.help-body h4:first-child { margin-top: 0; }
+.help-body p, .help-body li { font-size: 13px; }
+.help-body ul { margin: .3rem 0 .6rem; padding-left: 1.2rem; }
+.help-body li { margin: .35rem 0; }
+/* Card names in the help text: hover shows the card image. */
+.card-ref {
+  color: var(--accent-2); cursor: help;
+  text-decoration: underline dotted; text-underline-offset: 2px;
+}
+
+/* ---- resume button (shown for stopped / interrupted runs) ---- */
+#resume-btn { border-color: var(--good); color: var(--good); }

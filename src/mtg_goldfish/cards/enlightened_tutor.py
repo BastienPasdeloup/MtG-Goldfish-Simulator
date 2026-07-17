@@ -23,6 +23,7 @@ class EnlightenedTutor(Card):
             st.take_from_library(card)
             st.shuffle_library()
             st.library.insert(0, card)
+            st.mark_known_in_library(card)  # player knows it's on top
             st.emit(f"Enlightened Tutor: {name} on top — shuffle")
 
         return branch_over(state, [c.name for c in candidates], apply)

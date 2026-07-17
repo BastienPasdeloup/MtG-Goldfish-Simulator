@@ -212,3 +212,87 @@ def test_only_one_commander_castable_per_game():
 
     # Partner B may no longer be cast (it never was); the game is locked in.
     assert "Partner B" not in commander_casts(state)
+
+
+# --------------------------------------------------------------------------
+# Fake shuffling: shuffles never reorder the library — only the cards whose
+# position the player knows are reinserted at random spots.
+# --------------------------------------------------------------------------
+def test_fake_shuffle_keeps_unknown_cards_in_order():
+    from mtg_goldfish.engine.game_state import GameState
+
+    cards = [_cd(f"C{i}", "", "Instant") for i in range(10)]
+    st = GameState(library=list(cards), rng_seed=7)
+    st.fake_shuffle = True
+    st.mark_known_in_library(cards[0], cards[5])
+    st.shuffle_library()
+    # The 8 unknown cards keep their relative order; the 2 known ones moved
+    # somewhere random; knownness is consumed by the shuffle.
+    rest = [c.name for c in st.library if c.name not in ("C0", "C5")]
+    assert rest == [f"C{i}" for i in range(10) if i not in (0, 5)]
+    assert sorted(c.name for c in st.library) == sorted(c.name for c in cards)
+    assert not st.known_library_ids
+
+    # With nothing known, a fake shuffle is a strict no-op.
+    order = [c.name for c in st.library]
+    st.shuffle_library()
+    assert [c.name for c in st.library] == order
+
+    # A REAL shuffle does reorder (sanity check of the toggle).
+    st2 = GameState(library=list(cards), rng_seed=7)
+    st2.shuffle_library()
+    assert [c.name for c in st2.library] != [c.name for c in cards]
+
+
+def test_fake_shuffle_flag_survives_clone():
+    from mtg_goldfish.engine.game_state import GameState
+
+    cards = [_cd(f"C{i}", "", "Instant") for i in range(4)]
+    st = GameState(library=list(cards), rng_seed=1)
+    st.fake_shuffle = True
+    st.mark_known_in_library(cards[2])
+    cl = st.clone()
+    assert cl.fake_shuffle
+    assert cl.known_library_ids == st.known_library_ids
+    cl.known_library_ids.clear()
+    assert st.known_library_ids  # sets are independent
+
+
+# --------------------------------------------------------------------------
+# Parallel simulation: same games, same seeds, same aggregate results as the
+# sequential path — just spread across worker processes.
+# --------------------------------------------------------------------------
+def test_parallel_run_matches_sequential():
+    deck = _mono_red_deck()
+    spec = PropertySpec(
+        id="p1", timing=Timing.AT, phase="postcombat_main", turn=3,
+        english="the commander is in play",
+        code="def check(state):\n    return state.commander_in_play()\n",
+    )
+    props = compile_all([spec])
+    seq = run_simulation(deck, props, SimulationConfig(
+        num_games=6, timeout_per_game_s=3, base_seed=42, parallel_workers=1)).as_dict()
+    par = run_simulation(deck, props, SimulationConfig(
+        num_games=6, timeout_per_game_s=3, base_seed=42, parallel_workers=2)).as_dict()
+    assert par["games_run"] == 6
+    assert par["successes"] == seq["successes"]
+    assert par["per_property"] == seq["per_property"]
+
+
+# --------------------------------------------------------------------------
+# Resume: running the missing game indices with the stored stats continues
+# exactly where the run left off (per-game seeds depend only on the index).
+# --------------------------------------------------------------------------
+def test_run_simulation_resumes_from_partial_stats():
+    deck = _mono_red_deck()
+    prop = _Prop("cmd", "at", Phase.POSTCOMBAT_MAIN, 4, lambda s: s.commander_in_play())
+    cfg = SimulationConfig(num_games=6, timeout_per_game_s=3, base_seed=99,
+                           parallel_workers=1)
+    full = run_simulation(deck, [prop], cfg).as_dict()
+    first = run_simulation(deck, [prop], cfg, game_indices=[0, 1, 2]).as_dict()
+    assert first["games_run"] == 3
+    resumed = run_simulation(deck, [prop], cfg, game_indices=[3, 4, 5],
+                             initial_stats=first).as_dict()
+    assert resumed["games_run"] == 6
+    assert resumed["successes"] == full["successes"]
+    assert resumed["per_property"] == full["per_property"]

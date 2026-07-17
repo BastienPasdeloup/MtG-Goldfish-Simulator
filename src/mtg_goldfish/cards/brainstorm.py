@@ -17,7 +17,9 @@ class Brainstorm(Card):
         if n <= 2:
             # Put the whole hand back.
             while state.hand:
-                state.library.insert(0, state.hand.pop())
+                card = state.hand.pop()
+                state.library.insert(0, card)
+                state.mark_known_in_library(card)  # player knows it's on top
             state.emit("Brainstorm: put hand back on top")
             return None
 
@@ -39,6 +41,7 @@ class Brainstorm(Card):
                 # `second` ends up on top (drawn first next).
                 b.library.insert(0, first)
                 b.library.insert(0, second)
+                b.mark_known_in_library(first, second)  # player knows the top two
                 b.emit(f"Brainstorm: put back {second.name} (top), {first.name}")
                 branches.append(b)
         return branches
