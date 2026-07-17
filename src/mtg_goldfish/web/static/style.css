@@ -14,7 +14,12 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+/* No `height: 100%` here: it would cap <body> at one viewport, so on pages
+   taller than the screen the body background stopped and the --panel <html>
+   canvas showed through in the side gutters below the first screen. The flex
+   `min-height: 100vh` on <body> keeps the footer at the bottom on short pages
+   while letting the body (and its background) grow with tall content. */
+html, body { margin: 0; }
 /* Page background is the dark `--bg` (#0f1116, same as the docs site) so the
    content cards / header / footer (`--panel`) stand out against it. The root/
    canvas takes `--panel` so the browser's over-scroll areas above the header
