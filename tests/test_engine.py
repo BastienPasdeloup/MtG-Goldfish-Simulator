@@ -300,3 +300,42 @@ def test_run_simulation_resumes_from_partial_stats():
     assert resumed["games_run"] == 6
     assert resumed["successes"] == full["successes"]
     assert resumed["per_property"] == full["per_property"]
+
+
+# --------------------------------------------------------------------------
+# A worker wedged in card code (never returns, never rechecks its deadline)
+# must NOT hang the run: past a grace it is killed, the pool rebuilt, and the
+# remaining games proceed. Injected via the MTG_TEST_HANG_GAME env var, which
+# spawned workers inherit (see _tree_worker).
+# --------------------------------------------------------------------------
+def test_wedged_worker_is_contained_and_run_continues(monkeypatch):
+    import time as _time
+
+    import mtg_goldfish.engine.simulator as sim
+
+    deck = _mono_red_deck()
+    spec = PropertySpec(
+        id="p1", timing=Timing.AT, phase="postcombat_main", turn=6,
+        english="x", code="def check(state):\n    return len(state.battlefield) >= 40\n",
+    )
+    props = compile_all([spec])
+    monkeypatch.setattr(sim, "_WORKER_GRACE_S", 1.0)  # keep the test quick
+    monkeypatch.setenv("MTG_TEST_HANG_GAME", "2")  # game 2's workers hang forever
+
+    order: list[int] = []
+    t0 = _time.monotonic()
+    stats = run_simulation(
+        deck, props,
+        SimulationConfig(num_games=4, timeout_per_game_s=1.0, base_seed=7,
+                         parallel_workers=2),
+        on_game=lambda o, s: order.append(o.game_index),
+    ).as_dict()
+    elapsed = _time.monotonic() - t0
+
+    # It returned (no hang) with every game accounted for, in order...
+    assert order == [0, 1, 2, 3]
+    assert stats["games_run"] == 4
+    # ...the wedged game was reported as a timeout, not lost...
+    assert stats["timeouts"] >= 1
+    # ...and it didn't take anywhere near the 3600 s the wedged worker sleeps.
+    assert elapsed < 60

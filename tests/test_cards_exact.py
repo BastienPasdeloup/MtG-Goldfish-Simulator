@@ -466,3 +466,72 @@ def test_the_wasp_is_flash_flying_vanilla():
     perm = state.permanents_named("The Wasp, Winsome Avenger")[0]
     assert state.effective_power(perm) == 2
     assert not state.stack  # ETB modelled as a no-op: nothing queued
+
+
+def test_aang_swift_savior_flash_flying_and_etb_noop():
+    """Front face: 2/3 flash flyer whose airbend ETB is a goldfish no-op."""
+    from mtg_goldfish.engine.actions import _is_instant_speed
+
+    data = card("Aang, Swift Savior // Aang and La, Ocean's Fury")
+    assert _is_instant_speed(data)  # Flash
+    state = _state([], hand_names=["Aang, Swift Savior // Aang and La, Ocean's Fury"])
+    state.mana_pool.add("W", 1); state.mana_pool.add("U", 1); state.mana_pool.add("C", 1)
+    cast = next(a for a in legal_actions(state) if a.label.startswith("cast Aang"))
+    cast.apply(state)
+    perm = state.permanents_named("Aang, Swift Savior // Aang and La, Ocean's Fury")[0]
+    assert not perm.transformed
+    assert state.effective_power(perm) == 2 and state.effective_toughness(perm) == 3
+    assert not state.stack  # airbend ETB modelled as a no-op — nothing queued
+
+
+def test_aang_waterbend_transforms_to_5_5():
+    """Waterbend {8}: Transform → Aang and La, Ocean's Fury (5/5)."""
+    state = _state([])
+    perm = state.put_on_battlefield(
+        card("Aang, Swift Savior // Aang and La, Ocean's Fury"), fire_etb=False)
+    perm.summoning_sick = False
+    # Not enough mana → no transform option; with {8} it appears.
+    assert not any("transform" in a.label.lower() for a in perm.impl.battlefield_actions(state, perm))
+    state.mana_pool.add("C", 8)
+    act = next(a for a in perm.impl.battlefield_actions(state, perm) if "transform" in a.label.lower())
+    act.apply(state)
+    assert perm.transformed
+    assert perm.name == "Aang and La, Ocean's Fury"
+    assert state.effective_power(perm) == 5 and state.effective_toughness(perm) == 5
+    # Transformed: the waterbend option is gone.
+    assert not perm.impl.battlefield_actions(state, perm)
+
+
+def test_aang_and_la_attack_counters_tapped_creatures():
+    """Back face attacks: +1/+1 on each tapped creature you control (attackers
+    are tapped first, so both Aang and La and an already-tapped creature get one;
+    the front face has no such trigger)."""
+    from mtg_goldfish.engine.actions import DeclareAttackers
+    from mtg_goldfish.engine.phases import Phase
+
+    state = _state([])
+    state.phase = Phase.DECLARE_ATTACKERS
+    aang = state.put_on_battlefield(
+        card("Aang, Swift Savior // Aang and La, Ocean's Fury"), fire_etb=False)
+    aang.transformed = True  # Aang and La, Ocean's Fury
+    aang.summoning_sick = False
+    # A second creature, already tapped (e.g. from a prior activation).
+    other = state.put_on_battlefield(card("Loyal Apprentice"), fire_etb=False)
+    other.tapped = True
+    DeclareAttackers().apply(state)
+    assert aang.counters.get("+1/+1") == 1   # attacker tapped itself, then counted
+    assert other.counters.get("+1/+1") == 1  # already-tapped creature counted
+
+
+def test_aang_front_face_attack_has_no_trigger():
+    from mtg_goldfish.engine.actions import DeclareAttackers
+    from mtg_goldfish.engine.phases import Phase
+
+    state = _state([])
+    state.phase = Phase.DECLARE_ATTACKERS
+    aang = state.put_on_battlefield(
+        card("Aang, Swift Savior // Aang and La, Ocean's Fury"), fire_etb=False)
+    aang.summoning_sick = False  # front face, not transformed
+    DeclareAttackers().apply(state)
+    assert not aang.counters.get("+1/+1")  # front face: no attack trigger
+    assert not state.stack

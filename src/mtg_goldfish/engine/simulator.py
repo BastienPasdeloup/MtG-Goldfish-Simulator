@@ -910,6 +910,17 @@ _WORKER: dict = {}
 #: Don't split deeper than this many levels looking for enough subtrees.
 _SPLIT_MAX_DEPTH = 12
 
+#: How long PAST a game's own deadline to keep waiting for a worker before
+#: treating it as wedged. A worker stuck in card code that never returns to its
+#: search loop never rechecks its (cooperative) deadline or the stop flag, so
+#: its future would never complete and the wait would hang forever; past this
+#: grace we kill the process and rebuild the pool so the run keeps moving. The
+#: grace also covers a well-behaved worker serialising a large result back.
+_WORKER_GRACE_S = 5.0
+#: On a user Stop, how long to let workers wind down before abandoning them
+#: (their results are discarded anyway, so this only needs to be responsive).
+_STOP_GRACE_S = 2.0
+
 
 def _worker_init(deck, specs, config: SimulationConfig, stop_event, found_event) -> None:
     from ..cards import load_all_cards
@@ -982,6 +993,12 @@ def _tree_worker(game_index: int, min_leaves: int, num_parts: int, part: int,
     its shallow expansion are rebuilt from the seed — deterministically
     identical to the master's."""
     config: SimulationConfig = _WORKER["config"]
+    # Test-only wedge injection: simulate a worker stuck in card code (never
+    # returns, never rechecks the deadline/stop) so the containment path — kill
+    # the process, rebuild the pool, keep the run moving — can be tested.
+    _hang = os.environ.get("MTG_TEST_HANG_GAME")
+    if _hang is not None and _hang.isdigit() and int(_hang) == game_index:
+        time.sleep(3600)
     deadline = time.monotonic() + remaining_s
     ctx, root, items, keep_nodes, shuffled = _seed_game(
         _WORKER["base"], _WORKER["props"], config, game_index,
@@ -1038,11 +1055,16 @@ def _simulate_game_split(
     stop_event,
     found_event,
     should_stop: Callable[[], bool] | None,
+    on_tainted: Callable[[], None] | None = None,
 ) -> GameOutcome | None:
     """One game, its tree explored in parallel. The master expands the search
     level by level until enough subtrees hang at some depth (or the search
     finishes inline for tiny games), then hands each worker its share. Returns
-    None when the user stopped mid-game (the game is abandoned, not counted)."""
+    None when the user stopped mid-game (the game is abandoned, not counted).
+
+    `on_tainted` is called if a worker has to be abandoned past its deadline
+    (wedged in card code): its process is still alive and holding a core, so
+    the caller must kill and rebuild the pool before the next game."""
     from concurrent.futures import wait as futures_wait
 
     ctx, root, items, keep_nodes, shuffled = _seed_game(
@@ -1073,9 +1095,28 @@ def _simulate_game_split(
                for part in range(num_parts)]
     results: list[dict] = []
     pending = set(futures)
+    # A worker that wedges deep in card code never returns to its search loop,
+    # so it never rechecks its (cooperative) deadline or the stop flag and its
+    # future would never complete — making an unbounded wait hang the whole run
+    # (the bug this guards against). Bound it by a hard wall-clock limit: the
+    # game's own remaining time plus a grace for well-behaved workers to notice
+    # their soft deadline and hand results back. Past the limit the stragglers
+    # are wedged: abandon them and flag the pool for a kill + rebuild.
+    hard_deadline = time.monotonic() + remaining + _WORKER_GRACE_S
+    stop_deadline = None  # a shorter grace, armed once the user hits Stop
+    tainted = False
     while pending:
+        now = time.monotonic()
         if should_stop and should_stop():
-            stop_event.set()  # workers wind down within ~0.15 s
+            stop_event.set()  # well-behaved workers wind down within ~0.15 s
+            if stop_deadline is None:
+                stop_deadline = now + _STOP_GRACE_S
+        limit = stop_deadline if stop_deadline is not None else hard_deadline
+        if now >= limit:
+            tainted = True
+            if on_tainted is not None:
+                on_tainted()  # stragglers are wedged — pool must be recycled
+            break
         done, pending = futures_wait(pending, timeout=0.2)
         for fut in done:
             try:
@@ -1128,8 +1169,36 @@ def _simulate_game_split(
     success = winner is not None
     if success:
         ctx.success_log = winner["success_log"]
-    ctx.timed_out = (not success) and (ctx.timed_out or any(r["timed_out"] for r in results))
+    # A tainted game hit the wall clock (a worker had to be abandoned), so it
+    # counts as timed out, like any other deadline cut.
+    ctx.timed_out = (not success) and (
+        ctx.timed_out or tainted or any(r["timed_out"] for r in results))
     return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index, success)
+
+
+def _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event):
+    from concurrent.futures import ProcessPoolExecutor
+
+    return ProcessPoolExecutor(
+        max_workers=workers, mp_context=mp_ctx, initializer=_worker_init,
+        initargs=(deck, specs, config, stop_event, found_event),
+    )
+
+
+def _terminate_pool(pool) -> None:
+    """Force-kill a pool's worker processes and drop the executor. A worker
+    wedged in card code that never rechecks its deadline won't exit on a plain
+    shutdown() (which would wait for it), so we kill the processes outright —
+    the only way to reclaim a wedged core without hanging the whole run."""
+    for proc in list(getattr(pool, "_processes", {}).values()):
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def run_simulation(
@@ -1176,34 +1245,41 @@ def run_simulation(
     # property objects (tests) don't have one — those run fully sequentially.
     can_parallel = all(getattr(p, "spec", None) is not None for p in properties)
 
-    pool = manager = stop_event = found_event = None
+    pool = manager = stop_event = found_event = mp_ctx = specs = None
     if workers > 1 and indices and can_parallel:
         import multiprocessing as mp
-        from concurrent.futures import ProcessPoolExecutor
 
+        specs = [p.spec for p in properties]
         mp_ctx = mp.get_context("spawn")  # fork is unsafe under a threaded server
         manager = mp_ctx.Manager()
         stop_event = manager.Event()
         found_event = manager.Event()
-        pool = ProcessPoolExecutor(
-            max_workers=workers, mp_context=mp_ctx, initializer=_worker_init,
-            initargs=(deck, [p.spec for p in properties], config, stop_event, found_event),
-        )
+        pool = _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event)
 
     try:
         for i in indices:
             if should_stop and should_stop():
                 break
+            tainted = [False]
             try:
                 if pool is not None:
                     outcome = _simulate_game_split(
                         base_state, properties, config, i, pool, workers,
-                        stop_event, found_event, should_stop)
+                        stop_event, found_event, should_stop,
+                        on_tainted=lambda: tainted.__setitem__(0, True))
                 else:
                     outcome = simulate_game(base_state, properties, config, i,
                                             should_stop=should_stop)
             except Exception as exc:  # keep the run alive; report the game as buggy
                 outcome = _buggy_outcome(i, exc)
+            # A tainted pool has a wedged worker process holding a core hostage:
+            # kill it, and (unless the run is ending) spin up a fresh pool so the
+            # remaining games keep full parallelism and stay responsive.
+            if tainted[0] and pool is not None:
+                _terminate_pool(pool)
+                pool = (None if (should_stop and should_stop())
+                        else _new_pool(mp_ctx, workers, deck, specs, config,
+                                       stop_event, found_event))
             # If Stop fired during this game, abandon it: don't report a
             # half-searched game as a result or count it.
             if outcome is None or (should_stop and should_stop()):
@@ -1213,8 +1289,11 @@ def run_simulation(
                 on_game(outcome, stats)
     finally:
         if pool is not None:
-            stop_event.set()  # hurry any straggling workers along
-            pool.shutdown(wait=True, cancel_futures=True)
-            manager.shutdown()
+            _terminate_pool(pool)  # never blocks, even on a wedged worker
+        if manager is not None:
+            try:
+                manager.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
 
     return stats
