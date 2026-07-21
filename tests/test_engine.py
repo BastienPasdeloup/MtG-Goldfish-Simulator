@@ -339,3 +339,47 @@ def test_wedged_worker_is_contained_and_run_continues(monkeypatch):
     assert stats["timeouts"] >= 1
     # ...and it didn't take anywhere near the 3600 s the wedged worker sleeps.
     assert elapsed < 60
+
+
+# --------------------------------------------------------------------------
+# Property API robustness: a card-list result compares numerically by length
+# (so `cards_put_by(...) >= 1` works, not just `any(... for c in ...)`), and a
+# property whose code RAISES is surfaced as a bug rather than silently making
+# every game search to timeout.
+# --------------------------------------------------------------------------
+def test_cardlist_compares_by_length():
+    from mtg_goldfish.engine.game_state import CardList
+    two = CardList(["a", "b"])
+    assert (two >= 1) and (two >= 2) and not (two >= 3)
+    assert (two > 1) and not (two > 2)
+    assert (two <= 2) and (two < 3) and (two == 2) and (two != 1)
+    assert CardList() >= 0 and not (CardList() >= 1)
+    # Still a real list: iterable, truthy-by-emptiness, list-equality intact.
+    assert list(two) == ["a", "b"] and bool(two) and not bool(CardList())
+    assert CardList(["a"]) == ["a"]
+
+
+def test_cards_put_by_supports_numeric_comparison():
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState(commander_names=("Fetcher",))
+    g.turn = 2
+    g.resolving = ("activated", "Fetcher")
+    g.put_on_battlefield(_cd("Made Token", "", "Creature — Elemental"))
+    g.resolving = None
+    # The exact shape a compiler might emit for "put at least one card".
+    assert g.cards_put_by("Fetcher", via_kind="activated") >= 1
+    assert not (g.cards_put_by("Fetcher", via_kind="activated") >= 2)
+
+
+def test_raising_property_is_recorded_not_silently_false():
+    deck = _mono_red_deck()
+    # A property whose code raises at evaluation time (here: comparing a list to
+    # an int, the classic compiler slip) must surface as a bug.
+    bad = _Prop("bad", "before", Phase.END_STEP, 3,
+                lambda s: (["x"] >= 1))  # raises TypeError every call
+    seen = []
+    run_simulation(deck, [bad], SimulationConfig(num_games=1, timeout_per_game_s=2,
+                                                 parallel_workers=1),
+                   on_game=lambda o, st: seen.append(o))
+    assert seen and seen[0].bugs
+    assert any("property" in b["context"] for b in seen[0].bugs)

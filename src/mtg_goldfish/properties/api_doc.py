@@ -45,7 +45,9 @@ resolution actually did):
   state.cards_put_by(source: str, via_kind=None, turn=None) -> list[card]
       # the CARD OBJECTS put onto the battlefield by `source`'s resolving
       # spell/ability — test any characteristic (.type_line, .cmc, .faces,
-      # .is_double_faced, .colors, ...)
+      # .is_double_faced, .colors, ...). For a COUNT ("put at least one card"),
+      # prefer permanents_put_by(...) >= N; cards_put_by(...) also compares by
+      # length so cards_put_by(...) >= N works too.
   state.cards_drawn_by(source: str, turn=None) -> int
   state.ability_activated(source: str, turn=None) -> bool  # an activated ability
       # of a card whose name contains `source` was activated (optionally on `turn`)

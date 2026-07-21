@@ -24,6 +24,39 @@ if TYPE_CHECKING:  # imported lazily in make_permanent to avoid an import cycle
     from ..cards import Card
 
 
+class CardList(list):
+    """A list of cards returned by the property API (e.g. `cards_put_by`) that
+    ALSO answers numeric comparisons by its length. So a property can either
+    inspect the cards — `any(c.is_double_faced for c in cards_put_by(...))` —
+    or treat the result as a count — `cards_put_by(...) >= 1` — and both read
+    naturally. Without this, comparing the list to a number (a very common way
+    to phrase "put at least one card") raises `TypeError`, which the search
+    silently treats as "property not satisfied" and then explores forever."""
+
+    def _n(self, other):
+        return len(self) if isinstance(other, (int, float)) and not isinstance(other, bool) else None
+
+    def __ge__(self, other):
+        n = self._n(other); return n >= other if n is not None else super().__ge__(other)
+
+    def __gt__(self, other):
+        n = self._n(other); return n > other if n is not None else super().__gt__(other)
+
+    def __le__(self, other):
+        n = self._n(other); return n <= other if n is not None else super().__le__(other)
+
+    def __lt__(self, other):
+        n = self._n(other); return n < other if n is not None else super().__lt__(other)
+
+    def __eq__(self, other):
+        n = self._n(other); return n == other if n is not None else super().__eq__(other)
+
+    def __ne__(self, other):
+        n = self._n(other); return n != other if n is not None else super().__ne__(other)
+
+    __hash__ = None  # lists are unhashable; keep it that way
+
+
 def _pt(value: str | None) -> int:
     """Parse a power/toughness string to an int; non-numeric (e.g. '*') -> 0."""
     try:
@@ -910,12 +943,14 @@ class GameState:
         .cmc, .faces / .is_double_faced, .colors, ...). e.g. "the commander's
         activated ability put a double-sided card into play" ->
         any(c.is_double_faced for c in
-            cards_put_by(state.commander_name(), via_kind="activated"))."""
-        return [
+            cards_put_by(state.commander_name(), via_kind="activated")).
+        The result also compares numerically by length, so
+        `cards_put_by(...) >= 1` ("put at least one card") works too."""
+        return CardList(
             e["card"] for e in self.events_matching(
                 kind="enter_battlefield", via=source, via_kind=via_kind, turn=turn)
             if e.get("card") is not None
-        ]
+        )
 
     def cards_drawn_by(self, source: str, turn: int | None = None) -> int:
         """How many cards were drawn because a spell or ability of `source`

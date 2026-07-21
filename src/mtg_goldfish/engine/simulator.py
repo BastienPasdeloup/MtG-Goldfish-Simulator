@@ -342,7 +342,13 @@ def _check_due(
             continue
         try:
             ok = bool(prop.evaluate(state))
-        except Exception:
+        except Exception as exc:
+            # A property whose code raises can NEVER be satisfied — which would
+            # otherwise look exactly like "no line works" and make every game
+            # search to timeout with no clue why. Record it (dedup'd, surfaced
+            # per game as a 🐛) so the broken property is visible, not silent.
+            ctx.record_bug(exc, state=state,
+                           context=f"evaluating property {getattr(prop, 'id', '?')}")
             ok = False
         if ok:
             ctx.ever_satisfied.add(prop.id)
