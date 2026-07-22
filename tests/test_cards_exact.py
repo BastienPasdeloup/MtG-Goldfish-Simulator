@@ -468,8 +468,9 @@ def test_the_wasp_is_flash_flying_vanilla():
     assert not state.stack  # ETB modelled as a no-op: nothing queued
 
 
-def test_aang_swift_savior_flash_flying_and_etb_noop():
-    """Front face: 2/3 flash flyer whose airbend ETB is a goldfish no-op."""
+def test_aang_swift_savior_flash_flying_and_etb_no_target():
+    """Front face: 2/3 flash flyer; with no other creature its airbend ETB has
+    no legal target and does nothing (no branch)."""
     from mtg_goldfish.engine.actions import _is_instant_speed
 
     data = card("Aang, Swift Savior // Aang and La, Ocean's Fury")
@@ -477,11 +478,70 @@ def test_aang_swift_savior_flash_flying_and_etb_noop():
     state = _state([], hand_names=["Aang, Swift Savior // Aang and La, Ocean's Fury"])
     state.mana_pool.add("W", 1); state.mana_pool.add("U", 1); state.mana_pool.add("C", 1)
     cast = next(a for a in legal_actions(state) if a.label.startswith("cast Aang"))
-    cast.apply(state)
+    result = cast.apply(state)
+    assert result is None  # no airbend target → no branching
     perm = state.permanents_named("Aang, Swift Savior // Aang and La, Ocean's Fury")[0]
     assert not perm.transformed
     assert state.effective_power(perm) == 2 and state.effective_toughness(perm) == 3
-    assert not state.stack  # airbend ETB modelled as a no-op — nothing queued
+    assert not state.stack  # airbend ETB resolved with nothing to do
+
+
+def test_aang_airbends_own_creature_and_recasts_for_two():
+    """Airbend a creature you control: it is exiled and becomes castable for
+    {2} while it stays exiled; recasting re-triggers its ETB."""
+    state = _state([])
+    aang = card("Aang, Swift Savior // Aang and La, Ocean's Fury")
+    victim = card("Loyal Apprentice")  # cheap creature with an ETB
+    apprentice = state.put_on_battlefield(victim, fire_etb=False)
+    perm = state.put_on_battlefield(aang, fire_etb=False)
+    branches = perm.impl.on_etb(state, perm)
+    # airbend nothing + airbend the Loyal Apprentice
+    assert branches is not None and len(branches) == 2
+    airbended = next(b for b in branches
+                     if not b.permanents_named("Loyal Apprentice"))
+    assert any(c.name == "Loyal Apprentice" for c in airbended.airbend_exile)
+    assert any(c.name == "Loyal Apprentice" for c in airbended.exile)
+    # It can now be recast for {2} (any two mana).
+    airbended.mana_pool.add("C", 2)
+    recast = next(a for a in legal_actions(airbended)
+                  if a.label.startswith("cast Loyal Apprentice")
+                  and "airbend" in a.label)
+    recast.apply(airbended)
+    assert airbended.permanents_named("Loyal Apprentice")  # re-entered
+    assert not airbended.airbend_exile  # consumed
+
+
+def test_aang_airbend_modal_card_casts_any_face_for_two():
+    """A modal (double-faced) card in airbend exile offers each face with a
+    mana cost as a {2} cast — including the non-front face."""
+    from mtg_goldfish.deck.models import CardData, CardFace
+
+    modal = CardData(
+        name="Front Bolt // Back Giant",
+        type_line="Instant",
+        mana_cost="{R}",
+        faces=[
+            CardFace(name="Front Bolt", type_line="Instant", mana_cost="{R}"),
+            CardFace(name="Back Giant", type_line="Creature — Giant",
+                     mana_cost="{6}{R}", power="7", toughness="7"),
+        ],
+    )
+    state = _state([])
+    state.exile.append(modal)
+    state.airbend_exile.append(modal)
+    state.mana_pool.add("C", 2)
+    labels = [a.label for a in legal_actions(state) if "airbend" in a.label]
+    # Both faces with a mana cost are castable for {2}.
+    assert any("(Front Bolt)" in l for l in labels)
+    assert any("(Back Giant)" in l for l in labels)
+    # Cast the big back face for {2}: it enters as a 7/7 on its back face.
+    giant = next(a for a in legal_actions(state)
+                 if "airbend" in a.label and "(Back Giant)" in a.label)
+    giant.apply(state)
+    perms = state.permanents_named("Back Giant")
+    assert perms and perms[0].transformed
+    assert state.effective_power(perms[0]) == 7
+    assert not state.airbend_exile
 
 
 def test_aang_waterbend_transforms_to_5_5():

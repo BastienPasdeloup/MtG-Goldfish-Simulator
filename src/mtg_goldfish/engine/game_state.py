@@ -247,6 +247,11 @@ class GameState:
     stack: list[CardData | StackAbility] = field(default_factory=list)
     # Cards exiled "you may play it" (source_uid, card); playable while source lives.
     exile_playable: list[tuple[int, CardData]] = field(default_factory=list)
+    # Cards airbended into exile (Aang, Swift Savior): their owner may cast them
+    # for {2} for as long as they remain exiled (no source-permanent dependency,
+    # unlike exile_playable). Any face of a modal card that has a mana cost may
+    # be cast this way. The card objects also live in `exile` (zone display).
+    airbend_exile: list[CardData] = field(default_factory=list)
 
     mana_pool: ManaPool = field(default_factory=ManaPool)
     life: int = 20
@@ -345,6 +350,7 @@ class GameState:
             command_zone=list(self.command_zone),
             stack=list(self.stack),
             exile_playable=list(self.exile_playable),
+            airbend_exile=list(self.airbend_exile),
             mana_pool=self.mana_pool.copy(),
             life=self.life,
             opponent_life=self.opponent_life,

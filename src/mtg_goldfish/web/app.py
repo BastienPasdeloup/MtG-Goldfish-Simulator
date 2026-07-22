@@ -407,6 +407,7 @@ def compile_properties(session_id: str) -> dict:
             spec.code = None
             spec.confidence = None
             spec.compile_note = None
+            spec.manual = False
             warnings.append(
                 f"Property {i} ({spec.timing.value} {spec.phase} of turn "
                 f"{spec.turn}) has no condition — nothing was compiled for it."
@@ -422,8 +423,48 @@ def compile_properties(session_id: str) -> dict:
                 spec.code = f"# compilation error: {exc}\ndef check(state):\n    return False\n"
                 spec.confidence = "low"
                 spec.compile_note = f"compilation failed: {exc}"
+            # Freshly generated (not hand-edited): the UI shows model confidence.
+            spec.manual = False
     store.save(session)
     return {"properties": [p.model_dump() for p in session.properties], "warnings": warnings}
+
+
+@app.post("/api/sessions/{session_id}/properties/validate")
+def validate_properties(session_id: str) -> dict:
+    """Check that every enabled property has valid, runnable code — WITHOUT
+    recompiling (so hand-edited code is checked as-is). Called when the user
+    clicks Run: the run is only allowed to start when `ok` is true.
+
+    Returns per-property validity (keyed by id) plus human-readable `warnings`
+    for anything that would block the run."""
+    from ..properties import CompiledProperty
+
+    session = _load(session_id)
+    results: dict[str, dict] = {}
+    warnings: list[str] = []
+    enabled = 0
+    for i, spec in enumerate(session.properties, 1):
+        if not spec.enabled:
+            continue
+        enabled += 1
+        label = (f"Property {i} ({spec.timing.value} {spec.phase} of turn "
+                 f"{spec.turn})")
+        if not (spec.code and spec.code.strip()):
+            results[spec.id] = {"valid": False, "problem": "no code"}
+            warnings.append(
+                f"{label} has no code — compile it or write the code manually "
+                f"before running.")
+            continue
+        try:
+            CompiledProperty(spec)  # compiles the code and checks `check` exists
+            results[spec.id] = {"valid": True, "problem": None}
+        except Exception as exc:  # noqa: BLE001 - surface per-property
+            results[spec.id] = {"valid": False, "problem": str(exc)}
+            warnings.append(f"{label}: the code is invalid — {exc}")
+    if enabled == 0:
+        warnings.append("Add at least one enabled property before running.")
+    ok = enabled > 0 and not any(not r["valid"] for r in results.values())
+    return {"ok": ok, "results": results, "warnings": warnings}
 
 
 # --------------------------------------------------------------------------

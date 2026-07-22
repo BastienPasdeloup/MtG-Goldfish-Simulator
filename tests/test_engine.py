@@ -64,6 +64,43 @@ def test_property_stub_compiles_example():
     assert compiled[0].turn == 4 and compiled[0].phase == Phase.POSTCOMBAT_MAIN
 
 
+def test_validate_properties_blocks_run_on_missing_or_invalid_code():
+    """The Run-time validity check: every enabled property must have valid,
+    runnable code (Run does not recompile — it only checks)."""
+    from mtg_goldfish.session import Session, new_id, now_iso
+    from mtg_goldfish.web.app import store, validate_properties
+
+    s = Session(id=new_id(), name="t", created_at=now_iso(), deck=Deck(name="t"))
+    s.properties = [
+        PropertySpec(id="ok", english="x",
+                     code="def check(state):\n    return True\n", manual=True),
+        PropertySpec(id="bad", english="y",
+                     code="def check(state)\n    return True\n", manual=True),  # syntax error
+        PropertySpec(id="none", english="z", code=None),
+    ]
+    store.save(s)
+    try:
+        out = validate_properties(s.id)
+        assert out["ok"] is False
+        assert out["results"]["ok"]["valid"] is True
+        assert out["results"]["bad"]["valid"] is False
+        assert out["results"]["none"] == {"valid": False, "problem": "no code"}
+        assert len(out["warnings"]) == 2
+        # All valid → run allowed.
+        s.properties = [PropertySpec(id="ok", english="x",
+                        code="def check(state):\n    return True\n", manual=True)]
+        store.save(s)
+        assert validate_properties(s.id)["ok"] is True
+        # The manual flag survives a save/load round-trip.
+        assert store.load(s.id).properties[0].manual is True
+        # No enabled property → also blocked.
+        s.properties = []
+        store.save(s)
+        assert validate_properties(s.id)["ok"] is False
+    finally:
+        store.delete(s.id)
+
+
 # --------------------------------------------------------------------------
 # "played/cast" vs "entered the battlefield" — must be distinct events.
 # --------------------------------------------------------------------------

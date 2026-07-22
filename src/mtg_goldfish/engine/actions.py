@@ -440,6 +440,15 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
         seen_ex.add(card.name)
         actions.extend(_exile_play_actions(state, source_uid, card))
 
+    # --- airbended cards: cast any modal face for {2} (Aang, Swift Savior) ---
+    seen_air: set[str] = set()
+    for card in list(state.airbend_exile):
+        if card.name in seen_air:
+            continue
+        seen_air.add(card.name)
+        actions.extend(_mark(_airbend_cast_actions(state, card),
+                             _face_instant_speed(card)))
+
     # --- activated abilities on the battlefield (impls check tapped/sick) ---
     for perm in list(state.battlefield):
         actions.extend(perm.impl.battlefield_actions(state, perm))
@@ -506,6 +515,109 @@ class _ExileZone:
         self.state.exile_playable.remove(self.entry)
         if card in self.state.exile:
             self.state.exile.remove(card)
+
+
+def _castable_faces(card) -> list[tuple[int, "object"]]:
+    """The faces of `card` that could be cast (have a mana cost). Returns
+    (face_index, face) pairs. A single-faced card is one face at index 0; a
+    modal card contributes every face carrying a mana cost (a land face has no
+    mana cost, so it is excluded — a land is played, not cast)."""
+    faces = card.faces if len(card.faces) > 1 else []
+    if not faces:
+        return [(0, card)] if card.mana_cost else []
+    out = []
+    for i, face in enumerate(faces):
+        if face.mana_cost:
+            out.append((i, face))
+    return out
+
+
+def _face_instant_speed(card) -> bool:
+    """Whether casting `card` (any of its castable faces) is instant-speed. A
+    modal card is instant-speed only if the face being offered is an instant;
+    we mark the whole airbend batch at instant speed when ANY castable face is
+    an instant (the individual actions still resolve the specific face)."""
+    for _, face in _castable_faces(card):
+        tl = getattr(face, "type_line", "") or ""
+        if "instant" in tl.split("—")[0].lower():
+            return True
+    return False
+
+
+class _AirbendZone:
+    """Adapter so begin_cast can 'remove' an airbended card from both the
+    airbend-recast list and the exile zone."""
+
+    def __init__(self, state: GameState, card) -> None:
+        self.state, self.card = state, card
+
+    def remove(self, card) -> None:
+        if self.card in self.state.airbend_exile:
+            self.state.airbend_exile.remove(self.card)
+        if card in self.state.exile:
+            self.state.exile.remove(card)
+
+
+def _airbend_cast_actions(state: GameState, card) -> list[Action]:
+    """Cast an airbended card for {2}: one action per castable face (a modal
+    card offers each side that has a mana cost). Paying {2} replaces the face's
+    normal cost; the chosen face then enters (permanent) or resolves
+    (instant/sorcery)."""
+    from ..cards.base import CardAction
+
+    cost = ManaCost(generic=2)
+    if not can_afford(state, cost):
+        return []
+    faces = _castable_faces(card)
+    if not faces:
+        return []
+    multi = len(faces) > 1
+    out: list[Action] = []
+
+    def make(face_index: int, face_name: str):
+        def fn(st: GameState):
+            live = next((c for c in st.airbend_exile if c.name == card.name), None)
+            if live is None:
+                return None
+            if not begin_cast(st, live, cost, zone=_AirbendZone(st, live),
+                              tag="airbend, {2}"):
+                return None
+            # Enter as the chosen face for a permanent side; resolve otherwise.
+            face = live.faces[face_index] if len(live.faces) > 1 else live
+            tl = (getattr(face, "type_line", "") or live.type_line)
+            is_perm_face = any(
+                t in tl.split("—")[0].lower()
+                for t in ("creature", "artifact", "enchantment",
+                          "planeswalker", "battle", "land")
+            )
+            if is_perm_face:
+                if live in st.stack:
+                    st.stack.remove(live)
+                st.note_event("spell_resolved", live.name)
+                st.resolving = ("spell", face_name)
+                perm = st.put_on_battlefield(live, fire_etb=False)
+                perm.transformed = face_index == 1
+                st.emit(f"{face_name} resolves — enters the battlefield (airbended)")
+                branches = perm.impl.enter_choices(st, perm)
+                if branches is None:
+                    st.queue_entry_triggers([perm])
+                    return None
+                for b in branches:
+                    p2 = b.find_permanent(perm.uid)
+                    if p2 is not None:
+                        b.queue_entry_triggers([p2])
+                return branches
+            resolve_to_graveyard(st, live)
+            return _impl(live).on_resolve(st) or None
+        return fn
+
+    for face_index, face in faces:
+        face_name = getattr(face, "name", None) or card.name
+        suffix = f" ({face_name})" if multi else ""
+        out.append(CardAction(
+            f"cast {card.name}{suffix} from exile (airbend, {{2}})",
+            make(face_index, face_name)))
+    return out
 
 
 # --------------------------------------------------------------------------

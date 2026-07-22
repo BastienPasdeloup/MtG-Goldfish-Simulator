@@ -125,6 +125,13 @@ It also reports a <strong>confidence</strong> next to <em>Generated code</em>
 ambiguous or names a card that isn't in the deck, a short note saying <strong>what extra detail
 it needs</strong>. If confidence is low, rephrase and recompile.</p>
 
+<p>The code box is <strong>editable</strong>: you can hand-tune the generated function (or fix a
+low-confidence translation) directly. Once you edit it, the label switches from <em>Generated
+code</em> (with the model's confidence) to <em>Manual code</em>, marked <strong>valid</strong> or
+<strong>invalid</strong>. Clicking <em>Run</em> <strong>does not recompile</strong> — it uses the
+code as-is and only checks that every property has valid, runnable code, refusing to start (with a
+warning) if any property has no code or code that doesn't compile.</p>
+
 <p>The generated code runs in a restricted sandbox against a documented, stable
 <code>state</code> API:</p>
 

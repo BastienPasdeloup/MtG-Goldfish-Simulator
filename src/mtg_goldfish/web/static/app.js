@@ -744,6 +744,8 @@ function addProperty(p) {
     code: null,
     confidence: null,
     compile_note: null,
+    manual: false,
+    codeValid: null, // set to true/false by the validity check when Run is clicked
     enabled: true,
   });
 }
@@ -777,26 +779,61 @@ function propRow(p, i) {
 
   const ta = el("textarea", { rows: 2, placeholder: "There are at least 2 creatures in play", value: p.english });
   // Editing the English invalidates the compiled code and its confidence/note.
-  ta.oninput = () => { p.english = ta.value; p.code = null; p.confidence = null; p.compile_note = null; };
+  ta.oninput = () => {
+    p.english = ta.value;
+    p.code = null; p.confidence = null; p.compile_note = null;
+    p.manual = false; p.codeValid = null;
+  };
 
   wrap.append(trigger, ta);
   if (p.code) {
-    const label = el("label", { textContent: "Generated code" });
-    if (p.confidence) {
-      const c = p.confidence.toLowerCase();
-      label.append(el("span", {
-        className: "confidence conf-" + c,
-        textContent: c + " confidence",
-        title: "the model's confidence that this code matches your English",
-      }));
-    }
+    // Generated code shows the model's confidence; once hand-edited it becomes
+    // "Manual code" whose valid/invalid status is set when Run is clicked.
+    const label = el("label");
+    const note = p.compile_note
+      ? el("div", {
+          className: (p.confidence || "").toLowerCase() === "low" ? "compile-note warn" : "compile-note",
+          textContent: p.compile_note,
+        })
+      : null;
+    const refreshLabel = () => {
+      label.replaceChildren(p.manual ? "Manual code" : "Generated code");
+      if (p.manual) {
+        if (p.codeValid === true)
+          label.append(el("span", { className: "confidence conf-high", textContent: "valid" }));
+        else if (p.codeValid === false)
+          label.append(el("span", { className: "confidence conf-low", textContent: "invalid" }));
+      } else if (p.confidence) {
+        const c = p.confidence.toLowerCase();
+        label.append(el("span", {
+          className: "confidence conf-" + c,
+          textContent: c + " confidence",
+          title: "the model's confidence that this code matches your English",
+        }));
+      }
+    };
+    refreshLabel();
     wrap.append(label);
-    // A clarification / resolved-names note from the compiler.
-    if (p.compile_note) {
-      const cls = (p.confidence || "").toLowerCase() === "low" ? "compile-note warn" : "compile-note";
-      wrap.append(el("div", { className: cls, textContent: p.compile_note }));
-    }
-    wrap.append(el("pre", { textContent: p.code }));
+    if (note) wrap.append(note); // clarification / resolved-names note (generated only)
+
+    const codeTa = el("textarea", {
+      className: "code-edit",
+      rows: Math.min(14, p.code.split("\n").length + 1),
+      value: p.code,
+      spellcheck: false,
+    });
+    codeTa.oninput = () => {
+      p.code = codeTa.value;
+      if (!p.manual) {
+        p.manual = true;
+        p.confidence = null;
+        p.compile_note = null;
+        if (note) note.remove(); // the compiler note no longer applies
+      }
+      p.codeValid = null; // re-checked at next Run
+      refreshLabel();
+    };
+    wrap.append(codeTa);
   }
   return wrap;
 }
@@ -932,7 +969,26 @@ function renderFixedBuilder() {
 async function runSim() {
   const fixed = state.simMode === "fixed";
   if (fixed && !state.fixedHand.length) { alert("Add at least one card to the fixed hand first."); return; }
-  await compileProps();
+  // Run does NOT recompile (so hand-edited code is used as-is) — it only checks
+  // that every enabled property has valid, runnable code. Persist first so the
+  // validity check sees the current (possibly hand-edited) code.
+  await saveProps();
+  let v;
+  try {
+    v = await api(`/api/sessions/${state.session.id}/properties/validate`, { method: "POST" });
+  } catch (e) { alert("Validation failed: " + e.message); return; }
+  // Stamp each property's valid/invalid status (shown on hand-edited code).
+  state.props.forEach((p) => {
+    const r = v.results[p.id];
+    p.codeValid = r ? r.valid : (p.enabled ? p.codeValid : null);
+  });
+  renderProps();
+  if (!v.ok) {
+    showPropWarnings(v.warnings);
+    alert("Cannot run — some properties need valid code first:\n\n" + v.warnings.join("\n"));
+    return;
+  }
+  showPropWarnings(null);
   const seedField = $("seed").value.trim();
   const body = JSON.stringify({
     num_games: parseInt($("num-games").value) || 100,

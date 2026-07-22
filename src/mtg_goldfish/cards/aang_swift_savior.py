@@ -2,10 +2,15 @@
 
 Front (Aang, Swift Savior) — 2/3, Flash, Flying (both handled by the engine):
   * When Aang enters, airbend up to one OTHER target creature or spell (exile
-    it; its owner may recast it for {2}). Airbend is removal aimed at the
-    opponent; against a phantom opponent there are no enemy creatures or spells,
-    and airbending your own permanent is never advantageous in a goldfish, so
-    "up to one" resolves choosing zero targets — a no-op ETB (not modelled).
+    it; for as long as it stays exiled, its owner may cast it for {2}). Against
+    a phantom opponent there are no enemy creatures, and spells resolve
+    atomically so none is ever on the stack at this trigger — but airbending
+    your OWN creature IS a real option: the exiled card may be recast for {2},
+    which re-triggers its ETB and, for a modal card, lets ANY face that has a
+    mana cost be cast for {2} (e.g. the expensive side of an MDFC for {2}).
+    Modelled as a branching ETB: airbend nothing, or exile one other creature
+    you control (registered for the {2} recast — see GameState.airbend_exile
+    and actions._airbend_cast_actions). Land faces (no mana cost) are excluded.
   * Waterbend {8}: Transform Aang.  ({8} generic, instant-speed activated
     ability; disappears once transformed.)
 
@@ -18,7 +23,7 @@ the active face automatically on transform):
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
-from ._common import transform_actions
+from ._common import branch_over, transform_actions
 from .base import Card
 from .registry import register
 
@@ -32,6 +37,39 @@ class AangSwiftSavior(Card):
         # once transformed).
         return transform_actions(
             state, perm, ManaCost(generic=8), "Aang and La, Ocean's Fury")
+
+    def on_etb(self, state, permanent):
+        # Airbend up to one OTHER target creature you control: exile it and let
+        # its owner recast it for {2}. "Up to one" → the "airbend nothing"
+        # branch is always offered. Distinct by name to bound the branching.
+        targets = []
+        seen = set()
+        for p in state.battlefield:
+            if p.uid == permanent.uid or not p.is_creature_now:
+                continue
+            if p.name in seen:
+                continue
+            seen.add(p.name)
+            targets.append(p.uid)
+        if not targets:
+            return None  # no legal target → "up to one" does nothing (no branch)
+        options = [None, *targets]
+
+        def fn(st, uid):
+            if uid is None:
+                st.emit("airbend nothing")
+                return None
+            target = st.find_permanent(uid)
+            if target is None:
+                return None
+            card = target.card
+            st.emit(f"airbend {target.name} — exile, may recast for {{2}}")
+            st.leaves_battlefield(target, "exile")
+            # Keep it in exile (zone display) AND register the {2} recast.
+            st.airbend_exile.append(card)
+            return None
+
+        return branch_over(state, options, fn)
 
     def attack_stack_items(self, state, perm):
         # Only the back face (Aang and La) has an attack trigger.

@@ -30,6 +30,10 @@ class PropertySpec(BaseModel):
     # what extra detail would make the translation unambiguous.
     confidence: str | None = None
     compile_note: str | None = None
+    # True once the user has hand-edited the generated code: the UI then labels
+    # it "Manual code" (valid/invalid, checked at Run) instead of "Generated
+    # code" (model confidence). The compiler clears this when it (re)generates.
+    manual: bool = False
 
     def describe(self) -> str:
         return f"{self.timing.value} {self.phase} of turn {self.turn}: {self.english}"
