@@ -35,6 +35,20 @@ vs. approximated.
 
 ## Quick start
 
+**One click (no terminal needed).** Download the project as a ZIP, then:
+
+| OS | Install (once) | Launch |
+| --- | --- | --- |
+| macOS | double-click `install-macos.command` | double-click `launch-macos.command` |
+| Windows | double-click `install-windows.bat` | double-click `launch-windows.bat` |
+| Linux | run `./install-linux.sh` | run `./launch-linux.sh` |
+
+The launcher opens the app in your browser automatically. See the
+[install guide](https://bastienpasdeloup.github.io/MtG-Goldfish-Simulator/install.html)
+for details (and first-time security prompts).
+
+**From a terminal:**
+
 ```bash
 uv sync
 uv run mtg-goldfish        # starts the web UI on http://127.0.0.1:8000

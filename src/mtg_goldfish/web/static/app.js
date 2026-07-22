@@ -1429,8 +1429,10 @@ function treeHtml(payload) {
   #bar button { background:#232732; color:#e6e8ee; border:1px solid #2e3340; border-radius:6px; padding:.25rem .6rem; cursor:pointer; }
   #bar .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin:0 .25rem -1px 0; }
   #wrap { position:absolute; top:49px; bottom:0; left:0; right:0; overflow:auto; background:#0f1116; }
-  /* sticky step header: scrolls horizontally with the tree, pinned vertically */
-  #ruler { position:sticky; top:0; height:26px; z-index:2; background:#171a21; border-bottom:1px solid #2e3340; }
+  /* sticky step header: scrolls horizontally with the tree, pinned vertically.
+     Uses the same elevated surface as the top bar (#1c1f27) so the header reads
+     as ONE panel over the page colour — not a third, in-between shade. */
+  #ruler { position:sticky; top:0; height:26px; z-index:2; background:#1c1f27; border-bottom:1px solid #2e3340; }
   #ruler span { position:absolute; top:5px; font-size:11px; letter-spacing:.5px; text-transform:uppercase; color:#9aa3b2; white-space:nowrap; }
   /* Paint the SVG its own opaque background (same as the wrap) so a large
      transparent canvas never shows compositing seams / "darker" patches. */
