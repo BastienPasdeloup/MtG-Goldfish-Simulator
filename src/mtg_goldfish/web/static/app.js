@@ -408,18 +408,14 @@ async function openRunsModal() {
       const badge = {
         running: ["⏳ running…", "pill warn"],
         done: ["completed", "pill good"],
-        stopped: ["stopped", "pill"],
+        stopped: ["stopped", "pill warn"],
         interrupted: ["failed", "pill bad"],
       }[r.status];
       if (badge) {
         dateCell.append(el("div", {}, el("span", { className: badge[1], textContent: badge[0] })));
       }
+      // Clicking the row loads the run (see tr.onclick); only Delete remains here.
       const actionsCell = el("td", { className: "run-actions" },
-        el("button", {
-          textContent: "Load",
-          title: "restore this run's settings, properties and results",
-          onclick: (e) => { e.stopPropagation(); loadRun(r); },
-        }),
         el("button", {
           className: "danger",
           textContent: "Delete",

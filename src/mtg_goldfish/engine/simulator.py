@@ -923,9 +923,6 @@ _SPLIT_MAX_DEPTH = 12
 #: grace we kill the process and rebuild the pool so the run keeps moving. The
 #: grace also covers a well-behaved worker serialising a large result back.
 _WORKER_GRACE_S = 5.0
-#: On a user Stop, how long to let workers wind down before abandoning them
-#: (their results are discarded anyway, so this only needs to be responsive).
-_STOP_GRACE_S = 2.0
 
 
 def _worker_init(deck, specs, config: SimulationConfig, stop_event, found_event) -> None:
@@ -1109,21 +1106,22 @@ def _simulate_game_split(
     # their soft deadline and hand results back. Past the limit the stragglers
     # are wedged: abandon them and flag the pool for a kill + rebuild.
     hard_deadline = time.monotonic() + remaining + _WORKER_GRACE_S
-    stop_deadline = None  # a shorter grace, armed once the user hits Stop
     tainted = False
     while pending:
         now = time.monotonic()
         if should_stop and should_stop():
-            stop_event.set()  # well-behaved workers wind down within ~0.15 s
-            if stop_deadline is None:
-                stop_deadline = now + _STOP_GRACE_S
-        limit = stop_deadline if stop_deadline is not None else hard_deadline
-        if now >= limit:
+            # User abort: abandon the game IMMEDIATELY. Its result is discarded
+            # (return None), so there is no reason to wait for workers to hand
+            # anything back — the old grace period was the main "Stop is slow"
+            # delay. Signal them to wind down; the caller kills the pool next.
+            stop_event.set()
+            return None
+        if now >= hard_deadline:
             tainted = True
             if on_tainted is not None:
                 on_tainted()  # stragglers are wedged — pool must be recycled
             break
-        done, pending = futures_wait(pending, timeout=0.2)
+        done, pending = futures_wait(pending, timeout=0.1)
         for fut in done:
             try:
                 r = fut.result()

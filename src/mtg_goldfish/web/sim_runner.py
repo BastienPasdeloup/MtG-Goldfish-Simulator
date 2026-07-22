@@ -265,12 +265,6 @@ class SimulationRunner:
                 # fall through to the done broadcast so the UI recovers.
                 traceback.print_exc()
                 status = "interrupted"
-            finally:
-                # Final (or crash/cancel) state of the entry.
-                try:
-                    persist(status)
-                except Exception:  # noqa: BLE001 - never block the done signal
-                    traceback.print_exc()
 
             result = SimResult(
                 id=result_id,
@@ -280,6 +274,11 @@ class SimulationRunner:
                 properties=properties,
                 stats=last_stats,
             )
+            # Tell the UI the run has ended FIRST — before the final persist,
+            # which reloads + rewrites the whole session file and can take
+            # seconds on a huge session. On Stop that write is what made the run
+            # feel slow to halt; the games were already persisted incrementally,
+            # so the durability cost of saving after the broadcast is nil.
             # LEAN done message: the per-game rows (incl. their compressed
             # search trees) were already streamed one by one as the games
             # finished — resending them all here can reach hundreds of MB on a
@@ -294,6 +293,12 @@ class SimulationRunner:
                     "stopped": handle.stop.is_set(),
                 },
             )
+            # Final (or crash/cancel) state of the entry — persisted after the
+            # broadcast so the UI is not blocked on the (slow) disk write.
+            try:
+                persist(status)
+            except Exception:  # noqa: BLE001 - never block the done signal
+                traceback.print_exc()
 
         handle.thread = threading.Thread(target=worker, daemon=True)
         handle.thread.start()
