@@ -542,6 +542,11 @@ def test_aang_airbend_modal_card_casts_any_face_for_two():
     assert perms and perms[0].transformed
     assert state.effective_power(perms[0]) == 7
     assert not state.airbend_exile
+    # The viewer shows the BACK face on the stack while it is being cast.
+    on_stack = [f for f in state.log
+                if f.get("stack") and "(on the stack)" in f["desc"]]
+    assert on_stack and on_stack[-1]["stack"][0]["name"] == "Back Giant"
+    assert not state.stack_face  # cleared once off the stack
 
 
 def test_aang_airbends_a_spell_being_cast_with_instant_speed():

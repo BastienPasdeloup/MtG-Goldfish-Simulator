@@ -252,6 +252,11 @@ class GameState:
     # unlike exile_playable). Any face of a modal card that has a mana cost may
     # be cast this way. The card objects also live in `exile` (zone display).
     airbend_exile: list[CardData] = field(default_factory=list)
+    # For a spell cast as a non-front face (e.g. an airbended modal card's back
+    # side): id(card) -> face index, so the board viewer shows the face actually
+    # being cast on the stack (not the default front). Cleared when the card
+    # leaves the stack; keyed by id() (card objects live the whole game).
+    stack_face: dict[int, int] = field(default_factory=dict)
 
     mana_pool: ManaPool = field(default_factory=ManaPool)
     life: int = 20
@@ -351,6 +356,7 @@ class GameState:
             stack=list(self.stack),
             exile_playable=list(self.exile_playable),
             airbend_exile=list(self.airbend_exile),
+            stack_face=dict(self.stack_face),
             mana_pool=self.mana_pool.copy(),
             life=self.life,
             opponent_life=self.opponent_life,
@@ -1249,12 +1255,18 @@ class GameState:
         def stack_item_view(item):
             if isinstance(item, StackAbility):
                 return item.public()
+            # A spell cast as a non-front face (airbended modal back side) shows
+            # the face actually being cast, so the viewer picks its image/name.
+            name = item.name
+            idx = self.stack_face.get(id(item))
+            if idx is not None and 0 <= idx < len(item.faces):
+                name = item.faces[idx].name or name
             return {
-                "name": item.name,
-                "source_name": item.name,
+                "name": name,
+                "source_name": name,
                 "kind": "spell",
                 "trigger": None,
-                "ability": item.name,
+                "ability": name,
             }
 
         return {

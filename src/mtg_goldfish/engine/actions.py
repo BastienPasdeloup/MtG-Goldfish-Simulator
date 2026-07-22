@@ -579,8 +579,14 @@ def _airbend_cast_actions(state: GameState, card) -> list[Action]:
             live = next((c for c in st.airbend_exile if c.name == card.name), None)
             if live is None:
                 return None
+            # Tag the on-stack face so the board viewer shows the side being cast
+            # (a modal card's back face) rather than the default front. Set
+            # BEFORE begin_cast, whose "cast … (on the stack)" frame reads it.
+            if face_index >= 1 and len(live.faces) > 1:
+                st.stack_face[id(live)] = face_index
             if not begin_cast(st, live, cost, zone=_AirbendZone(st, live),
                               tag="airbend, {2}"):
+                st.stack_face.pop(id(live), None)
                 return None
             # Enter as the chosen face for a permanent side; resolve otherwise.
             face = live.faces[face_index] if len(live.faces) > 1 else live
@@ -593,6 +599,7 @@ def _airbend_cast_actions(state: GameState, card) -> list[Action]:
             if is_perm_face:
                 if live in st.stack:
                     st.stack.remove(live)
+                st.stack_face.pop(id(live), None)  # off the stack now
                 st.note_event("spell_resolved", live.name)
                 st.resolving = ("spell", face_name)
                 perm = st.put_on_battlefield(live, fire_etb=False)
@@ -608,6 +615,7 @@ def _airbend_cast_actions(state: GameState, card) -> list[Action]:
                         b.queue_entry_triggers([p2])
                 return branches
             resolve_to_graveyard(st, live)
+            st.stack_face.pop(id(live), None)  # off the stack now
             return _impl(live).on_resolve(st) or None
         return fn
 
