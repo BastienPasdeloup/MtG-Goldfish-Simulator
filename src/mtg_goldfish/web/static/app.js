@@ -44,6 +44,12 @@ const FC_PHASES = [
   ["postcombat_main", "Postcombat main"], ["end_step", "End step"],
 ];
 const FC_MANA = ["W", "U", "B", "R", "G", "C"];
+// Counter kinds offered as quick "+1" entries in the card context menu.
+const FC_COUNTER_KINDS = ["+1/+1", "-1/-1", "loyalty", "charge"];
+// Keywords that can be granted until end of turn from the card context menu.
+const FC_KEYWORDS = ["flying", "first strike", "double strike", "trample",
+  "lifelink", "haste", "vigilance", "deathtouch", "reach", "menace",
+  "hexproof", "indestructible"];
 
 const MAX_FIXED_HAND = 7;
 
@@ -957,14 +963,165 @@ function fcAddCard(name) {
   const card = placeableCards().find((c) => c.name === name);
   if (!card || fcUsage(name) >= card.quantity) return;
   const z = state.fcZone;
-  if (z === "battlefield") state.fixedConfig.battlefield.push({ name, tapped: false });
-  else state.fixedConfig[z].push(name);
+  if (z === "battlefield") {
+    const entry = { name, tapped: false, counters: {}, granted: [] };
+    // Planeswalkers arrive with their printed loyalty (as they would enter).
+    const loy = parseInt(card.loyalty);
+    if ((card.type_line || "").toLowerCase().includes("planeswalker") && loy) {
+      entry.counters.loyalty = loy;
+    }
+    state.fixedConfig.battlefield.push(entry);
+  } else {
+    state.fixedConfig[z].push(name);
+  }
   renderConfigBuilder();
 }
 
 function fcRemove(zone, idx) {
   state.fixedConfig[zone].splice(idx, 1);
   renderConfigBuilder();
+}
+
+const fcCardMeta = (name) => state.cards.find((c) => c.name === name) || {};
+const fcIsLand = (name) => !!fcCardMeta(name).is_land;
+const fcIsCreature = (name) =>
+  (fcCardMeta(name).type_line || "").split("—")[0].toLowerCase().includes("creature");
+const fcCommanderCards = () => state.cards.filter((c) => c.board === "commander");
+
+// Build a replay-style board frame from the fixed-config model, so the editor
+// reuses the exact game-replay layout (renderBoard). Each battlefield perm gets
+// a synthetic uid = its index in the model (`_idx`), used by the edit handlers.
+function fcFrame() {
+  const fc = state.fixedConfig;
+  const battlefield = fc.battlefield.map((it, i) => ({
+    name: it.name, uid: i, _idx: i, tapped: !!it.tapped, sick: false,
+    commander: fcCardMeta(it.name).board === "commander", attacking: false,
+    counters: it.counters || {}, granted: it.granted || [],
+    is_land: fcIsLand(it.name), is_lander: false, is_creature: fcIsCreature(it.name),
+    token: false, attached_to: null,
+  }));
+  const command = [];
+  fcCommanderCards().forEach((c) => {
+    for (let k = 0; k < Math.max(0, c.quantity - fcUsage(c.name)); k++) command.push(c.name);
+  });
+  const library = mainboardCards().reduce(
+    (s, c) => s + Math.max(0, c.quantity - fcUsage(c.name)), 0);
+  const phaseLabel = (FC_PHASES.find(([v]) => v === fc.phase) || [null, fc.phase])[1];
+  return {
+    battlefield, hand: fc.hand.slice(), graveyard: fc.graveyard.slice(),
+    exile: fc.exile.slice(), command_zone: command, stack: [],
+    turn: fc.turn, phase: phaseLabel, desc: "starting state — click a card to tap, right-click for more",
+    life: fc.life, opponent_life: fc.opponent_life, library,
+    counters: { storm: fc.storm_count }, mana_pool: fc.mana_pool, energy: 0,
+  };
+}
+
+// ---- editor actions on a battlefield permanent (by model index) ----
+const fcPerm = (idx) => state.fixedConfig.battlefield[idx];
+
+function fcTogglePermTap(p) {
+  const it = fcPerm(p._idx);
+  if (it) { it.tapped = !it.tapped; renderConfigBuilder(); }
+}
+function fcAddCounter(idx, kind, delta) {
+  const it = fcPerm(idx); if (!it) return;
+  it.counters = it.counters || {};
+  const v = (it.counters[kind] || 0) + delta;
+  if (v) it.counters[kind] = v; else delete it.counters[kind];
+  renderConfigBuilder();
+}
+function fcSetCounter(idx, kind, value) {
+  const it = fcPerm(idx); if (!it) return;
+  it.counters = it.counters || {};
+  if (value) it.counters[kind] = value; else delete it.counters[kind];
+  renderConfigBuilder();
+}
+function fcToggleKeyword(idx, kw) {
+  const it = fcPerm(idx); if (!it) return;
+  it.granted = it.granted || [];
+  const i = it.granted.indexOf(kw);
+  if (i >= 0) it.granted.splice(i, 1); else it.granted.push(kw);
+  renderConfigBuilder();
+}
+
+// Right-click menu on a battlefield permanent.
+function fcPermMenu(p, e) {
+  const it = fcPerm(p._idx); if (!it) return;
+  const counterItems = FC_COUNTER_KINDS.map((k) => ({
+    label: `Add ${k}`, onClick: () => fcAddCounter(p._idx, k, 1),
+  }));
+  counterItems.push({
+    label: "Set counter…", onClick: () => {
+      const kind = (prompt("Counter kind (e.g. +1/+1, loyalty, charge):", "+1/+1") || "").trim();
+      if (!kind) return;
+      const n = parseInt(prompt(`How many ${kind} counters? (0 removes)`, "1"), 10);
+      if (!isNaN(n)) fcSetCounter(p._idx, kind, n);
+    },
+  });
+  if (Object.keys(it.counters || {}).length) {
+    counterItems.push({ sep: true });
+    counterItems.push({ label: "Clear all counters",
+      onClick: () => { it.counters = {}; renderConfigBuilder(); } });
+  }
+  const kwItems = FC_KEYWORDS.map((kw) => ({
+    label: kw, checked: (it.granted || []).includes(kw),
+    onClick: () => fcToggleKeyword(p._idx, kw),
+  }));
+  showContextMenu(e.clientX, e.clientY, [
+    { label: it.tapped ? "Untap" : "Tap", onClick: () => fcTogglePermTap(p) },
+    { label: "Add counter", submenu: counterItems },
+    { label: "Grant ability (until end of turn)", submenu: kwItems },
+    { sep: true },
+    { label: "Remove from battlefield", onClick: () => fcRemove("battlefield", p._idx) },
+  ]);
+}
+
+// Right-click menu on a hand / graveyard / exile card.
+function fcZoneMenu(zone, idx, name, e) {
+  showContextMenu(e.clientX, e.clientY, [
+    { label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) },
+  ]);
+}
+
+// ---- lightweight right-click context menu (with one level of submenus) ----
+function closeContextMenu() {
+  document.querySelectorAll(".ctx-menu").forEach((m) => m.remove());
+  document.removeEventListener("click", closeContextMenu);
+  document.removeEventListener("keydown", ctxEsc);
+}
+function ctxEsc(e) { if (e.key === "Escape") closeContextMenu(); }
+
+function buildMenu(items) {
+  const menu = el("div", { className: "ctx-menu" });
+  items.forEach((it) => {
+    if (it.sep) { menu.append(el("div", { className: "ctx-sep" })); return; }
+    const row = el("div", { className: "ctx-item" + (it.submenu ? " has-sub" : "") },
+      el("span", { className: "ctx-check", textContent: it.checked ? "✓" : "" }),
+      el("span", { className: "ctx-label", textContent: it.label }));
+    if (it.submenu) {
+      row.append(el("span", { className: "ctx-arrow", textContent: "▸" }));
+      let sub = null;
+      row.onmouseenter = () => { if (!sub) { sub = buildMenu(it.submenu); sub.classList.add("ctx-submenu"); row.append(sub); } };
+      row.onmouseleave = () => { if (sub) { sub.remove(); sub = null; } };
+    } else if (it.onClick) {
+      row.onclick = (ev) => { ev.stopPropagation(); it.onClick(); closeContextMenu(); };
+    }
+    menu.append(row);
+  });
+  return menu;
+}
+
+function showContextMenu(x, y, items) {
+  closeContextMenu();
+  const menu = buildMenu(items);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  if (r.right > innerWidth) menu.style.left = Math.max(0, innerWidth - r.width - 4) + "px";
+  if (r.bottom > innerHeight) menu.style.top = Math.max(0, innerHeight - r.height - 4) + "px";
+  setTimeout(() => document.addEventListener("click", closeContextMenu), 0);
+  document.addEventListener("keydown", ctxEsc);
 }
 
 // Read the current global fields (turn/phase/life/mana/…) back into the model
@@ -997,7 +1154,10 @@ function renderConfigBuilder() {
   $("fc-life").value = fc.life;
   $("fc-opp-life").value = fc.opponent_life;
   $("fc-storm").value = fc.storm_count;
-  ["fc-turn", "fc-life", "fc-opp-life", "fc-storm"].forEach((id) => ($(id).onchange = fcSyncGlobals));
+  // Editing a global field updates the model AND the board header.
+  const syncAndDraw = () => { fcSyncGlobals(); renderConfigBuilder(); };
+  ["fc-turn", "fc-life", "fc-opp-life", "fc-storm"].forEach((id) => ($(id).onchange = syncAndDraw));
+  phaseSel.onchange = syncAndDraw;
 
   // Mana pool inputs (build once).
   const manaWrap = $("fc-mana");
@@ -1012,40 +1172,15 @@ function renderConfigBuilder() {
   }
   FC_MANA.forEach((sym) => ($(`fc-mana-${sym}`).value = fc.mana_pool[sym] || 0));
 
-  // Zone chip lists.
-  const zonesWrap = $("fc-zones");
-  zonesWrap.replaceChildren();
-  const ZONES = [["battlefield", "Battlefield"], ["hand", "Hand"],
-    ["graveyard", "Graveyard"], ["exile", "Exile"]];
-  for (const [zone, label] of ZONES) {
-    const items = fc[zone];
-    const row = el("div", { className: "fc-zone" });
-    row.append(el("div", { className: "fc-zone-label" }, `${label} (${items.length})`));
-    const chips = el("div", { className: "fc-chips" });
-    if (!items.length) chips.append(el("span", { className: "muted", textContent: "—" }));
-    items.forEach((it, idx) => {
-      const name = zone === "battlefield" ? it.name : it;
-      const chip = el("span", { className: "fc-chip" });
-      const nm = el("span", { className: "fc-chip-name" }, name);
-      hoverable(nm, state.imageMap[name]);
-      chip.append(nm);
-      if (zone === "battlefield") {
-        const tap = el("button", {
-          className: "fc-tap" + (it.tapped ? " on" : ""),
-          title: it.tapped ? "tapped — click to untap" : "untapped — click to tap",
-          textContent: it.tapped ? "tapped" : "untapped",
-        });
-        tap.onclick = () => { it.tapped = !it.tapped; renderConfigBuilder(); };
-        chip.append(tap);
-      }
-      const x = el("button", { className: "fc-chip-x", title: "remove", textContent: "✕" });
-      x.onclick = () => fcRemove(zone, idx);
-      chip.append(x);
-      chips.append(chip);
-    });
-    row.append(chips);
-    zonesWrap.append(row);
-  }
+  // The board — the SAME layout as game replay, made interactive: click a
+  // battlefield card to tap/untap, right-click any card for the full menu.
+  $("fc-zones").replaceChildren(el("div", { className: "board fc-board" },
+    renderBoard(fcFrame(), {
+      editable: true,
+      onPermClick: fcTogglePermTap,
+      onPermMenu: fcPermMenu,
+      onZoneMenu: fcZoneMenu,
+    })));
 
   // Target-zone selector + card picker (add to the selected zone).
   const target = $("fc-target-zone");
@@ -1938,6 +2073,13 @@ function tile(name, opts = {}) {
     t.append(row);
   }
   hoverable(t, img); // enlarge on hover, like the decklist
+  // Fixed-config editor: make the tile interactive (click to tap, right-click
+  // for the counters/keywords/remove menu).
+  if (opts.editable) {
+    t.classList.add("editable");
+    if (opts.onClick) t.onclick = (e) => { e.preventDefault(); hideHover(); opts.onClick(e); };
+    if (opts.onMenu) t.oncontextmenu = (e) => { e.preventDefault(); hideHover(); opts.onMenu(e); };
+  }
   return t;
 }
 
@@ -1974,26 +2116,30 @@ function normalizePileItem(raw) {
   };
 }
 
-function pile(items) {
+function pile(items, edit = {}) {
   const wrap = el("div", { className: "pile" });
   const list = items || [];
   if (!list.length) {
     wrap.append(el("div", { className: "pile-empty", textContent: "—" }));
     return wrap;
   }
-  for (const raw of list) {
+  list.forEach((raw, idx) => {
     const item = normalizePileItem(raw);
     const source = item.source_name || item.name;
     const img = state.imageMap[source] || state.imageMap[item.name];
     const card = el("div", { className: "pile-img", title: item.name });
     if (img) card.append(el("img", { src: img, alt: item.name, loading: "lazy" }));
     else card.append(el("div", { className: "fallback", textContent: item.name }));
+    if (edit.onMenu) {
+      card.classList.add("editable");
+      card.oncontextmenu = (e) => { e.preventDefault(); hideHover(); edit.onMenu(idx, item.name, e); };
+    }
     wrap.append(hoverable(card, img, {
       title: item.kind === "spell" || item.kind === "card" ? item.name : source,
       trigger: item.kind === "triggered" ? item.trigger : (item.kind === "activated" ? "Activated ability" : null),
       ability: item.kind === "spell" || item.kind === "card" ? null : item.ability,
     }));
-  }
+  });
   return wrap;
 }
 
@@ -2016,9 +2162,12 @@ function energyPips(n) {
 
 // A permanent tile with any auras/equipment attached to it stacked BEHIND it
 // (peeking out from the top-right), so the enchanted/equipped card is on top.
-function permTile(p, attachedByHost) {
+function permTile(p, attachedByHost, edit = {}) {
   const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
-    granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness });
+    granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness,
+    editable: edit.editable,
+    onClick: edit.onClick ? () => edit.onClick(p) : null,
+    onMenu: edit.onMenu ? (e) => edit.onMenu(p, e) : null });
   const attached = attachedByHost[p.uid] || [];
   if (!attached.length) return host;
   const wrap = el("div", { className: "perm-stack" });
@@ -2034,7 +2183,7 @@ function permTile(p, attachedByHost) {
   return wrap;
 }
 
-function renderBoard(f) {
+function renderBoard(f, edit = {}) {
   const bf = f.battlefield || [];
   // Attached permanents (auras/equipment) render behind their host, not as
   // their own top-level tile.
@@ -2046,7 +2195,17 @@ function renderBoard(f) {
     }
   }
   const isAttached = (p) => p.attached_to != null && hostUids.has(p.attached_to);
-  const mkPerm = (p) => permTile(p, attachedByHost);
+  // In the Fixed-config editor every zone is interactive.
+  const permEdit = edit.editable ? {
+    editable: true, onClick: edit.onPermClick, onMenu: edit.onPermMenu,
+  } : {};
+  const mkPerm = (p) => permTile(p, attachedByHost, permEdit);
+  const zoneMenu = (zone) => (edit.editable && edit.onZoneMenu
+    ? (idx, name, e) => edit.onZoneMenu(zone, idx, name, e) : null);
+  const handTile = (n, idx) => tile(n, edit.editable ? {
+    editable: true,
+    onMenu: (e) => edit.onZoneMenu && edit.onZoneMenu("hand", idx, n, e),
+  } : {});
   // Bottom row: lands and Lander tokens (they fetch lands, so they live with
   // them). Top row: everything else, including all other tokens.
   const isBottom = (p) => p.is_land || p.is_lander;
@@ -2083,10 +2242,10 @@ function renderBoard(f) {
     el("div", { className: "bzone area-left" },
       el("div", { className: "side-box" },
         el("div", { className: "zlabel", textContent: `Graveyard (${(f.graveyard || []).length})` }),
-        pile(f.graveyard)),
+        pile(f.graveyard, { onMenu: zoneMenu("graveyard") })),
       el("div", { className: "side-box" },
         el("div", { className: "zlabel", textContent: `Exile (${(f.exile || []).length})` }),
-        pile(f.exile))),
+        pile(f.exile, { onMenu: zoneMenu("exile") }))),
     el("div", { className: "bzone area-field" },
       el("div", { className: "field-row" },
         el("div", { className: "zlabel", textContent: `Battlefield (${nonlands.length + lands.length})` }),
@@ -2102,7 +2261,7 @@ function renderBoard(f) {
         pile(f.stack))),
     el("div", { className: "bzone area-hand" },
       el("div", { className: "zlabel", textContent: `Hand (${(f.hand || []).length})` }),
-      el("div", { className: "tiles hand" }, ...(f.hand || []).map((n) => tile(n)))),
+      el("div", { className: "tiles hand" }, ...(f.hand || []).map(handTile))),
   );
   return el("div", {}, header, grid);
 }

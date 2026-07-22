@@ -198,18 +198,26 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 /* fixed-config builder */
 .fc-mana-cell { display: inline-flex; align-items: center; gap: .2rem; }
 .fc-mana-cell .ms { width: 15px; height: 15px; }
-.fc-zone { display: flex; align-items: baseline; gap: .5rem; margin: .3rem 0; }
-.fc-zone-label { min-width: 6.5rem; color: var(--muted); font-size: 12px; font-weight: 600; }
-.fc-chips { display: flex; flex-wrap: wrap; gap: .3rem; flex: 1; }
-.fc-chip { display: inline-flex; align-items: center; gap: .3rem; background: var(--panel-2);
-  border: 1px solid var(--border); border-radius: 99px; padding: .1rem .2rem .1rem .55rem; font-size: 12px; }
-.fc-chip-name { cursor: default; }
-.fc-chip-x { border: none; background: transparent; color: var(--muted); cursor: pointer;
-  padding: 0 .25rem; font-size: 11px; line-height: 1; }
-.fc-chip-x:hover { color: var(--bad, #e05561); }
-.fc-tap { font-size: 10px; text-transform: uppercase; letter-spacing: .3px; border-radius: 99px;
-  border: 1px solid var(--border); background: transparent; color: var(--muted); padding: .05rem .4rem; cursor: pointer; }
-.fc-tap.on { color: var(--accent); border-color: var(--accent); }
+.fc-board { margin: .3rem 0 .6rem; overflow-x: auto; }
+/* interactive tiles/piles in the fixed-config editor */
+.tile.editable, .pile-img.editable { cursor: pointer; }
+.tile.editable:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pile-img.editable:hover { outline: 2px solid var(--accent); }
+
+/* right-click context menu */
+.ctx-menu { position: fixed; z-index: 300; min-width: 190px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: .25rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); font-size: 13px; }
+.ctx-item { display: flex; align-items: center; gap: .35rem; padding: .28rem .5rem;
+  border-radius: 5px; cursor: pointer; white-space: nowrap; position: relative; }
+.ctx-item:hover { background: var(--accent); color: #1a1205; }
+.ctx-item .ctx-label { flex: 1; }
+.ctx-item .ctx-check { width: .9rem; text-align: center; color: var(--accent); }
+.ctx-item:hover .ctx-check { color: #1a1205; }
+.ctx-item .ctx-arrow { color: var(--muted); font-size: 11px; }
+.ctx-item:hover .ctx-arrow { color: #1a1205; }
+.ctx-sep { height: 1px; background: var(--border); margin: .25rem .3rem; }
+.ctx-submenu { position: absolute; top: -.3rem; left: 100%; margin-left: 2px; }
 
 /* mana pips (used for the board mana pool) */
 .pip {

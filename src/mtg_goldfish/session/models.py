@@ -11,6 +11,11 @@ class FixedBattlefieldCard(BaseModel):
     """A permanent placed on the battlefield in a Fixed-config run."""
     name: str
     tapped: bool = False
+    # Counters to put on it, by kind (e.g. {"+1/+1": 2, "loyalty": 5}). These
+    # OVERRIDE the permanent's natural enters-with counters for the kinds given.
+    counters: dict[str, int] = Field(default_factory=dict)
+    # Keywords granted until end of turn (lowercase, e.g. ["flying", "haste"]).
+    granted: list[str] = Field(default_factory=list)
 
 
 class FixedConfig(BaseModel):

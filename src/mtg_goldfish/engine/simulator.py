@@ -810,7 +810,18 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         perm = make_permanent(variant, card,
                               is_commander=card.name in base_state.commander_names)
         perm.summoning_sick = False
-        perm.tapped = bool(isinstance(spec, dict) and spec.get("tapped"))
+        if isinstance(spec, dict):
+            perm.tapped = bool(spec.get("tapped"))
+            # Counters OVERRIDE the natural enters-with counters for the kinds
+            # given (a planeswalker keeps its base loyalty unless set here).
+            for kind, n in (spec.get("counters") or {}).items():
+                if n:
+                    perm.counters[kind] = int(n)
+                else:
+                    perm.counters.pop(kind, None)
+            # Keywords granted until end of turn (Cosmic Spider-Man-style).
+            for kw in (spec.get("granted") or []):
+                perm.temp_keywords.add(str(kw).lower())
         variant.battlefield.append(perm)
     for name in fixed.get("hand", []):
         card = take(name)

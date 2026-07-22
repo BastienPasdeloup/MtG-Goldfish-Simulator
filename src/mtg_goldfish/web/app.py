@@ -133,6 +133,7 @@ def card_view(deck: Deck) -> list[dict]:
             "faces": faces,
             "implemented": is_implemented(c.name),
             "is_land": c.is_land,
+            "loyalty": c.loyalty,  # for the Fixed-config editor (planeswalkers)
         }
     return list(agg.values())
 
