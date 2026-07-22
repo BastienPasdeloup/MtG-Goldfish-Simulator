@@ -20,9 +20,30 @@ const state = {
   vizRuns: [],     // per-game run metadata (hand, branch counts, tree, frames)
   vizIdx: 0,
   vizStep: 0,
-  simMode: "sim",  // "sim" (random hands + mulligans) | "fixed" (chosen hand)
+  simMode: "sim",  // "sim" (random hands + mulligans) | "fixed" (hand) | "config" (full state)
   fixedHand: [],   // fixed-hand mode: chosen card names (with duplicates)
+  // Fixed-config mode: a fully-specified starting state.
+  fixedConfig: null,
+  fcZone: "battlefield", // which zone the card picker adds to
 };
+
+// A fresh, empty fixed-config starting state.
+function newFixedConfig() {
+  return {
+    battlefield: [], // [{name, tapped}]
+    hand: [], graveyard: [], exile: [],
+    life: 20, opponent_life: 20, storm_count: 0, turn: 1, phase: "precombat_main",
+    mana_pool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+  };
+}
+
+// Phases the search can start from (a decision-relevant subset, in turn order).
+const FC_PHASES = [
+  ["upkeep", "Upkeep"], ["draw", "Draw step"], ["precombat_main", "Precombat main"],
+  ["begin_combat", "Beginning of combat"], ["declare_attackers", "Declare attackers"],
+  ["postcombat_main", "Postcombat main"], ["end_step", "End step"],
+];
+const FC_MANA = ["W", "U", "B", "R", "G", "C"];
 
 const MAX_FIXED_HAND = 7;
 
@@ -151,6 +172,7 @@ async function init() {
   $("sort-select").onchange = renderDeck;
   $("tab-sim").onclick = () => setSimMode("sim");
   $("tab-fixed").onclick = () => setSimMode("fixed");
+  $("tab-config").onclick = () => setSimMode("config");
   $("fixed-pad").onchange = renderFixedBuilder;
   $("fixed-pad-size").oninput = renderFixedBuilder; // slot count follows the size
 
@@ -334,6 +356,8 @@ function enterSession(payload) {
   $("viz-box").classList.add("hidden");
   state.vizNav = null;
   state.fixedHand = [];
+  state.fixedConfig = newFixedConfig();
+  state.fcZone = "battlefield";
   setSimMode("sim");
   setResumable(null);
   $("load-run-btn").disabled = !(state.session.results || []).length;
@@ -386,7 +410,15 @@ async function openRunsModal() {
       // A fixed opening hand of size H is equivalent to 7 − H mulligans (you
       // always draw 7 and bottom the rest), so show that instead of the raw 0.
       let mulligansShown = cfg.mulligans ?? 0;
-      if (fh.length) {
+      if (cfg.fixed_config) {
+        // Fixed-config run: no opening hand — describe the starting state.
+        mulligansShown = "—";
+        const fcHand = cfg.fixed_config.hand || [];
+        const icon = el("span", { className: "hand-icon", textContent: "⚙",
+          title: `fixed config — turn ${cfg.fixed_config.turn}, ${cfg.fixed_config.phase}` });
+        if (fcHand.length) hoverGrid(icon, fcHand, 0);
+        handCell = el("td", {}, el("span", { textContent: "config " }), icon);
+      } else if (fh.length) {
         const handSize = cfg.fixed_hand_pad_to != null ? cfg.fixed_hand_pad_to : fh.length;
         mulligansShown = Math.max(0, 7 - handSize);
         const icon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the fixed hand" });
@@ -473,7 +505,11 @@ function loadRun(r) {
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
-  if (cfg.fixed_hand && cfg.fixed_hand.length) {
+  if (cfg.fixed_config) {
+    state.fixedConfig = { ...newFixedConfig(), ...cfg.fixed_config };
+    state.fixedConfig.mana_pool = { ...newFixedConfig().mana_pool, ...(cfg.fixed_config.mana_pool || {}) };
+    setSimMode("config");
+  } else if (cfg.fixed_hand && cfg.fixed_hand.length) {
     state.fixedHand = cfg.fixed_hand.slice();
     $("fixed-pad").checked = cfg.fixed_hand_pad_to != null;
     if (cfg.fixed_hand_pad_to != null) $("fixed-pad-size").value = cfg.fixed_hand_pad_to;
@@ -498,7 +534,10 @@ function setResumable(r) {
   const missing = r && (((r.stats || {}).games_run || 0) < ((r.config || {}).num_games || 0));
   const ok = !!(r && missing && (r.status === "stopped" || r.status === "interrupted"));
   state.resumableId = ok ? r.id : null;
-  state.resumableMode = ok ? (((r.config || {}).fixed_hand || []).length ? "fixed" : "sim") : null;
+  const cfg = r ? (r.config || {}) : {};
+  state.resumableMode = ok
+    ? (cfg.fixed_config ? "config" : ((cfg.fixed_hand || []).length ? "fixed" : "sim"))
+    : null;
   updateResumeButton();
 }
 
@@ -890,10 +929,141 @@ function setSimMode(mode) {
   state.simMode = mode;
   $("tab-sim").classList.toggle("active", mode === "sim");
   $("tab-fixed").classList.toggle("active", mode === "fixed");
+  $("tab-config").classList.toggle("active", mode === "config");
   $("fixed-builder").classList.toggle("hidden", mode !== "fixed");
-  $("mull-field").classList.toggle("hidden", mode === "fixed");
+  $("config-builder").classList.toggle("hidden", mode !== "config");
+  // Mulligans only apply to random opening hands.
+  $("mull-field").classList.toggle("hidden", mode !== "sim");
   updateResumeButton(); // Resume only shows on the tab its run was made from
   if (mode === "fixed") renderFixedBuilder();
+  if (mode === "config") renderConfigBuilder();
+}
+
+// Cards that can be placed in a zone: mainboard cards + the commander(s).
+function placeableCards() {
+  return state.cards.filter((c) => c.board === "mainboard" || c.board === "commander");
+}
+
+// Total number of copies of `name` placed across every fixed-config zone.
+function fcUsage(name) {
+  const fc = state.fixedConfig;
+  return fc.battlefield.filter((x) => x.name === name).length
+    + fc.hand.filter((x) => x === name).length
+    + fc.graveyard.filter((x) => x === name).length
+    + fc.exile.filter((x) => x === name).length;
+}
+
+function fcAddCard(name) {
+  const card = placeableCards().find((c) => c.name === name);
+  if (!card || fcUsage(name) >= card.quantity) return;
+  const z = state.fcZone;
+  if (z === "battlefield") state.fixedConfig.battlefield.push({ name, tapped: false });
+  else state.fixedConfig[z].push(name);
+  renderConfigBuilder();
+}
+
+function fcRemove(zone, idx) {
+  state.fixedConfig[zone].splice(idx, 1);
+  renderConfigBuilder();
+}
+
+// Read the current global fields (turn/phase/life/mana/…) back into the model
+// so switching tabs or reloading a run keeps them.
+function fcSyncGlobals() {
+  const fc = state.fixedConfig;
+  fc.turn = Math.max(1, parseInt($("fc-turn").value) || 1);
+  fc.phase = $("fc-phase").value;
+  fc.life = parseInt($("fc-life").value) || 0;
+  fc.opponent_life = parseInt($("fc-opp-life").value) || 0;
+  fc.storm_count = Math.max(0, parseInt($("fc-storm").value) || 0);
+  for (const sym of FC_MANA) {
+    const inp = $(`fc-mana-${sym}`);
+    if (inp) fc.mana_pool[sym] = Math.max(0, parseInt(inp.value) || 0);
+  }
+}
+
+function renderConfigBuilder() {
+  if (!state.fixedConfig) state.fixedConfig = newFixedConfig();
+  const fc = state.fixedConfig;
+
+  // Phase select (populate once).
+  const phaseSel = $("fc-phase");
+  if (!phaseSel.options.length) {
+    FC_PHASES.forEach(([v, label]) => phaseSel.append(el("option", { value: v, textContent: label })));
+    phaseSel.onchange = fcSyncGlobals;
+  }
+  phaseSel.value = fc.phase;
+  $("fc-turn").value = fc.turn;
+  $("fc-life").value = fc.life;
+  $("fc-opp-life").value = fc.opponent_life;
+  $("fc-storm").value = fc.storm_count;
+  ["fc-turn", "fc-life", "fc-opp-life", "fc-storm"].forEach((id) => ($(id).onchange = fcSyncGlobals));
+
+  // Mana pool inputs (build once).
+  const manaWrap = $("fc-mana");
+  if (!manaWrap.children.length) {
+    FC_MANA.forEach((sym) => {
+      const inp = el("input", { id: `fc-mana-${sym}`, type: "number", min: "0", value: "0",
+        style: "width:3rem", onchange: fcSyncGlobals });
+      manaWrap.append(el("label", { className: "fc-mana-cell" },
+        el("img", { className: "ms", alt: sym, loading: "lazy",
+          src: `https://svgs.scryfall.io/card-symbols/${sym}.svg` }), inp));
+    });
+  }
+  FC_MANA.forEach((sym) => ($(`fc-mana-${sym}`).value = fc.mana_pool[sym] || 0));
+
+  // Zone chip lists.
+  const zonesWrap = $("fc-zones");
+  zonesWrap.replaceChildren();
+  const ZONES = [["battlefield", "Battlefield"], ["hand", "Hand"],
+    ["graveyard", "Graveyard"], ["exile", "Exile"]];
+  for (const [zone, label] of ZONES) {
+    const items = fc[zone];
+    const row = el("div", { className: "fc-zone" });
+    row.append(el("div", { className: "fc-zone-label" }, `${label} (${items.length})`));
+    const chips = el("div", { className: "fc-chips" });
+    if (!items.length) chips.append(el("span", { className: "muted", textContent: "—" }));
+    items.forEach((it, idx) => {
+      const name = zone === "battlefield" ? it.name : it;
+      const chip = el("span", { className: "fc-chip" });
+      const nm = el("span", { className: "fc-chip-name" }, name);
+      hoverable(nm, state.imageMap[name]);
+      chip.append(nm);
+      if (zone === "battlefield") {
+        const tap = el("button", {
+          className: "fc-tap" + (it.tapped ? " on" : ""),
+          title: it.tapped ? "tapped — click to untap" : "untapped — click to tap",
+          textContent: it.tapped ? "tapped" : "untapped",
+        });
+        tap.onclick = () => { it.tapped = !it.tapped; renderConfigBuilder(); };
+        chip.append(tap);
+      }
+      const x = el("button", { className: "fc-chip-x", title: "remove", textContent: "✕" });
+      x.onclick = () => fcRemove(zone, idx);
+      chip.append(x);
+      chips.append(chip);
+    });
+    row.append(chips);
+    zonesWrap.append(row);
+  }
+
+  // Target-zone selector + card picker (add to the selected zone).
+  const target = $("fc-target-zone");
+  target.value = state.fcZone;
+  target.onchange = () => { state.fcZone = target.value; };
+  const picker = $("fc-card-picker");
+  picker.replaceChildren();
+  placeableCards().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
+    const n = fcUsage(c.name);
+    const plus = el("button", { className: "step", textContent: "+" });
+    plus.disabled = n >= c.quantity;
+    plus.onclick = () => fcAddCard(c.name);
+    const nm = el("span", { className: "picker-name" }, c.name);
+    hoverable(nm, c.image);
+    picker.append(el("div", { className: "picker-row" + (n ? " chosen" : "") },
+      plus, el("span", { className: "picker-count", textContent: String(n) }),
+      nm, el("span", { className: "muted picker-qty", textContent: `/${c.quantity}` })));
+  });
 }
 
 // Only mainboard cards are drawable into an opening hand (commanders live in
@@ -970,7 +1140,9 @@ function renderFixedBuilder() {
 
 async function runSim() {
   const fixed = state.simMode === "fixed";
+  const config = state.simMode === "config";
   if (fixed && !state.fixedHand.length) { alert("Add at least one card to the fixed hand first."); return; }
+  if (config) fcSyncGlobals();  // capture the current global fields into the model
   // Run does NOT recompile (so hand-edited code is used as-is) — it only checks
   // that every enabled property has valid, runnable code. Persist first so the
   // validity check sees the current (possibly hand-edited) code.
@@ -995,7 +1167,7 @@ async function runSim() {
   const body = JSON.stringify({
     num_games: parseInt($("num-games").value) || 100,
     timeout_per_game_s: parseFloat($("timeout").value) || 5,
-    mulligans: fixed ? 0 : (parseInt($("mulligans").value) || 0),
+    mulligans: state.simMode === "sim" ? (parseInt($("mulligans").value) || 0) : 0,
     on_the_play: $("play-draw-toggle").dataset.play === "1",
     base_seed: seedField === "" ? null : parseInt(seedField),
     search_mode: $("search-mode").value,
@@ -1005,6 +1177,7 @@ async function runSim() {
     fixed_hand_pad_to: fixed && $("fixed-pad").checked
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)
       : null,
+    fixed_config: config ? JSON.parse(JSON.stringify(state.fixedConfig)) : null,
   });
   try {
     const r = await api(`/api/sessions/${state.session.id}/simulate`, { method: "POST", body });

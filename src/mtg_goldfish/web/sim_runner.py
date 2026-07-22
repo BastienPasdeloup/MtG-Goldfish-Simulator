@@ -245,6 +245,8 @@ class SimulationRunner:
                 fake_shuffle=config.fake_shuffle,
                 fixed_hand=config.fixed_hand,
                 fixed_hand_pad_to=config.fixed_hand_pad_to,
+                fixed_config=(config.fixed_config.model_dump()
+                              if config.fixed_config is not None else None),
             )
             status = "stopped"
             try:

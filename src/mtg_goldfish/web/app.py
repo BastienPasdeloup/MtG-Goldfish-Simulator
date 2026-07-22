@@ -28,7 +28,9 @@ from ..properties import (
     compile_condition,
     compile_condition_detailed,
 )
-from ..session import Session, SessionCorrupt, SessionStore, SimConfig, new_id, now_iso
+from ..session import (
+    FixedConfig, Session, SessionCorrupt, SessionStore, SimConfig, new_id, now_iso,
+)
 from .hub import HUB
 from .sim_runner import SimulationRunner
 
@@ -91,6 +93,8 @@ class SimulateRequest(BaseModel):
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
     fixed_hand_pad_to: int | None = None
+    # Fixed-config mode: a fully-specified starting state; None = normal.
+    fixed_config: FixedConfig | None = None
 
 
 # --------------------------------------------------------------------------
@@ -614,6 +618,7 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
         fake_shuffle=req.fake_shuffle,
         fixed_hand=(req.fixed_hand or None),
         fixed_hand_pad_to=(req.fixed_hand_pad_to if req.fixed_hand else None),
+        fixed_config=req.fixed_config,
     )
     try:
         result_id = runner.start(session, config, loop)

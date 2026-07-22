@@ -195,6 +195,22 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .picker-name { flex: 1; cursor: default; }
 .picker-qty { font-size: 11px; }
 
+/* fixed-config builder */
+.fc-mana-cell { display: inline-flex; align-items: center; gap: .2rem; }
+.fc-mana-cell .ms { width: 15px; height: 15px; }
+.fc-zone { display: flex; align-items: baseline; gap: .5rem; margin: .3rem 0; }
+.fc-zone-label { min-width: 6.5rem; color: var(--muted); font-size: 12px; font-weight: 600; }
+.fc-chips { display: flex; flex-wrap: wrap; gap: .3rem; flex: 1; }
+.fc-chip { display: inline-flex; align-items: center; gap: .3rem; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 99px; padding: .1rem .2rem .1rem .55rem; font-size: 12px; }
+.fc-chip-name { cursor: default; }
+.fc-chip-x { border: none; background: transparent; color: var(--muted); cursor: pointer;
+  padding: 0 .25rem; font-size: 11px; line-height: 1; }
+.fc-chip-x:hover { color: var(--bad, #e05561); }
+.fc-tap { font-size: 10px; text-transform: uppercase; letter-spacing: .3px; border-radius: 99px;
+  border: 1px solid var(--border); background: transparent; color: var(--muted); padding: .05rem .4rem; cursor: pointer; }
+.fc-tap.on { color: var(--accent); border-color: var(--accent); }
+
 /* mana pips (used for the board mana pool) */
 .pip {
   display: inline-flex; align-items: center; justify-content: center;

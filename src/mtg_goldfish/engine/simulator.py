@@ -46,7 +46,7 @@ from .actions import (
     deal_combat_damage,
     legal_actions,
 )
-from .game_state import GameState, new_game_from_deck
+from .game_state import GameState, make_permanent, new_game_from_deck
 from .phases import MAIN_PHASES, TURN_ORDER, Phase, phase_index
 
 #: Non-main steps that grant priority for instant-speed plays. Untap and
@@ -111,6 +111,13 @@ class SimulationConfig:
     #: automatic (all cores but one, to keep the machine responsive); 1 = fully
     #: sequential in-process.
     parallel_workers: int | None = None
+    #: Fixed-config mode: a fully-specified starting state (a plain dict — the
+    #: FixedConfig model dumped) the search begins from instead of an opening
+    #: hand. Keys: battlefield [{name, tapped}], hand/graveyard/exile [names],
+    #: life, opponent_life, mana_pool {sym: n}, storm_count, turn, phase. The
+    #: library is the deck cards not placed elsewhere (shuffled per game seed).
+    #: Mutually exclusive with fixed_hand.
+    fixed_config: dict | None = None
 
 
 @dataclass
@@ -773,6 +780,70 @@ def _fixed_opening_hand(
     return [(hand, lib, [])]
 
 
+def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameState:
+    """Build the starting state for a Fixed-config run: place named deck cards
+    into the battlefield / hand / graveyard / exile, set life totals, mana pool,
+    storm count, turn and phase; the remaining deck cards form the library
+    (shuffled by `seed`). Battlefield permanents are not summoning-sick and fire
+    NO enter-the-battlefield triggers (they are already in play)."""
+    rng = random.Random(seed)
+    variant = base_state.clone()
+    lib_pool = list(base_state.library)          # deck cards
+    cmd_pool = list(base_state.command_zone)     # commander(s)
+
+    def take(name: str):
+        for pool in (lib_pool, cmd_pool):
+            for i, c in enumerate(pool):
+                if c.name == name:
+                    return pool.pop(i)
+        return None
+
+    variant.hand, variant.battlefield = [], []
+    variant.graveyard, variant.exile = [], []
+    variant.mana_pool.clear()
+
+    for spec in fixed.get("battlefield", []):
+        name = spec.get("name") if isinstance(spec, dict) else spec
+        card = take(name)
+        if card is None:
+            continue
+        perm = make_permanent(variant, card,
+                              is_commander=card.name in base_state.commander_names)
+        perm.summoning_sick = False
+        perm.tapped = bool(isinstance(spec, dict) and spec.get("tapped"))
+        variant.battlefield.append(perm)
+    for name in fixed.get("hand", []):
+        card = take(name)
+        if card is not None:
+            variant.hand.append(card)
+    for name in fixed.get("graveyard", []):
+        card = take(name)
+        if card is not None:
+            variant.graveyard.append(card)
+    for name in fixed.get("exile", []):
+        card = take(name)
+        if card is not None:
+            variant.exile.append(card)
+
+    rng.shuffle(lib_pool)
+    variant.library = lib_pool           # what is left of the deck
+    variant.command_zone = cmd_pool      # commanders not placed on the battlefield
+
+    variant.life = int(fixed.get("life", 20))
+    variant.opponent_life = int(fixed.get("opponent_life", 20))
+    variant.storm_count = int(fixed.get("storm_count", 0))
+    for sym, n in (fixed.get("mana_pool") or {}).items():
+        if n:
+            variant.mana_pool.add(sym, int(n))
+    variant.turn = max(1, int(fixed.get("turn", 1)))
+    try:
+        variant.phase = Phase(fixed.get("phase", "precombat_main"))
+    except ValueError:
+        variant.phase = Phase.PRECOMBAT_MAIN
+    variant.rng_seed = seed  # drives mid-game shuffles
+    return variant
+
+
 def _seed_game(
     base_state: GameState,
     properties: list[CompiledProperty],
@@ -799,6 +870,24 @@ def _seed_game(
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root
     ctx.tree_count = 1
+
+    if config.fixed_config:
+        # Fixed-config mode: begin from a single, fully-specified state (no
+        # opening hand / mulligan branching) and search forward. Only the
+        # library (the deck cards left over) varies per game seed.
+        variant = _build_fixed_variant(base_state, config.fixed_config,
+                                        config.base_seed + game_index)
+        hand_names = [c.name for c in variant.hand]
+        variant.emit(
+            f"fixed config — turn {variant.turn}, {variant.phase.value} · "
+            f"life {variant.life}, {variant.mana_pool.total()} mana · hand {hand_names}")
+        node = ctx.new_tree_node(
+            root, f"fixed config (turn {variant.turn}, {variant.phase.value})", variant)
+        if node is not None:
+            node["hand"] = hand_names
+        items = [(variant, frozenset(), node, "advance", node is not None, 0)]
+        ctx.branches_considered += 1
+        return ctx, root, items, [(node, hand_names)], list(variant.library)
 
     if config.fixed_hand:
         # Fixed-hand mode: the opening hand is chosen by the user (optionally
@@ -859,7 +948,8 @@ def _assemble_outcome(
 
     # For failed games there is no single "kept" hand — report the 7 drawn
     # (or the fixed hand in fixed-hand mode).
-    winning_hand = keep_nodes[0][1] if config.fixed_hand else [c.name for c in shuffled[:7]]
+    winning_hand = (keep_nodes[0][1] if (config.fixed_hand or config.fixed_config)
+                    else [c.name for c in shuffled[:7]])
     if success:
         for hand_node, hand_names in keep_nodes:
             if hand_node is not None and hand_node["success"]:

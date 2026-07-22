@@ -7,6 +7,30 @@ from ..deck.models import Deck
 from ..properties.models import PropertySpec
 
 
+class FixedBattlefieldCard(BaseModel):
+    """A permanent placed on the battlefield in a Fixed-config run."""
+    name: str
+    tapped: bool = False
+
+
+class FixedConfig(BaseModel):
+    """A fully-specified starting game state for a Fixed-config run: the search
+    begins from exactly this state (at `turn`/`phase`) instead of from an
+    opening hand, and explores forward. The library is whatever deck cards are
+    not placed in another zone (shuffled per game seed)."""
+    battlefield: list[FixedBattlefieldCard] = Field(default_factory=list)
+    hand: list[str] = Field(default_factory=list)
+    graveyard: list[str] = Field(default_factory=list)
+    exile: list[str] = Field(default_factory=list)
+    life: int = 20
+    opponent_life: int = 20
+    # Mana currently in the pool, by colour symbol: W/U/B/R/G/C.
+    mana_pool: dict[str, int] = Field(default_factory=dict)
+    storm_count: int = 0
+    turn: int = 1
+    phase: str = "precombat_main"  # a Phase value (see engine.phases)
+
+
 class SimConfig(BaseModel):
     num_games: int = 100
     timeout_per_game_s: float = 5.0
@@ -25,6 +49,8 @@ class SimConfig(BaseModel):
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
     fixed_hand_pad_to: int | None = None
+    # Fixed-config mode: a fully-specified starting state; None = normal.
+    fixed_config: FixedConfig | None = None
 
 
 class SimResult(BaseModel):
