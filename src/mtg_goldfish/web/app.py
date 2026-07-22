@@ -429,6 +429,37 @@ def compile_properties(session_id: str) -> dict:
     return {"properties": [p.model_dump() for p in session.properties], "warnings": warnings}
 
 
+@app.post("/api/sessions/{session_id}/properties/{prop_id}/compile")
+def compile_one_property(session_id: str, prop_id: str) -> dict:
+    """Compile a SINGLE property from its English (the per-property Compile
+    button). Only the targeted property is touched; a click means "recompile
+    this one", so it overwrites any existing (incl. hand-edited) code."""
+    session = _load(session_id)
+    spec = next((s for s in session.properties if s.id == prop_id), None)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Property not found.")
+    warnings: list[str] = []
+    if not spec.english.strip():
+        spec.code = None
+        spec.confidence = None
+        spec.compile_note = None
+        spec.manual = False
+        warnings.append("This property has no condition — nothing was compiled.")
+    else:
+        try:
+            r = compile_condition_detailed(spec.english, _deck_card_names(session.deck))
+            spec.code = r["code"]
+            spec.confidence = r["confidence"]
+            spec.compile_note = r["notes"]
+        except Exception as exc:  # noqa: BLE001 - surface per-property
+            spec.code = f"# compilation error: {exc}\ndef check(state):\n    return False\n"
+            spec.confidence = "low"
+            spec.compile_note = f"compilation failed: {exc}"
+        spec.manual = False  # freshly generated, not hand-edited
+    store.save(session)
+    return {"property": spec.model_dump(), "warnings": warnings}
+
+
 @app.post("/api/sessions/{session_id}/properties/validate")
 def validate_properties(session_id: str) -> dict:
     """Check that every enabled property has valid, runnable code — WITHOUT

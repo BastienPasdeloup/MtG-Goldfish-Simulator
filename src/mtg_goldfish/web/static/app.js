@@ -101,7 +101,6 @@ async function init() {
     window.open("https://bastienpasdeloup.github.io/MtG-Goldfish-Simulator/", "_blank", "noopener");
   $("create-btn").onclick = doCreate;
   $("add-prop").onclick = () => { addProperty(); renderProps(); };
-  $("compile-props").onclick = compileProps;
   $("run-btn").onclick = runSim;
   $("play-draw-toggle").onclick = (e) => {
     const b = e.currentTarget;
@@ -784,8 +783,12 @@ function propRow(p, i) {
     p.code = null; p.confidence = null; p.compile_note = null;
     p.manual = false; p.codeValid = null;
   };
+  // One Compile button per property, to the right of its text box — it compiles
+  // ONLY this property (from its English).
+  const compileBtn = el("button", { className: "primary", textContent: "Compile" });
+  compileBtn.onclick = () => compileProperty(p, compileBtn);
 
-  wrap.append(trigger, ta);
+  wrap.append(trigger, el("div", { className: "compose" }, ta, compileBtn));
   if (p.code) {
     // Generated code shows the model's confidence; once hand-edited it becomes
     // "Manual code" whose valid/invalid status is set when Run is clicked.
@@ -857,20 +860,23 @@ function showPropWarnings(warnings) {
   box.replaceChildren(...warnings.map((w) => el("div", { textContent: "⚠ " + w })));
 }
 
-async function compileProps() {
+// Compile a SINGLE property from its English (one button per property). Only
+// the associated property is affected; the others are left untouched.
+async function compileProperty(p, btn) {
   await saveProps();
-  const btn = $("compile-props");
-  btn.disabled = true; btn.textContent = "Compiling…";
+  if (btn) { btn.disabled = true; btn.textContent = "Compiling…"; }
   try {
-    const r = await api(`/api/sessions/${state.session.id}/properties/compile`, { method: "POST" });
-    state.props = r.properties.map((p) => ({ ...p }));
+    const r = await api(
+      `/api/sessions/${state.session.id}/properties/${p.id}/compile`,
+      { method: "POST" });
+    Object.assign(p, r.property); // code/confidence/compile_note/manual for THIS prop
+    p.codeValid = null;
     renderProps();
     showPropWarnings(r.warnings);
-    // The properties (may) have changed: the shown run no longer reflects
-    // them — start from a clean slate, exactly like clicking Run does.
+    // This property changed: the shown run no longer reflects it — clean slate.
     resetRunState();
   } catch (e) { alert("Compile failed: " + e.message); }
-  finally { btn.disabled = false; btn.textContent = "Compile → review code"; }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "Compile"; } }
 }
 
 // ---- simulation + websocket
@@ -1430,7 +1436,9 @@ function treeHtml(payload) {
   /* sticky step header: scrolls horizontally with the tree, pinned vertically */
   #ruler { position:sticky; top:0; height:26px; z-index:2; background:#171a21; border-bottom:1px solid #2e3340; }
   #ruler span { position:absolute; top:5px; font-size:11px; letter-spacing:.5px; text-transform:uppercase; color:#9aa3b2; white-space:nowrap; }
-  svg { display:block; }
+  /* Paint the SVG its own opaque background (same as the wrap) so a large
+     transparent canvas never shows compositing seams / "darker" patches. */
+  svg { display:block; background:#0f1116; }
   .colline { stroke:#232732; stroke-width:1; stroke-dasharray:4 4; }
   .edge { fill:none; stroke:#3a4150; stroke-width:1.2; }
   .edge.win { stroke:#d9a441; stroke-width:2; }
@@ -1443,6 +1451,9 @@ function treeHtml(payload) {
   .node circle.plain { fill:#4f8cff; }
   .node.win circle { stroke:#f2e0b8; stroke-width:1.6; }
   .node text { fill:#c5ccd8; font-size:11px; }
+  /* Non-clickable states (no hidden subbranches / leaf lines) are dimmed grey
+     so the clickable, expandable ones stand out. */
+  .node:not(.exp):not(.win) text { fill:#6b7280; }
   .node.win text { fill:#f2e0b8; }
   .node.exp { cursor: pointer; }
   .node.exp text:hover { fill:#e6e8ee; }

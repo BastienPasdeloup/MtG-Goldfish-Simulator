@@ -141,6 +141,10 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .prop { border: 1px solid var(--border); border-radius: 8px; padding: .6rem; margin-bottom: .6rem; background: var(--panel-2); }
 .prop .trigger { gap: .4rem; }
 .prop textarea { margin-top: .4rem; }
+/* English text box + its per-property Compile button, side by side. */
+.prop .compose { display: flex; gap: .5rem; align-items: stretch; margin-top: .4rem; }
+.prop .compose textarea { flex: 1; margin-top: 0; }
+.prop .compose button { white-space: nowrap; }
 .prop pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: .5rem; overflow-x: auto; font-size: 12px; color: #cfe3c9; white-space: pre; }
 .confidence { margin-left: .5rem; font-size: 10px; text-transform: uppercase; letter-spacing: .4px;
   padding: .05rem .4rem; border-radius: 999px; border: 1px solid currentColor; vertical-align: middle; }
