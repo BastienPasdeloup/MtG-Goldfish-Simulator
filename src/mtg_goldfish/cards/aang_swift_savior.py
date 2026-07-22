@@ -11,6 +11,12 @@ Front (Aang, Swift Savior) — 2/3, Flash, Flying (both handled by the engine):
     Modelled as a branching ETB: airbend nothing, or exile one other creature
     you control (registered for the {2} recast — see GameState.airbend_exile
     and actions._airbend_cast_actions). Land faces (no mana cost) are excluded.
+    When instant-speed play is enabled (state.instant_speed), airbend can ALSO
+    hit a spell you are casting: Aang has flash, so — like the counterspell
+    "counter your own spell" niche — we model casting a hand spell (paying its
+    cost, onto the stack) and airbending it before it resolves, exiling it and
+    registering the {2} recast. The pay-off is the modal recast (cast a cheap
+    face, airbend it, recast the expensive face for {2}).
   * Waterbend {8}: Transform Aang.  ({8} generic, instant-speed activated
     ability; disappears once transformed.)
 
@@ -25,7 +31,7 @@ from __future__ import annotations
 from ..engine.mana import ManaCost
 from ._common import branch_over, transform_actions
 from .base import Card
-from .registry import register
+from .registry import build_card, register
 
 
 @register
@@ -39,10 +45,13 @@ class AangSwiftSavior(Card):
             state, perm, ManaCost(generic=8), "Aang and La, Ocean's Fury")
 
     def on_etb(self, state, permanent):
-        # Airbend up to one OTHER target creature you control: exile it and let
-        # its owner recast it for {2}. "Up to one" → the "airbend nothing"
+        # Airbend up to one OTHER target creature you control (always), or — with
+        # instant-speed play on — a spell you are casting. Exile the target and
+        # let its owner recast it for {2}. "Up to one" → the "airbend nothing"
         # branch is always offered. Distinct by name to bound the branching.
-        targets = []
+        from ..engine.actions import can_afford
+
+        options = []  # ("creature", uid) | ("spell", card_name)
         seen = set()
         for p in state.battlefield:
             if p.uid == permanent.uid or not p.is_creature_now:
@@ -50,23 +59,53 @@ class AangSwiftSavior(Card):
             if p.name in seen:
                 continue
             seen.add(p.name)
-            targets.append(p.uid)
-        if not targets:
-            return None  # no legal target → "up to one" does nothing (no branch)
-        options = [None, *targets]
+            options.append(("creature", p.uid))
 
-        def fn(st, uid):
-            if uid is None:
+        if state.instant_speed:
+            seen_s = set()
+            for c in state.hand:
+                if c.is_land or c.name in seen_s:
+                    continue
+                seen_s.add(c.name)
+                impl = build_card(c)
+                if impl.is_castable(state) and can_afford(state, impl.cast_cost(state)):
+                    options.append(("spell", c.name))
+
+        if not options:
+            return None  # no legal target → "up to one" does nothing (no branch)
+        options = [None, *options]
+
+        def fn(st, opt):
+            if opt is None:
                 st.emit("airbend nothing")
                 return None
-            target = st.find_permanent(uid)
-            if target is None:
+            kind, ref = opt
+            if kind == "creature":
+                target = st.find_permanent(ref)
+                if target is None:
+                    return None
+                card = target.card
+                st.emit(f"airbend {target.name} — exile, may recast for {{2}}")
+                st.leaves_battlefield(target, "exile")
+                # Keep it in exile (zone display) AND register the {2} recast.
+                st.airbend_exile.append(card)
                 return None
-            card = target.card
-            st.emit(f"airbend {target.name} — exile, may recast for {{2}}")
-            st.leaves_battlefield(target, "exile")
-            # Keep it in exile (zone display) AND register the {2} recast.
+            # A spell you are casting: cast it (onto the stack, paying its cost),
+            # then airbend it before it resolves — exile, recastable for {2}.
+            from ..engine.actions import begin_cast
+
+            card = next((c for c in st.hand if c.name == ref), None)
+            if card is None:
+                return None
+            if not begin_cast(st, card, build_card(card).cast_cost(st),
+                              tag="airbend target"):
+                return None
+            if card in st.stack:
+                st.stack.remove(card)
+            st.exile.append(card)
             st.airbend_exile.append(card)
+            st.emit(f"airbend {card.name} (spell on the stack) — exile, "
+                    f"may recast for {{2}}")
             return None
 
         return branch_over(state, options, fn)

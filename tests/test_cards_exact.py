@@ -544,6 +544,50 @@ def test_aang_airbend_modal_card_casts_any_face_for_two():
     assert not state.airbend_exile
 
 
+def test_aang_airbends_a_spell_being_cast_with_instant_speed():
+    """With instant-speed play on, airbend can hit a spell you are casting: the
+    hand spell is cast (its cost paid) then exiled before it resolves, and can
+    be recast for {2}. Off by default (no spell target without instant_speed)."""
+    from mtg_goldfish.deck.models import CardData, CardFace
+
+    modal = CardData(
+        name="Cheap Bolt // Huge Beast",
+        type_line="Instant",
+        mana_cost="{R}",
+        faces=[
+            CardFace(name="Cheap Bolt", type_line="Instant", mana_cost="{R}"),
+            CardFace(name="Huge Beast", type_line="Creature — Beast",
+                     mana_cost="{7}", power="8", toughness="8"),
+        ],
+    )
+    # Default (instant_speed off): a spell in hand is NOT an airbend target.
+    state = _state([])
+    state.hand.append(modal)
+    perm = state.put_on_battlefield(card("Aang, Swift Savior // Aang and La, Ocean's Fury"),
+                                    fire_etb=False)
+    assert perm.impl.on_etb(state, perm) is None  # no creature, no spell target
+
+    # instant_speed on: airbend the spell you're casting.
+    state = _state([])
+    state.instant_speed = True
+    state.hand.append(modal)
+    state.mana_pool.add("R", 1)  # to cast the front (its {R} cost is paid)
+    perm = state.put_on_battlefield(card("Aang, Swift Savior // Aang and La, Ocean's Fury"),
+                                    fire_etb=False)
+    branches = perm.impl.on_etb(state, perm)
+    assert branches is not None and len(branches) == 2  # nothing + the spell
+    airbended = next(b for b in branches if b.airbend_exile)
+    assert any(c.name == modal.name for c in airbended.airbend_exile)
+    assert modal not in airbended.hand and modal not in airbended.stack  # cast, off stack
+    assert airbended.mana_pool.total() == 0  # the {R} cost was paid
+    # Recast the big back face for {2}.
+    airbended.mana_pool.add("C", 2)
+    beast = next(a for a in legal_actions(airbended)
+                 if "airbend" in a.label and "(Huge Beast)" in a.label)
+    beast.apply(airbended)
+    assert airbended.permanents_named("Huge Beast")
+
+
 def test_aang_waterbend_transforms_to_5_5():
     """Waterbend {8}: Transform → Aang and La, Ocean's Fury (5/5)."""
     state = _state([])
