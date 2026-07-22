@@ -298,6 +298,18 @@ class GameState:
     # Moonmist: combat damage by creatures other than Werewolves/Wolves is
     # prevented this turn (checked in deal_combat_damage).
     prevent_nonwolf_combat_damage: bool = False
+    # One-shot "cast without paying its mana cost this turn" grants (World War
+    # Hulk chapter I). Each: {"colors": tuple|None, "creature": bool, "label": str}
+    # — a matching hand spell may be cast for free, consuming the grant. Offered
+    # by actions.legal_actions and cleared at the start of your next turn.
+    free_casts: list = field(default_factory=list)
+    # Teferi, Time Raveler +1: until your next turn you may cast sorcery spells
+    # as though they had flash (they become instant-speed in the search's
+    # instant-speed windows). Cleared at your next untap.
+    cast_sorcery_as_flash: bool = False
+    # Teferi, Hero of Dominaria +1: untap up to this many lands at the beginning
+    # of the next end step (applied in the CLEANUP/END_STEP step entry).
+    untap_lands_end_step: int = 0
 
     # game-long bookkeeping
     cards_drawn: int = 0
@@ -380,6 +392,9 @@ class GameState:
             attacked_this_turn=self.attacked_this_turn,
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
+            free_casts=[dict(g) for g in self.free_casts],
+            cast_sorcery_as_flash=self.cast_sorcery_as_flash,
+            untap_lands_end_step=self.untap_lands_end_step,
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
             commander_cast_this_game=self.commander_cast_this_game,
@@ -520,6 +535,9 @@ class GameState:
         self.attacked_this_turn = False
         self.left_graveyard_this_turn = False
         self.prevent_nonwolf_combat_damage = False
+        self.free_casts = []
+        self.cast_sorcery_as_flash = False
+        self.untap_lands_end_step = 0
         for p in self.battlefield:
             p.turn_flags.clear()
 
@@ -707,9 +725,14 @@ class GameState:
     def put_on_battlefield(
         self, card: CardData, *, is_commander: bool = False,
         tapped: bool | None = None, token: bool = False, fire_etb: bool = True,
-        announce: str | None = None,
+        announce: str | None = None, transformed: bool = False,
     ) -> Permanent:
         perm = make_permanent(self, card, is_commander=is_commander, token=token)
+        # A modal DFC entering on its BACK face (an MDFC land played as your land
+        # drop): flip it BEFORE recording the entry so its name / is_land / the
+        # entered_by_turn + enter_battlefield event all reflect the back face.
+        if transformed:
+            perm.transformed = True
         if tapped is not None:
             perm.tapped = tapped
         self.battlefield.append(perm)
@@ -968,6 +991,35 @@ class GameState:
         """How many cards were drawn because a spell or ability of `source`
         (name substring) resolved."""
         return self.count_events(kind="draw", via=source, turn=turn)
+
+    def cards_put_in_hand_by(
+        self, source: str, *, via_kind: str | None = None, turn: int | None = None,
+        min_turn: int | None = None, max_turn: int | None = None,
+    ) -> "CardList":
+        """The CARD OBJECTS a resolving spell or ability of `source` (name
+        substring) PUT INTO YOUR HAND WITHOUT drawing them — Atraxa's reveal,
+        a tutor-to-hand, "return to your hand", etc. This is NOT drawing (use
+        `cards_drawn_by` for that) and NOT the current hand size (`cards_in_hand`)
+        — it counts only cards this source moved into your hand. Compares
+        numerically by length, so `cards_put_in_hand_by(...) >= N` works. e.g.
+        "Atraxa's enter-the-battlefield ability put at least 3 cards into your
+        hand" -> cards_put_in_hand_by(state.commander_name(), via_kind="triggered") >= 3."""
+        pred = (self._turn_range_pred(min_turn, max_turn)
+                if (min_turn is not None or max_turn is not None) else None)
+        return CardList(
+            e["card"] for e in self.events_matching(
+                kind="put_in_hand", via=source, via_kind=via_kind, turn=turn, pred=pred)
+            if e.get("card") is not None
+        )
+
+    def put_in_hand(self, card: CardData) -> None:
+        """Put `card` into your hand from a non-draw effect (reveal-to-hand,
+        tutor, bounce) and record a `put_in_hand` event attributed to whatever
+        is currently resolving — so `cards_put_in_hand_by(source)` can count it.
+        Distinct from `draw()` (drawing off the top of the library)."""
+        self.hand.append(card)
+        self.note_event("put_in_hand", card.name, card=card,
+                        is_creature=card.is_creature, is_land=card.is_land)
 
     def commander_name(self) -> str:
         """The deck's (first) commander name, wherever the card currently is."""

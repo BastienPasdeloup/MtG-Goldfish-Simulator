@@ -290,6 +290,22 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             if perm.counters.get("end_step_sac"):
                 state.emit(f"{perm.name}: sacrifice at beginning of end step")
                 state.leaves_battlefield(perm, "graveyard", reason="sacrifice")
+        # "At the beginning of the next end step, untap up to N lands" (Teferi,
+        # Hero of Dominaria +1). Untap the tapped lands (up to N) so the mana is
+        # available for the end-step instant-speed window / next turn.
+        if state.untap_lands_end_step:
+            n = state.untap_lands_end_step
+            state.untap_lands_end_step = 0
+            untapped = []
+            for perm in state.battlefield:
+                if n <= 0:
+                    break
+                if perm.is_land and perm.tapped:
+                    perm.tapped = False
+                    untapped.append(perm.name)
+                    n -= 1
+            if untapped:
+                state.emit(f"Teferi, Hero of Dominaria: untap {', '.join(untapped)}")
     elif state.phase == Phase.CLEANUP:
         for perm in state.battlefield:
             perm.temp_power = 0

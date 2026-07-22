@@ -49,6 +49,14 @@ resolution actually did):
       # prefer permanents_put_by(...) >= N; cards_put_by(...) also compares by
       # length so cards_put_by(...) >= N works too.
   state.cards_drawn_by(source: str, turn=None) -> int
+  state.cards_put_in_hand_by(source: str, via_kind=None, turn=None,
+                             min_turn=None, max_turn=None) -> list[card]
+      # the CARD OBJECTS a resolving spell/ability of `source` PUT INTO YOUR
+      # HAND without drawing them — Atraxa's reveal-and-put-into-hand, a
+      # tutor-to-hand, "return to hand", etc. NOT drawing, NOT the current hand
+      # size. Compares by length, so cards_put_in_hand_by(...) >= N works.
+      # "Atraxa's ETB put at least 3 cards into your hand" ->
+      #   state.cards_put_in_hand_by(state.commander_name(), via_kind="triggered") >= 3
   state.ability_activated(source: str, turn=None) -> bool  # an activated ability
       # of a card whose name contains `source` was activated (optionally on `turn`)
   state.ability_succeeded(source: str, turn=None) -> bool  # ...and it achieved its
@@ -155,9 +163,13 @@ Generic event access (to test ANYTHING that happened during the game):
       "enter_battlefield" / "leave_battlefield"  (+ is_land, is_creature,
           is_token; leave also has "to": "graveyard"|"exile"|"hand"|"none")
       "draw" (name = the card drawn)
+      "put_in_hand" (a card put into your hand WITHOUT drawing it — Atraxa's
+          reveal, a tutor-to-hand, a bounce; + is_creature, is_land)
       "activated", "trigger_resolved", "spell_resolved", "ability_success"
       Remember: "cast"/"play_land" (the player's action) ≠ "enter_battlefield"
-      (a permanent hitting the battlefield, however it got there).
+      (a permanent hitting the battlefield, however it got there); and
+      "put_in_hand" (an effect moving a card into your hand) ≠ "draw"
+      (drawing off the top of the library) ≠ the current hand SIZE.
   Examples:
     # "at least two creatures died this game"
     def check(state):

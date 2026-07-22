@@ -27,9 +27,8 @@ class ClearwaterPathway(Card):
             st.hand.remove(card)
             st.lands_played_this_turn += 1
             st.note_event("play_land", "Murkwater Pathway", card=card, is_land=True)
-            perm = st.put_on_battlefield(card, fire_etb=False)
+            perm = st.put_on_battlefield(card, fire_etb=False, transformed=True)  # Murkwater Pathway
             perm.turn_flags["played_as_land"] = 1
-            perm.transformed = True  # Murkwater Pathway
             st.queue_entry_triggers([perm])
             st.emit("play land Murkwater Pathway")
             return None

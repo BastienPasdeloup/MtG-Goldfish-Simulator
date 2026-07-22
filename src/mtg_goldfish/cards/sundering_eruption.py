@@ -83,9 +83,8 @@ class SunderingEruption(Card):
                 st.hand.remove(card)
                 st.lands_played_this_turn += 1
                 st.note_event("play_land", "Volcanic Fissure", card=card, is_land=True)
-                perm = st.put_on_battlefield(card, fire_etb=False)
+                perm = st.put_on_battlefield(card, fire_etb=False, transformed=True)  # Volcanic Fissure
                 perm.turn_flags["played_as_land"] = 1
-                perm.transformed = True
                 perm.tapped = mode["tapped"]
                 if mode["life"]:
                     st.life -= mode["life"]

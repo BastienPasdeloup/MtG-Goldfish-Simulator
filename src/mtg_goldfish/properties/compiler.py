@@ -50,6 +50,13 @@ ability_activated(X) and creatures_in_play() >= 1): that passes even when some \
 OTHER effect produced the result. The property is that THIS ability caused it. \
 "uses / activates its ability" -> via_kind="activated"; "its triggered ability / \
 when ... triggers" -> via_kind="triggered".
+- "PUTS cards INTO HAND" is NOT "draws" and NOT the hand SIZE. "X puts / reveals \
+and puts N cards into your hand", "Atraxa's ETB puts at least 3 cards to hand", \
+"a tutor put a card into hand" -> cards_put_in_hand_by(source, via_kind=..., ) >= N \
+(an effect moving a card into hand). Do NOT use cards_drawn_by (that is drawing \
+off the top) and do NOT use len(state.hand) / cards_in_hand() (that counts ALL \
+cards in hand, including ones already there). For Atraxa specifically the ETB is \
+a TRIGGERED ability: cards_put_in_hand_by(state.commander_name(), via_kind="triggered") >= 3.
 - Commander leaving play / the command zone: "the commander leaves play / dies / \
 is exiled" -> commander_left_play(...); "the commander leaves play AND returns \
 to the command zone" (or just "returns to the command zone") -> \

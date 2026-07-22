@@ -223,6 +223,16 @@ def resolve_to_graveyard(state: GameState, card) -> None:
 # --------------------------------------------------------------------------
 # Generic actions
 # --------------------------------------------------------------------------
+def _front_is_land(card) -> bool:
+    """Whether the card's FRONT face is a land — i.e. it can be played as your
+    land drop from the front. A modal DFC whose front is a spell but whose back
+    is a land (Waterlogged Teachings — "Instant // Land") is NOT a front land:
+    the combined `card.is_land` is True (it contains "Land"), but its front is
+    cast and its back land is played via the card's own hand_actions."""
+    tl = card.faces[0].type_line if card.faces else card.type_line
+    return "land" in tl.split("—")[0].lower()
+
+
 def _is_instant_speed(card) -> bool:
     """Whether a card can be cast at instant speed (an instant, or any spell
     with the Flash keyword). Sorceries, creatures and other permanents without
@@ -375,14 +385,24 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
         seen.add(card.name)
         impl = _impl(card)
 
-        if impl.is_land and land_drop_ok:
+        # Route by the FRONT face, not the combined `is_land`: a modal DFC whose
+        # front is a spell but whose back is a land (Waterlogged Teachings —
+        # "Instant // Land") reads as `is_land` because "Land" is in the combined
+        # type line, which would wrongly offer a generic land drop that enters
+        # the FRONT (spell) face. Its back land is played via its own
+        # `hand_actions` (which flips the permanent); its front is cast.
+        front_is_land = _front_is_land(card)
+        if front_is_land and land_drop_ok:
             modes = impl.etb_modes(state)
             if modes:
                 actions.extend(PlayLand(card.name, mode=m) for m in modes)
             else:
                 actions.append(PlayLand(card.name))
-        elif not impl.is_land:
-            inst = _is_instant_speed(card)
+        elif not front_is_land:
+            # Teferi, Time Raveler +1: sorcery spells may be cast as though they
+            # had flash — treat them as instant-speed so they appear in the
+            # search's instant-speed windows.
+            inst = _is_instant_speed(card) or (state.cast_sorcery_as_flash and card.is_sorcery)
             custom = impl.cast_actions(state)
             if custom is not None:
                 actions.extend(_mark(list(custom), inst))
@@ -453,10 +473,81 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
     for perm in list(state.battlefield):
         actions.extend(perm.impl.battlefield_actions(state, perm))
 
+    # --- free casts ("cast without paying its mana cost", World War Hulk I) ---
+    actions.extend(_free_cast_actions(state))
+
+    # --- alternative casting statics (Dream Halls) ---
+    for perm in list(state.battlefield):
+        actions.extend(perm.impl.alt_cast_actions(state, perm))
+
     if not sorcery_speed_ok:
         actions = [a for a in actions if not a.sorcery_speed]
     actions.append(PassPhase())
     return actions
+
+
+def _grant_matches(grant: dict, card) -> bool:
+    """Whether a free-cast grant applies to `card`."""
+    if grant.get("creature") and not card.is_creature:
+        return False
+    colors = grant.get("colors")
+    if colors and not (set(colors) & set(card.colors)):
+        return False
+    return True
+
+
+def cast_without_paying(state: GameState, card, *, zone: list | None = None,
+                        is_commander: bool = False, tag: str = "") -> object:
+    """Cast `card` from `zone` (default hand) paying NO mana cost, then resolve
+    it. Used by "cast without paying its mana cost" effects and Dream Halls (the
+    caller pays the alternative cost — e.g. a discard — first). Returns the ETB /
+    on_resolve branches (or None), so the caller can `state.settle(...)` them."""
+    zone = state.hand if zone is None else zone
+    if not begin_cast(state, card, ManaCost(), zone=zone, tag=tag):
+        return None
+    if is_commander:
+        state.commander_cast_count[card.name] = state.commander_cast_count.get(card.name, 0) + 1
+        state.commander_cast_this_game = True
+    if card.is_permanent:
+        return resolve_to_battlefield(state, card, is_commander=is_commander)
+    resolve_to_graveyard(state, card)
+    return _impl(card).on_resolve(state) or None
+
+
+def _free_cast_actions(state: GameState) -> list[Action]:
+    """One "cast for free" action per (grant, matching distinct hand spell).
+    A free cast consumes the grant it uses."""
+    from ..cards.base import CardAction
+
+    out: list[Action] = []
+    if not state.free_casts:
+        return out
+    seen: set[tuple[int, str]] = set()
+    for gi, grant in enumerate(state.free_casts):
+        for card in list(state.hand):
+            if card.is_land or not _grant_matches(grant, card):
+                continue
+            impl = _impl(card)
+            if not impl.is_castable(state):
+                continue
+            key = (gi, card.name)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            def fn(st: GameState, card_name=card.name, grant=grant):
+                c = _find_in_zone(st.hand, card_name)
+                if c is None:
+                    return None
+                if grant in st.free_casts:
+                    st.free_casts.remove(grant)
+                return cast_without_paying(st, c, tag="without paying its mana cost")
+
+            label = grant.get("label", "free")
+            act = CardAction(f"cast {card.name} ({label})", fn,
+                             sorcery_speed=not _is_instant_speed(card))
+            out.append(act)
+    return out
 
 
 def _has_instant_actions(state: GameState) -> bool:

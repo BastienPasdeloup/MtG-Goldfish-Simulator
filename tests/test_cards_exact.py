@@ -644,3 +644,183 @@ def test_aang_front_face_attack_has_no_trigger():
     DeclareAttackers().apply(state)
     assert not aang.counters.get("+1/+1")  # front face: no attack trigger
     assert not state.stack
+
+
+# --------------------------------------------------------------------------
+# Event 87792 — 3rd place (Atraxa, Grand Unifier) card implementations
+# --------------------------------------------------------------------------
+def test_atraxa_reveal_puts_one_of_each_type_into_hand():
+    state = _state([], commander="Atraxa, Grand Unifier")
+    state.hand = []
+    reps = {
+        "creature": "Subtlety", "instant": "Lose Focus",
+        "sorcery": "Wrath of the Skies", "artifact": "Arcane Signet",
+        "enchantment": "World War Hulk", "planeswalker": "Teferi, Time Raveler",
+        "land": "Swamp",
+    }
+    top = [card(n) for n in reps.values()] + [card("Swamp"), card("Swamp"), card("Swamp")]
+    assert len(top) == 10
+    state.library = list(top)
+    atx = state.put_on_battlefield(card("Atraxa, Grand Unifier"), fire_etb=False)
+    # Simulate the trigger's resolution context so effects are attributed to
+    # Atraxa's triggered ability (the engine sets this in resolve_triggered_abilities).
+    state.resolving = ("triggered", "Atraxa, Grand Unifier")
+    branches = atx.impl.on_etb(state, atx)
+    assert branches
+    # Some branch takes one card of EACH of the seven present types.
+    best = max(branches, key=lambda b: len(b.hand))
+    assert len(best.hand) == 7
+    heads = [c.type_line.split("—")[0].lower() for c in best.hand]
+    for t in reps:
+        assert any(t in h for h in heads), t
+    # Nothing is lost: taken to hand + the rest bottomed == the original ten.
+    assert len(best.hand) + len(best.library) == 10
+    # The cards are PUT INTO HAND (not drawn): the put_in_hand tracking counts
+    # exactly the 7 Atraxa's triggered ability added, and it is not a draw.
+    assert len(best.cards_put_in_hand_by("Atraxa", via_kind="triggered")) == 7
+    assert best.cards_put_in_hand_by("Atraxa", via_kind="triggered") >= 3
+    assert best.cards_drawn_by("Atraxa") == 0
+
+
+def test_dream_halls_casts_by_discarding_a_color_sharing_card():
+    # Dream Halls lets Teferi (W/U) be cast by pitching a blue card (Lose Focus).
+    state = _state([], hand_names=["Teferi, Time Raveler", "Lose Focus"],
+                   commander="Atraxa, Grand Unifier")
+    state.put_on_battlefield(card("Dream Halls"), fire_etb=False)
+    acts = [a for a in legal_actions(state)
+            if "Dream Halls" in a.label and "Teferi, Time Raveler" in a.label
+            and "Lose Focus" in a.label]
+    assert acts, [a.label for a in legal_actions(state) if "Dream Halls" in a.label]
+    acts[0].apply(state)
+    assert state.has_permanent_named("Teferi, Time Raveler")     # cast for free
+    assert "Lose Focus" in state.graveyard_names()               # pitched as the cost
+
+
+def test_world_war_hulk_chapter_one_grants_free_cast():
+    state = _state([], commander="Teferi, Time Raveler")
+    wwh = state.put_on_battlefield(card("World War Hulk"), fire_etb=False)
+    state.queue_entry_triggers([wwh])
+    state.settle()
+    assert wwh.counters.get("lore") == 1
+    assert any(g.get("creature") and set(g.get("colors", ())) == {"R", "G"}
+               for g in state.free_casts)
+    # A green creature in hand may now be cast without paying its mana cost.
+    state.hand.append(card("Atraxa, Grand Unifier"))
+    labels = [a.label for a in legal_actions(state)]
+    assert any(l.startswith("cast Atraxa") and "without paying" in l for l in labels), labels
+
+
+def test_world_war_hulk_chapter_two_and_three():
+    state = _state([], commander="Teferi, Time Raveler")
+    wwh = state.put_on_battlefield(card("World War Hulk"), fire_etb=False)
+    creat = state.put_on_battlefield(card("Subtlety"), fire_etb=False)
+    p0, t0 = state.effective_power(creat), state.effective_toughness(creat)
+
+    # Chapter II — three +1/+1 counters on a target creature.
+    wwh.counters["lore"] = 1
+    branches = wwh.impl._chapter(state, wwh, 2)
+    b2 = branches[0]
+    tp = next(p for p in b2.battlefield if p.name == "Subtlety")
+    assert tp.counters.get("+1/+1") == 3
+
+    # Chapter III — double P/T + trample, then sacrifice the Saga.
+    wwh.counters["lore"] = 2
+    branches = wwh.impl._chapter(state, wwh, 3)
+    b3 = branches[0]
+    tp = next(p for p in b3.battlefield if p.name == "Subtlety")
+    assert b3.effective_power(tp) == 2 * p0
+    assert b3.effective_toughness(tp) == 2 * t0
+    assert b3.has_keyword(tp, "trample")
+    assert not any(p.name == "World War Hulk" for p in b3.battlefield)  # sacrificed
+
+
+def test_teferi_hero_plus_one_draws_and_untaps_lands_at_end_step():
+    from mtg_goldfish.engine import simulator
+
+    state = _state([], commander="Atraxa, Grand Unifier")
+    state.library = [card("Swamp"), card("Island")]
+    state.put_on_battlefield(card("Teferi, Hero of Dominaria"), fire_etb=False)
+    l1 = state.put_on_battlefield(card("Swamp"), fire_etb=False)
+    l2 = state.put_on_battlefield(card("Island"), fire_etb=False)
+    l1.tapped = l2.tapped = True
+    drawn0 = state.cards_drawn
+
+    plus = next(a for a in legal_actions(state)
+                if "Teferi, Hero" in a.label and "untap 2 lands" in a.label)
+    plus.apply(state)
+    tef = next(p for p in state.battlefield if p.name.startswith("Teferi, Hero"))
+    assert state.cards_drawn == drawn0 + 1
+    assert tef.counters["loyalty"] == 5
+    assert state.untap_lands_end_step == 2
+
+    state.phase = Phase.END_STEP
+    simulator._apply_step_entry(state)
+    assert not l1.tapped and not l2.tapped
+    assert state.untap_lands_end_step == 0
+
+
+def test_teferi_time_raveler_plus_one_gives_sorceries_flash():
+    state = _state([], commander="Atraxa, Grand Unifier")
+    state.put_on_battlefield(card("Teferi, Time Raveler"), fire_etb=False)
+    plus = next(a for a in legal_actions(state)
+                if "Teferi, Time Raveler" in a.label and "sorceries gain flash" in a.label)
+    plus.apply(state)
+    assert state.cast_sorcery_as_flash is True
+    tef = next(p for p in state.battlefield if p.name.startswith("Teferi, Time"))
+    assert tef.counters["loyalty"] == 5
+
+
+def test_teferi_time_raveler_minus_three_bounces_and_draws():
+    state = _state([], commander="Atraxa, Grand Unifier")
+    state.library = [card("Swamp"), card("Island")]
+    state.put_on_battlefield(card("Teferi, Time Raveler"), fire_etb=False)
+    state.put_on_battlefield(card("Subtlety"), fire_etb=False)
+    minus = next(a for a in legal_actions(state)
+                 if "Teferi, Time Raveler" in a.label and "bounce up to one" in a.label)
+    branches = minus.apply(state)
+    assert isinstance(branches, list) and len(branches) >= 2
+    assert any(any(c.name == "Subtlety" for c in b.hand) for b in branches)  # bounce branch
+    for b in branches:
+        assert b.cards_drawn >= 1  # every mode draws a card
+
+
+# --------------------------------------------------------------------------
+# Modal DFC "spell front // land back" cards (Waterlogged Teachings, ...)
+# --------------------------------------------------------------------------
+def test_mdfc_spell_front_land_back_plays_as_land_side():
+    # "Instant // Land": the generic land drop must NOT be offered (it would
+    # enter the FRONT Instant face). The back land is played via the card's own
+    # action and enters showing the LAND side, in the lands part of the board.
+    state = _state([], hand_names=["Waterlogged Teachings // Inundated Archive"])
+    labels = [a.label for a in legal_actions(state)]
+    assert "play land Waterlogged Teachings // Inundated Archive" not in labels
+    play = next(a for a in legal_actions(state) if "play land Inundated Archive" in a.label)
+    play.apply(state)
+    perm = state.battlefield[-1]
+    view = state._perm_view(perm)
+    assert perm.transformed
+    assert view["name"] == "Inundated Archive"                 # land side visible
+    assert view["is_land"] and not view["is_creature"]         # placed with the lands
+    assert "Inundated Archive" in state.lands_entered_on(3)     # attributed as the land
+
+
+def test_mdfc_spell_front_is_castable():
+    state = _state([], hand_names=["Waterlogged Teachings // Inundated Archive"])
+    for _ in range(5):
+        p = state.put_on_battlefield(card("Island"), fire_etb=False)
+        p.tapped = False
+        p.summoning_sick = False
+    labels = [a.label for a in legal_actions(state)]
+    assert any(l.startswith("cast Waterlogged Teachings") for l in labels)
+
+
+def test_mdfc_creature_front_is_castable_no_front_land_drop():
+    # "Creature // Land": the front creature is castable; no generic front land drop.
+    state = _state([], hand_names=["Boggart Trawler // Boggart Bog"])
+    for _ in range(3):
+        p = state.put_on_battlefield(card("Swamp"), fire_etb=False)
+        p.tapped = False
+        p.summoning_sick = False
+    labels = [a.label for a in legal_actions(state)]
+    assert any(l.startswith("cast Boggart") for l in labels)
+    assert "play land Boggart Trawler // Boggart Bog" not in labels

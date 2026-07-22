@@ -264,6 +264,14 @@ class Card:
         """Non-mana activated abilities (fetch, equip, draw engines, ...)."""
         return []
 
+    def alt_cast_actions(self, state: "GameState", perm: "Permanent") -> list["CardAction"]:
+        """Alternative ways to cast OTHER cards granted by this permanent while
+        it is on the battlefield — a static that changes how spells may be cast
+        (Dream Halls: discard a card that shares a color with a spell instead of
+        paying its mana cost). Called once per battlefield permanent in
+        `legal_actions`; each returned CardAction sets its own `sorcery_speed`."""
+        return []
+
     # ---- triggers -------------------------------------------------------------
     def on_etb(self, state: "GameState", permanent: "Permanent") -> None:
         """Called when this card enters the battlefield."""
