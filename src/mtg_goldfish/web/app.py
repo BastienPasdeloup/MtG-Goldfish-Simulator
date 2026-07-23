@@ -205,6 +205,7 @@ def deck_flags(deck: Deck) -> dict:
 
 
 _COLOR_WORDS = {"white", "blue", "black", "red", "green", "colorless"}
+_COLOR_LETTER = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
 # Artifact/enchantment tokens that carry no P/T (their type is their name).
 _NAMED_TOKENS = {"Treasure", "Food", "Clue", "Blood", "Gold", "Map", "Powerstone",
                  "Incubator", "Junk", "Shard", "Role", "Walker"}
@@ -228,6 +229,7 @@ def deck_tokens(deck: Deck) -> list[dict]:
             power = int(pt.group(1)) if pt else None
             tough = int(pt.group(2)) if pt else None
             is_creature = "creature token" in frag.lower() or pt is not None
+            colors = [_COLOR_LETTER[w] for w in _COLOR_LETTER if w in before.lower()]
             caps = [w for w in _re.findall(r"\b([A-Z][A-Za-z']+)\b", before)
                     if w.lower() not in _COLOR_WORDS]
             name = " ".join(caps[-2:]) if caps else ("Creature" if is_creature else "")
@@ -239,7 +241,8 @@ def deck_tokens(deck: Deck) -> list[dict]:
                 continue  # too vague to be useful
             key = (name, power, tough)
             seen.setdefault(key, {"name": name or "Token", "power": power,
-                                  "toughness": tough, "type_line": type_line})
+                                  "toughness": tough, "type_line": type_line,
+                                  "colors": colors})
     return sorted(seen.values(), key=lambda t: t["name"])
 
 

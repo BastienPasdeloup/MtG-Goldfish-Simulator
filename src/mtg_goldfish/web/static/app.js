@@ -39,6 +39,8 @@ function newFixedConfig() {
     mana_pool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
     // Commander tax: times each commander has already been cast (tax = {2}×count).
     commander_cast: {},
+    // Commanders removed from every area (shuffled into the library at game start).
+    commander_removed: [],
   };
 }
 
@@ -49,6 +51,13 @@ const FC_PHASES = [
   ["postcombat_main", "Postcombat main"], ["end_step", "End step"],
 ];
 const FC_MANA = ["W", "U", "B", "R", "G", "C"];
+// Token tile tint by colour: the MTG pip colours; multicolour → gold; colorless → none.
+const FC_COLOR_BG = { W: "#f7f0dc", U: "#a9cbe8", B: "#b3a9a2", R: "#eda28c", G: "#9fcf9a" };
+function tokenTint(colors) {
+  const cs = (colors || []).filter((c) => FC_COLOR_BG[c]);
+  if (!cs.length) return null;
+  return cs.length === 1 ? FC_COLOR_BG[cs[0]] : "#e6c976";
+}
 // Counter kinds offered as quick "+1" entries in the card context menu.
 const FC_COUNTER_KINDS = ["+1/+1", "-1/-1", "loyalty", "charge"];
 // Keywords that can be granted until end of turn from the card context menu.
@@ -1026,7 +1035,7 @@ function fcPushPermanent(name, transformed = false) {
     counters = { ...(fcCardMeta(name).enters_counters || {}) };
   }
   const entry = {
-    name, tapped: false, counters,
+    name, tapped: false, sick: false, counters,
     granted: [], granted_eot: [], attacking: false, attached_to: null, transformed: !!transformed,
   };
   state.fixedConfig.battlefield.push(entry);
@@ -1062,15 +1071,19 @@ function fcPlaceOnBattlefield(name, x, y) {
 }
 
 // ---- tokens (created on the battlefield, not deck cards) ----
-const fcTokenLabel = (t) =>
-  (t.power != null ? `${t.power}/${t.toughness} ` : "") + (t.name || "Token");
+const FC_COLOR_NAME = { W: "white", U: "blue", B: "black", R: "red", G: "green" };
+const fcTokenLabel = (t) => {
+  const cols = (t.colors || []).map((c) => FC_COLOR_NAME[c] || c).join("/");
+  return (t.power != null ? `${t.power}/${t.toughness} ` : "") + (t.name || "Token")
+    + (cols ? ` (${cols})` : " (colorless)");
+};
 
 function fcAddToken(spec) {
   state.fixedConfig.battlefield.push({
     name: spec.name || "Token", token: true,
     power: spec.power ?? null, toughness: spec.toughness ?? null,
-    type_line: spec.type_line || "Token", text: spec.text || "",
-    tapped: false, counters: {}, granted: [], granted_eot: [], attacking: false, attached_to: null,
+    type_line: spec.type_line || "Token", text: spec.text || "", colors: spec.colors || [],
+    tapped: false, sick: false, counters: {}, granted: [], granted_eot: [], attacking: false, attached_to: null,
   });
   renderConfigBuilder();
 }
@@ -1080,15 +1093,24 @@ function fcAddTokenPrompt() {
   if (!name) return;
   const pt = (prompt("Power/toughness for a creature token (blank for none):", "1/1") || "").trim();
   const m = pt.match(/^(\d+)\s*\/\s*(\d+)$/);
-  const spec = { name, text: "" };
+  const col = (prompt("Colour(s) — any of W U B R G (blank = colorless):", "") || "")
+    .toUpperCase().replace(/[^WUBRG]/g, "").split("");
+  const spec = { name, text: "", colors: [...new Set(col)] };
   if (m) { spec.power = +m[1]; spec.toughness = +m[2]; spec.type_line = `Token Creature — ${name}`; }
   else { spec.type_line = `Token Artifact — ${name}`; }
+  // Remember it so it can be re-added (quantity) from the "Add token" menu.
+  state.customTokens = state.customTokens || [];
+  if (!state.customTokens.some((t) => fcTokenLabel(t) === fcTokenLabel(spec))) state.customTokens.push(spec);
   fcAddToken(spec);
 }
 
-// Right-click menu on empty battlefield space: add a token (deck tokens + custom).
+// Right-click menu on empty battlefield space: add a token (deck tokens +
+// previously-added custom tokens + a fresh "Add token…").
 function fcBattlefieldMenu(e) {
-  const toks = (state.deckTokens || []).map((t) => ({ label: fcTokenLabel(t), onClick: () => fcAddToken(t) }));
+  const all = [...(state.deckTokens || []), ...(state.customTokens || [])];
+  const seen = new Set();
+  const toks = all.filter((t) => { const k = fcTokenLabel(t); if (seen.has(k)) return false; seen.add(k); return true; })
+    .map((t) => ({ label: fcTokenLabel(t), onClick: () => fcAddToken(t) }));
   toks.push({ sep: true }, { label: "Add token…", onClick: () => fcAddTokenPrompt() });
   showContextMenu(e.clientX, e.clientY, [{ label: "Add token", submenu: toks }]);
 }
@@ -1096,6 +1118,10 @@ function fcBattlefieldMenu(e) {
 // Add a card to a zone (from the picker, via drag-and-drop). Non-battlefield
 // zones always use the front face.
 function fcAddToZone(name, zone, x, y) {
+  // Placing/dragging a commander anywhere un-removes it (it's back in an area).
+  const rem = state.fixedConfig.commander_removed || [];
+  const ri = rem.indexOf(name);
+  if (ri >= 0) rem.splice(ri, 1);
   if (zone === "command") { renderConfigBuilder(); return; }  // commanders live here by default
   const card = placeableCards().find((c) => c.name === name);
   if (!card || fcUsage(name) >= card.quantity || !fcCanPlace(name, zone)) return;
@@ -1179,15 +1205,16 @@ function fcFrame() {
   const combat = fc.phase === "declare_attackers" || fc.phase === "begin_combat";
   const battlefield = fc.battlefield.map((it, i) => {
     const common = {
-      uid: i, _idx: i, tapped: !!it.tapped, sick: false,
+      uid: i, _idx: i, tapped: !!it.tapped, sick: !!it.sick,
       counters: it.counters || {}, granted: [...(it.granted || []), ...(it.granted_eot || [])],
       is_lander: false, attached_to: it.attached_to,
     };
-    if (it.token) {  // a token — composed tile (no card image)
+    if (it.token) {  // a token — composed tile (no card image), tinted by colour
       const head = (it.type_line || "").split("—")[0].toLowerCase();
       const isCreature = head.includes("creature");
       return {
         ...common, name: it.name, token: true, type_line: it.type_line, text: it.text || "",
+        colors: it.colors || [],
         power: isCreature ? (it.power ?? 0) : null, toughness: isCreature ? (it.toughness ?? 0) : null,
         is_land: head.includes("land"), is_creature: isCreature, commander: false,
         attacking: !!it.attacking && combat && isCreature,
@@ -1200,8 +1227,10 @@ function fcFrame() {
       is_land: face.is_land, is_creature: face.is_creature, is_aura: fcIsAura(it.name),
     };
   });
+  const removed = fc.commander_removed || [];
   const command = [];
   fcCommanderCards().forEach((c) => {
+    if (removed.includes(c.name)) return;  // shuffled into the library — not here
     for (let k = 0; k < Math.max(0, c.quantity - fcUsage(c.name)); k++) command.push(c.name);
   });
   const library = mainboardCards().reduce(
@@ -1270,6 +1299,10 @@ function fcSetCounter(idx, kind, value) {
 // server-computed `counter_kinds`) plus any kind already present on it.
 function fcCounterKinds(it) {
   const kinds = (fcCardMeta(it.name).counter_kinds || []).slice();
+  // Tokens aren't deck cards: offer +1/+1 & −1/−1 for creature tokens.
+  if (it.token && (it.type_line || "").split("—")[0].toLowerCase().includes("creature")) {
+    ["+1/+1", "-1/-1"].forEach((k) => { if (!kinds.includes(k)) kinds.push(k); });
+  }
   Object.keys(it.counters || {}).forEach((k) => { if (!kinds.includes(k)) kinds.push(k); });
   return kinds;
 }
@@ -1280,13 +1313,25 @@ function fcPermMenu(p, e) {
   const idx = p._idx;
   const it = fcPerm(idx); if (!it) return;
   const fc = state.fixedConfig;
-  const face = fcFace(it.name, it.transformed);
+  // A token is not a deck card — derive its face from the entry's type line.
+  const face = it.token
+    ? { name: it.name, is_creature: (it.type_line || "").split("—")[0].toLowerCase().includes("creature"),
+        is_land: (it.type_line || "").split("—")[0].toLowerCase().includes("land") }
+    : fcFace(it.name, it.transformed);
   const items = [{ label: it.tapped ? "Untap" : "Tap", onClick: () => fcTogglePermTap(p) }];
 
   // Flip — double-faced cards switch between their front and back face.
-  if (fcIsDfc(it.name)) {
+  if (!it.token && fcIsDfc(it.name)) {
     const other = fcFaces(it.name)[it.transformed ? 0 : 1];
     items.push({ label: `Flip to ${other.name}`, onClick: () => { it.transformed = !it.transformed; renderConfigBuilder(); } });
+  }
+
+  // Summoning sickness — creatures (incl. creature tokens).
+  if (face.is_creature) {
+    items.push({
+      label: "Summoning sickness", checked: !!it.sick,
+      onClick: () => { it.sick = !it.sick; renderConfigBuilder(); },
+    });
   }
 
   // Declare as attacker — only a creature, only in the declare-attackers step.
@@ -1321,7 +1366,11 @@ function fcPermMenu(p, e) {
     const drop = (kw) => {
       [it.granted, it.granted_eot].forEach((arr) => { const j = arr.indexOf(kw); if (j >= 0) arr.splice(j, 1); });
     };
-    const kwItems = FC_KEYWORDS.map((kw) => ({
+    // The standard keywords plus any custom one already granted (so its EOT can
+    // be toggled and it can be removed).
+    const kwList = FC_KEYWORDS.slice();
+    [...it.granted, ...it.granted_eot].forEach((kw) => { if (!kwList.includes(kw)) kwList.push(kw); });
+    const kwItems = kwList.map((kw) => ({
       kwrow: {
         label: kw,
         checked: () => has(kw),
@@ -1365,6 +1414,19 @@ function fcPermMenu(p, e) {
 function fcZoneMenu(zone, idx, name, e) {
   showContextMenu(e.clientX, e.clientY, [
     { label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) },
+  ]);
+}
+
+// Right-click menu on a commander in the command zone — the only action is to
+// remove it from every area (it is shuffled into the library at game start,
+// and shows as 0 in the picker).
+function fcCommandMenu(idx, name, e) {
+  showContextMenu(e.clientX, e.clientY, [
+    { label: "Remove from any area", onClick: () => {
+        const r = state.fixedConfig.commander_removed;
+        if (!r.includes(name)) r.push(name);
+        renderConfigBuilder();
+      } },
   ]);
 }
 
@@ -1461,6 +1523,7 @@ function renderConfigBuilder() {
       onPermClick: fcTogglePermTap,
       onPermMenu: fcPermMenu,
       onZoneMenu: fcZoneMenu,
+      onCommandMenu: fcCommandMenu,
       onFieldMenu: fcBattlefieldMenu,
       onSetTurn: fcSetTurn,
       onPhase: fcAdjustPhase,
@@ -1490,17 +1553,20 @@ function renderConfigBuilder() {
   const picker = $("fc-card-picker");
   picker.replaceChildren();
   placeableCards().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
-    // A commander is always in play or the command zone, so it is shown as
-    // used (1/grey) here — move it via the command zone, not the picker.
+    // A commander is normally in the command zone/in play (shown 1/grey). Once
+    // "removed from any area" it shows 0 and is draggable back into a zone.
     const isCmd = c.board === "commander";
-    const n = isCmd ? c.quantity : fcUsage(c.name);
-    const full = isCmd || n >= c.quantity;
+    const removed = isCmd && (state.fixedConfig.commander_removed || []).includes(c.name);
+    const n = isCmd ? (removed ? 0 : c.quantity) : fcUsage(c.name);
+    const full = isCmd ? !removed : n >= c.quantity;
     const nm = el("span", { className: "picker-name" }, c.name);
     hoverable(nm, c.image);
     const row = el("div", {
       className: "picker-row draggable" + (n ? " chosen" : "") + (full ? " full" : ""),
       draggable: !full,
-      title: isCmd ? "commander — in the command zone (move it from there)"
+      title: isCmd
+        ? (removed ? "commander removed — drag onto a zone to bring it back"
+          : "commander — in the command zone (right-click it to remove)")
         : full ? "all copies placed" : "drag onto a zone to add",
     }, el("span", { className: "picker-count", textContent: String(n) }),
       nm, el("span", { className: "muted picker-qty", textContent: `/${c.quantity}` }));
@@ -2321,12 +2387,14 @@ function tile(name, opts = {}) {
   const img = opts.token ? null : state.imageMap[name];
   if (opts.token) {
     // Tokens have no card image: compose a card face with name, type line,
-    // textbox and P/T (for creatures).
+    // textbox and P/T (for creatures), tinted by the token's colour(s).
     t.classList.add("token-card");
     const face = el("div", { className: "tok-face" },
       el("div", { className: "tok-name", textContent: name }),
       el("div", { className: "tok-type", textContent: opts.typeLine || "Token" }),
       el("div", { className: "tok-text", textContent: opts.text || "" }));
+    const tint = tokenTint(opts.colors);
+    if (tint) { t.style.boxShadow = `inset 0 0 0 3px ${tint}`; t.style.borderColor = tint; }
     if (opts.power != null && opts.toughness != null) {
       face.append(el("div", { className: "tok-pt", textContent: `${opts.power}/${opts.toughness}` }));
     }
@@ -2496,7 +2564,7 @@ function energyPips(n) {
 // (peeking out from the top-right), so the enchanted/equipped card is on top.
 function permTile(p, attachedByHost, edit = {}) {
   const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
-    granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness,
+    granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness, colors: p.colors,
     editable: edit.editable,
     onClick: edit.onClick ? () => edit.onClick(p) : null,
     onMenu: edit.onMenu ? (e) => edit.onMenu(p, e) : null,
@@ -2632,15 +2700,18 @@ function renderBoard(f, edit = {}) {
   // (drag a commander back to return it here). Commander-tax number input each.
   const cmdBox = dz(el("div", { className: "side-box" },
     el("div", { className: "zlabel", textContent: `Command zone (${(f.command_zone || []).length})` }),
-    pile(f.command_zone, { dragZone: ed ? "command" : null })), "command");
+    pile(f.command_zone, {
+      dragZone: ed ? "command" : null,
+      onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
+    })), "command");
   if (ed && edit.commanderTax && edit.commanderTax.length) {
     const tax = el("div", { className: "fc-tax" });
     edit.commanderTax.forEach((t) => {
       const inp = el("input", { type: "number", min: "0", value: String(t.count), className: "fc-num" });
       inp.onchange = () => edit.onSetTax(t.name, inp.value);
-      // Tax = {2} per prior cast, i.e. "Tax {2} × <casts>".
-      tax.append(el("div", { className: "fc-tax-row" },
-        el("span", { className: "fc-tax-name", title: t.name, textContent: "Tax" }),
+      // Tax = {2} per prior cast, shown compactly as "+{2} × <casts>".
+      tax.append(el("div", { className: "fc-tax-row", title: `${t.name} — commander tax` },
+        el("span", { className: "fc-tax-name", textContent: "+" }),
         manaCostEl("{2}"), el("span", { className: "fc-tax-eq", textContent: "×" }), inp));
     });
     cmdBox.append(tax);

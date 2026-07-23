@@ -771,11 +771,13 @@ class GameState:
     def make_token(
         self, name: str, power: int, toughness: int, type_line: str,
         text: str | None = None, tapped: bool = False, attacking: bool = False,
+        colors: list[str] | None = None,
     ) -> Permanent:
         if text is None:
             text = _TOKEN_TEXT.get(name, "")
         data = CardData(name=name, type_line=type_line, power=str(power),
-                        toughness=str(toughness), oracle_text=text)
+                        toughness=str(toughness), oracle_text=text,
+                        colors=list(colors or []))
         perm = self.put_on_battlefield(data, token=True, fire_etb=False)
         # Set tap/attack state BEFORE emitting, so a token created tapped or
         # attacking is depicted that way in its entering frame (no flash of an
@@ -1288,10 +1290,11 @@ class GameState:
             view["chosen"] = p.chosen
         if p.is_token:
             # Tokens have no card image: ship what the tile needs to render a
-            # composed card face (type, textbox, P/T).
+            # composed card face (type, textbox, P/T) tinted by its colour.
             view.update(
                 type_line=p.type_line,
                 text=p.card.oracle_text,
+                colors=list(p.card.colors or []),
                 power=self.effective_power(p) if p.is_creature_now else None,
                 toughness=self.effective_toughness(p) if p.is_creature_now else None,
             )

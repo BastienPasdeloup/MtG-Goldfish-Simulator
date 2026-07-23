@@ -814,7 +814,8 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
             # it on the battlefield, so it is NOT appended again below.
             perm = variant.make_token(
                 name, int(spec.get("power") or 0), int(spec.get("toughness") or 0),
-                spec.get("type_line") or "Token", text=spec.get("text") or "")
+                spec.get("type_line") or "Token", text=spec.get("text") or "",
+                colors=spec.get("colors") or [])
         else:
             card = take(name)
             if card is None:
@@ -823,7 +824,8 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
             perm = make_permanent(variant, card,
                                   is_commander=card.name in base_state.commander_names)
             variant.battlefield.append(perm)
-        perm.summoning_sick = False
+        # Not summoning-sick by default; the editor can mark "arrived this turn".
+        perm.summoning_sick = bool(spec.get("sick")) if isinstance(spec, dict) else False
         if isinstance(spec, dict):
             perm.tapped = bool(spec.get("tapped"))
             if not is_token:
@@ -862,6 +864,14 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         card = take(name)
         if card is not None:
             variant.exile.append(card)
+
+    # Commanders "removed from any area" are shuffled into the deck: pull them
+    # out of the command-zone pool and into the shuffled library remainder.
+    for name in fixed.get("commander_removed", []):
+        for i, c in enumerate(cmd_pool):
+            if c.name == name:
+                lib_pool.append(cmd_pool.pop(i))
+                break
 
     # Explicit top of the library (in order); the rest of the deck is shuffled
     # in below. The player "knows" the set-top cards, so mark them known (with

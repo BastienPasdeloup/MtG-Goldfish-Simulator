@@ -11,6 +11,8 @@ class FixedBattlefieldCard(BaseModel):
     """A permanent placed on the battlefield in a Fixed-config run."""
     name: str
     tapped: bool = False
+    # Arrived this turn — summoning-sick (can't attack/tap for abilities yet).
+    sick: bool = False
     # Counters to put on it, by kind (e.g. {"+1/+1": 2, "loyalty": 5}). These
     # OVERRIDE the permanent's natural enters-with counters for the kinds given.
     counters: dict[str, int] = Field(default_factory=dict)
@@ -26,6 +28,7 @@ class FixedBattlefieldCard(BaseModel):
     toughness: int | None = None
     type_line: str = ""
     text: str = ""
+    colors: list[str] = Field(default_factory=list)  # token colour (W/U/B/R/G)
     # Attacking this turn (honoured only in a combat phase).
     attacking: bool = False
     # Index (within `battlefield`) of the permanent this one is attached to
@@ -56,6 +59,8 @@ class FixedConfig(BaseModel):
     # Commander tax: times each commander has already been cast this game
     # ({name: count}); the recast tax is {2}×count.
     commander_cast: dict[str, int] = Field(default_factory=dict)
+    # Commanders removed from every zone (shuffled into the library at game start).
+    commander_removed: list[str] = Field(default_factory=list)
 
 
 class SimConfig(BaseModel):
