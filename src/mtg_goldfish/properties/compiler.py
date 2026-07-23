@@ -109,11 +109,17 @@ def _extract_json(raw: str) -> dict | None:
         if start == -1 or end <= start:
             return None
         text = text[start:end + 1]
-    try:
-        obj = json.loads(text)
-    except (ValueError, TypeError):
-        return None
-    return obj if isinstance(obj, dict) else None
+    # Models often emit an invalid `\'` escape (JSON has no such escape) meaning
+    # a backslash-escaped apostrophe in the Python code — turn it into `\\'` so
+    # json.loads accepts it AND the decoded string keeps the Python-valid `\'`.
+    for candidate in (text, text.replace("\\'", "\\\\'")):
+        try:
+            obj = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
 
 
 def _build_prompt(english: str, card_names: list[str] | None) -> str:

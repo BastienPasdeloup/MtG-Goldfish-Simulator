@@ -20,6 +20,12 @@ class FixedBattlefieldCard(BaseModel):
     granted_eot: list[str] = Field(default_factory=list)
     # For a double-faced card: True = on its back face.
     transformed: bool = False
+    # A token (not a deck card): created via make_token with these characteristics.
+    token: bool = False
+    power: int | None = None
+    toughness: int | None = None
+    type_line: str = ""
+    text: str = ""
     # Attacking this turn (honoured only in a combat phase).
     attacking: bool = False
     # Index (within `battlefield`) of the permanent this one is attached to

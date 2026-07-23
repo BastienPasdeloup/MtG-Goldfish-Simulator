@@ -808,16 +808,26 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     placed: list = []
     for spec in specs:
         name = spec.get("name") if isinstance(spec, dict) else spec
-        card = take(name)
-        if card is None:
-            placed.append(None)
-            continue
-        perm = make_permanent(variant, card,
-                              is_commander=card.name in base_state.commander_names)
+        is_token = isinstance(spec, dict) and spec.get("token")
+        if is_token:
+            # A token: created fresh (not a deck card); make_token already puts
+            # it on the battlefield, so it is NOT appended again below.
+            perm = variant.make_token(
+                name, int(spec.get("power") or 0), int(spec.get("toughness") or 0),
+                spec.get("type_line") or "Token", text=spec.get("text") or "")
+        else:
+            card = take(name)
+            if card is None:
+                placed.append(None)
+                continue
+            perm = make_permanent(variant, card,
+                                  is_commander=card.name in base_state.commander_names)
+            variant.battlefield.append(perm)
         perm.summoning_sick = False
         if isinstance(spec, dict):
             perm.tapped = bool(spec.get("tapped"))
-            perm.transformed = bool(spec.get("transformed"))  # DFC back face
+            if not is_token:
+                perm.transformed = bool(spec.get("transformed"))  # DFC back face
             # Counters OVERRIDE the natural enters-with counters for the kinds
             # given (a planeswalker keeps its base loyalty unless set here).
             for kind, n in (spec.get("counters") or {}).items():
@@ -832,7 +842,6 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
             for kw in (spec.get("granted_eot") or []):
                 perm.temp_keywords.add(str(kw).lower())
         placed.append(perm)
-        variant.battlefield.append(perm)
     # Resolve attachments (auras/equipment) now that all permanents exist.
     for i, spec in enumerate(specs):
         perm = placed[i]

@@ -160,6 +160,7 @@ def card_view(deck: Deck) -> list[dict]:
                 "image": f.image_normal,
                 "mana_cost": f.mana_cost,
                 "type_line": f.type_line,
+                "loyalty": f.loyalty,  # for the Fixed-config editor (flipped planeswalkers)
             }
             for f in c.faces
         ] if len(c.faces) > 1 else []
@@ -203,6 +204,45 @@ def deck_flags(deck: Deck) -> dict:
     return {"storm": storm, "energy": energy}
 
 
+_COLOR_WORDS = {"white", "blue", "black", "red", "green", "colorless"}
+# Artifact/enchantment tokens that carry no P/T (their type is their name).
+_NAMED_TOKENS = {"Treasure", "Food", "Clue", "Blood", "Gold", "Map", "Powerstone",
+                 "Incubator", "Junk", "Shard", "Role", "Walker"}
+
+
+def deck_tokens(deck: Deck) -> list[dict]:
+    """Best-effort list of token permanents the deck's cards can create, scanned
+    from oracle text ("create a 1/1 white Soldier creature token", "create a
+    Treasure token", ...). Heuristic — the editor also offers a custom "Add
+    token…"; this just pre-populates common ones. Deduped by (name, P/T)."""
+    import re as _re
+    seen: dict[tuple, dict] = {}
+    for e in deck.entries:
+        for sent in _re.split(r"[.\n]", e.card.oracle_text or ""):
+            low = sent.lower()
+            if "token" not in low or "create" not in low or "copy" in low:
+                continue
+            frag = sent[_re.search(r"create[s]?\b", sent, _re.I).end():]
+            before = frag[:frag.lower().find("token")]
+            pt = _re.search(r"(\d+)/(\d+)", before)
+            power = int(pt.group(1)) if pt else None
+            tough = int(pt.group(2)) if pt else None
+            is_creature = "creature token" in frag.lower() or pt is not None
+            caps = [w for w in _re.findall(r"\b([A-Z][A-Za-z']+)\b", before)
+                    if w.lower() not in _COLOR_WORDS]
+            name = " ".join(caps[-2:]) if caps else ("Creature" if is_creature else "")
+            if is_creature:
+                type_line = f"Token Creature — {name}" if name else "Token Creature"
+            elif name in _NAMED_TOKENS or (caps and pt is None):
+                type_line = f"Token Artifact — {name}"
+            else:
+                continue  # too vague to be useful
+            key = (name, power, tough)
+            seen.setdefault(key, {"name": name or "Token", "power": power,
+                                  "toughness": tough, "type_line": type_line})
+    return sorted(seen.values(), key=lambda t: t["name"])
+
+
 def session_payload(session: Session) -> dict:
     data = session.model_dump()
     # The per-run search trees (`tree_gz`) can total well over 1 GB across all
@@ -218,6 +258,7 @@ def session_payload(session: Session) -> dict:
         "session": data,
         "cards": card_view(session.deck),
         "deck_flags": deck_flags(session.deck),
+        "tokens": deck_tokens(session.deck),
     }
 
 

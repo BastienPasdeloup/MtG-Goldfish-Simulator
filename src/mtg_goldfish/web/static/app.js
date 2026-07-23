@@ -73,13 +73,6 @@ function manaCostEl(cost) {
   return span;
 }
 
-// A generic-mana amount as its Scryfall symbol, or — when no symbol exists for
-// the number (Scryfall only has {0}..{20}) — plain text in a grey circle.
-function manaSymbolOrText(n) {
-  if (n >= 0 && n <= 20) return manaCostEl(`{${n}}`);
-  return el("span", { className: "gen-circle", textContent: String(n) });
-}
-
 // Mana cost shown at the end of a decklist line — includes the back face's cost
 // for double-faced cards that have one.
 function costEnd(c) {
@@ -320,6 +313,7 @@ function enterSession(payload) {
   state.session = payload.session;
   state.cards = payload.cards;
   state.deckFlags = payload.deck_flags || {};
+  state.deckTokens = payload.tokens || [];
   // Always open with a single uninitialized property (a previous run's
   // properties can be restored explicitly via "Load previous run").
   state.props = [];
@@ -1009,12 +1003,30 @@ function fcCanPlace(name, zone) {
   return ["hand", "graveyard", "exile", "library"].includes(zone);
 }
 
-// Put a battlefield entry for `name`, initialised with the counters it would
-// enter play with (planeswalker loyalty, a Saga's lore, Peter Parker's Camera's
-// film, ...). Returns its index.
+// Which face indices (0/1) of `name` are permanents that can be on the
+// battlefield. A single-faced permanent is [0]; a DFC returns the permanent
+// faces (an instant/sorcery face is excluded — e.g. Waterlogged Teachings).
+function fcBattlefieldFaces(name) {
+  const isPerm = (tl) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"]
+    .some((k) => (tl || "").split("—")[0].toLowerCase().includes(k));
+  if (!fcIsDfc(name)) return isPerm(fcCardMeta(name).type_line) ? [0] : [];
+  const faces = fcFaces(name);
+  return [0, 1].filter((i) => isPerm(faces[i].type_line));
+}
+
+// Put a battlefield entry for `name` (on `transformed` face), initialised with
+// the counters that face enters play with (planeswalker loyalty, a Saga's lore,
+// Peter Parker's Camera's film, a flipped Tamiyo's loyalty, ...).
 function fcPushPermanent(name, transformed = false) {
+  let counters;
+  if (transformed && fcIsDfc(name)) {
+    const loy = parseInt((fcFaces(name)[1] || {}).loyalty, 10);
+    counters = loy ? { loyalty: loy } : {};
+  } else {
+    counters = { ...(fcCardMeta(name).enters_counters || {}) };
+  }
   const entry = {
-    name, tapped: false, counters: { ...(fcCardMeta(name).enters_counters || {}) },
+    name, tapped: false, counters,
     granted: [], granted_eot: [], attacking: false, attached_to: null, transformed: !!transformed,
   };
   state.fixedConfig.battlefield.push(entry);
@@ -1032,23 +1044,74 @@ function fcAfterPlace(idx, name, x, y) {
   }
 }
 
-// Add a card to a zone (from the picker, via drag-and-drop). On the battlefield
-// a DFC asks front/back; an aura asks which permanent it enchants. Other zones
-// always use the front face. `x`/`y` position any chooser popup.
+// Place `name` on the battlefield. A DFC with BOTH faces permanents asks
+// front/back; if only one face is a valid permanent it is used silently
+// (Waterlogged Teachings → its land back). `x`/`y` position any chooser.
+function fcPlaceOnBattlefield(name, x, y) {
+  const valid = fcBattlefieldFaces(name);
+  if (fcIsDfc(name) && valid.length >= 2) {
+    const faces = fcFaces(name);
+    showContextMenu(x || 300, y || 300, [
+      { label: `Front — ${faces[0].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, false), name, x, y) },
+      { label: `Back — ${faces[1].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, true), name, x, y) },
+    ]);
+    return;
+  }
+  const transformed = fcIsDfc(name) && valid.length === 1 && valid[0] === 1;
+  fcAfterPlace(fcPushPermanent(name, transformed), name, x, y);
+}
+
+// ---- tokens (created on the battlefield, not deck cards) ----
+const fcTokenLabel = (t) =>
+  (t.power != null ? `${t.power}/${t.toughness} ` : "") + (t.name || "Token");
+
+function fcAddToken(spec) {
+  state.fixedConfig.battlefield.push({
+    name: spec.name || "Token", token: true,
+    power: spec.power ?? null, toughness: spec.toughness ?? null,
+    type_line: spec.type_line || "Token", text: spec.text || "",
+    tapped: false, counters: {}, granted: [], granted_eot: [], attacking: false, attached_to: null,
+  });
+  renderConfigBuilder();
+}
+
+function fcAddTokenPrompt() {
+  const name = (prompt("Token name (e.g. Soldier, Treasure):", "") || "").trim();
+  if (!name) return;
+  const pt = (prompt("Power/toughness for a creature token (blank for none):", "1/1") || "").trim();
+  const m = pt.match(/^(\d+)\s*\/\s*(\d+)$/);
+  const spec = { name, text: "" };
+  if (m) { spec.power = +m[1]; spec.toughness = +m[2]; spec.type_line = `Token Creature — ${name}`; }
+  else { spec.type_line = `Token Artifact — ${name}`; }
+  fcAddToken(spec);
+}
+
+// Right-click menu on empty battlefield space: add a token (deck tokens + custom).
+function fcBattlefieldMenu(e) {
+  const toks = (state.deckTokens || []).map((t) => ({ label: fcTokenLabel(t), onClick: () => fcAddToken(t) }));
+  toks.push({ sep: true }, { label: "Add token…", onClick: () => fcAddTokenPrompt() });
+  showContextMenu(e.clientX, e.clientY, [{ label: "Add token", submenu: toks }]);
+}
+
+// Add a card to a zone (from the picker, via drag-and-drop). Non-battlefield
+// zones always use the front face.
 function fcAddToZone(name, zone, x, y) {
   if (zone === "command") { renderConfigBuilder(); return; }  // commanders live here by default
   const card = placeableCards().find((c) => c.name === name);
   if (!card || fcUsage(name) >= card.quantity || !fcCanPlace(name, zone)) return;
-  if (zone === "battlefield" && fcIsDfc(name)) {
-    const faces = fcFaces(name);
-    showContextMenu(x || 300, y || 300, [
-      { label: `Front — ${faces[0].name}`, onClick: () => { const i = fcPushPermanent(name, false); fcAfterPlace(i, name, x, y); } },
-      { label: `Back — ${faces[1].name}`, onClick: () => { const i = fcPushPermanent(name, true); fcAfterPlace(i, name, x, y); } },
-    ]);
-    return;
-  }
-  if (zone !== "battlefield") { state.fixedConfig[zone].push(name); renderConfigBuilder(); return; }
-  fcAfterPlace(fcPushPermanent(name), name, x, y);
+  if (zone === "battlefield") { fcPlaceOnBattlefield(name, x, y); return; }
+  state.fixedConfig[zone].push(name);
+  renderConfigBuilder();
+}
+
+// Reorder a card within a name-list zone (graveyard / exile / library). For the
+// library this changes which card is on top (front = top).
+function fcReorder(zone, fromIdx, toIdx) {
+  const arr = state.fixedConfig[zone];
+  if (!Array.isArray(arr) || fromIdx === toIdx) return;
+  const [card] = arr.splice(fromIdx, 1);
+  arr.splice(fromIdx < toIdx ? toIdx - 1 : toIdx, 0, card);
+  renderConfigBuilder();
 }
 
 // Move a card already in the editor from one zone to another (only if legal).
@@ -1063,11 +1126,16 @@ function fcMoveCard(fromZone, fromIdx, toZone, x, y) {
     if (!name || !fcCanPlace(name, toZone) || toZone === "command") return;
     return fcAddToZone(name, toZone, x, y);  // place the unplaced commander
   }
+  // A token dragged off the battlefield ceases to exist (it can't go to another zone).
+  if (fromZone === "battlefield" && (fc.battlefield[fromIdx] || {}).token) {
+    if (toZone !== "battlefield") fcRemove("battlefield", fromIdx);
+    return;
+  }
   name = fromZone === "battlefield" ? (fc.battlefield[fromIdx] || {}).name : fc[fromZone][fromIdx];
   if (!name || !fcCanPlace(name, toZone)) return;
   fcRemove(fromZone, fromIdx);  // re-renders; fixes attachment indices
   if (toZone === "command") { renderConfigBuilder(); return; }  // returns to command zone
-  if (toZone === "battlefield") fcAfterPlace(fcPushPermanent(name), name, x, y);
+  if (toZone === "battlefield") fcPlaceOnBattlefield(name, x, y);  // DFC front/back checked here too
   else { fc[toZone].push(name); renderConfigBuilder(); }
 }
 
@@ -1110,14 +1178,26 @@ function fcFrame() {
   const fc = state.fixedConfig;
   const combat = fc.phase === "declare_attackers" || fc.phase === "begin_combat";
   const battlefield = fc.battlefield.map((it, i) => {
+    const common = {
+      uid: i, _idx: i, tapped: !!it.tapped, sick: false,
+      counters: it.counters || {}, granted: [...(it.granted || []), ...(it.granted_eot || [])],
+      is_lander: false, attached_to: it.attached_to,
+    };
+    if (it.token) {  // a token — composed tile (no card image)
+      const head = (it.type_line || "").split("—")[0].toLowerCase();
+      const isCreature = head.includes("creature");
+      return {
+        ...common, name: it.name, token: true, type_line: it.type_line, text: it.text || "",
+        power: isCreature ? (it.power ?? 0) : null, toughness: isCreature ? (it.toughness ?? 0) : null,
+        is_land: head.includes("land"), is_creature: isCreature, commander: false,
+        attacking: !!it.attacking && combat && isCreature,
+      };
+    }
     const face = fcFace(it.name, it.transformed);  // active (front/back) face
     return {
-      name: face.name, uid: i, _idx: i, tapped: !!it.tapped, sick: false,
-      commander: fcIsCommander(it.name),
+      ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
       attacking: !!it.attacking && combat && face.is_creature,
-      counters: it.counters || {}, granted: [...(it.granted || []), ...(it.granted_eot || [])],
-      is_land: face.is_land, is_lander: false, is_creature: face.is_creature,
-      is_aura: fcIsAura(it.name), token: false, attached_to: it.attached_to,
+      is_land: face.is_land, is_creature: face.is_creature, is_aura: fcIsAura(it.name),
     };
   });
   const command = [];
@@ -1255,6 +1335,12 @@ function fcPermMenu(p, e) {
         },
       },
     }));
+    kwItems.push({ sep: true }, {
+      label: "Add keyword…", onClick: () => {
+        const kw = (prompt("Keyword to grant (e.g. flying, deathtouch):", "") || "").trim().toLowerCase();
+        if (kw && !has(kw)) { it.granted.push(kw); renderConfigBuilder(); }
+      },
+    });
     items.push({ label: "Add keyword", submenu: kwItems });
   }
 
@@ -1375,6 +1461,7 @@ function renderConfigBuilder() {
       onPermClick: fcTogglePermTap,
       onPermMenu: fcPermMenu,
       onZoneMenu: fcZoneMenu,
+      onFieldMenu: fcBattlefieldMenu,
       onSetTurn: fcSetTurn,
       onPhase: fcAdjustPhase,
       onSet: fcSet,
@@ -1403,14 +1490,18 @@ function renderConfigBuilder() {
   const picker = $("fc-card-picker");
   picker.replaceChildren();
   placeableCards().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
-    const n = fcUsage(c.name);
-    const full = n >= c.quantity;
+    // A commander is always in play or the command zone, so it is shown as
+    // used (1/grey) here — move it via the command zone, not the picker.
+    const isCmd = c.board === "commander";
+    const n = isCmd ? c.quantity : fcUsage(c.name);
+    const full = isCmd || n >= c.quantity;
     const nm = el("span", { className: "picker-name" }, c.name);
     hoverable(nm, c.image);
     const row = el("div", {
       className: "picker-row draggable" + (n ? " chosen" : "") + (full ? " full" : ""),
       draggable: !full,
-      title: full ? "all copies placed" : "drag onto a zone to add",
+      title: isCmd ? "commander — in the command zone (move it from there)"
+        : full ? "all copies placed" : "drag onto a zone to add",
     }, el("span", { className: "picker-count", textContent: String(n) }),
       nm, el("span", { className: "muted picker-qty", textContent: `/${c.quantity}` }));
     if (!full) {
@@ -2297,7 +2388,7 @@ function tile(name, opts = {}) {
   if (opts.editable) {
     t.classList.add("editable");
     if (opts.onClick) t.onclick = (e) => { e.preventDefault(); hideHover(); opts.onClick(e); };
-    if (opts.onMenu) t.oncontextmenu = (e) => { e.preventDefault(); hideHover(); opts.onMenu(e); };
+    if (opts.onMenu) t.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); opts.onMenu(e); };
     if (opts.dragData) {
       t.draggable = true;
       t.ondragstart = (e) => { e.dataTransfer.setData("text/plain", JSON.stringify(opts.dragData)); e.dataTransfer.effectAllowed = "move"; hideHover(); };
@@ -2355,7 +2446,7 @@ function pile(items, edit = {}) {
     else card.append(el("div", { className: "fallback", textContent: item.name }));
     if (edit.onMenu) {
       card.classList.add("editable");
-      card.oncontextmenu = (e) => { e.preventDefault(); hideHover(); edit.onMenu(idx, item.name, e); };
+      card.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); edit.onMenu(idx, item.name, e); };
     }
     if (edit.dragZone) {
       card.draggable = true;
@@ -2363,6 +2454,17 @@ function pile(items, edit = {}) {
         e.dataTransfer.setData("text/plain", JSON.stringify({ move: true, from: edit.dragZone, idx, name: item.name }));
         e.dataTransfer.effectAllowed = "move"; hideHover();
       };
+      // Drop onto a card of the SAME zone to reorder before it; cross-zone
+      // drops fall through (no stopPropagation) to the zone's own handler.
+      if (edit.reorder) {
+        card.ondragover = (e) => { e.preventDefault(); card.classList.add("reorder-target"); };
+        card.ondragleave = () => card.classList.remove("reorder-target");
+        card.ondrop = (e) => {
+          card.classList.remove("reorder-target");
+          let d = null; try { d = JSON.parse(e.dataTransfer.getData("text/plain")); } catch (_) { /* not a move */ }
+          if (d && d.move && d.from === edit.dragZone) { e.preventDefault(); e.stopPropagation(); edit.reorder(d.idx, idx); }
+        };
+      }
     }
     wrap.append(hoverable(card, img, {
       title: item.kind === "spell" || item.kind === "card" ? item.name : source,
@@ -2480,7 +2582,8 @@ function renderBoard(f, edit = {}) {
 
   const pools = el("div", { className: "board-header pools" });
   if (ed) {
-    const wrap = el("span", { className: "fc-mana-edit" }, el("span", { className: "k", textContent: "pool " }));
+    const wrap = el("span", { className: "fc-mana-edit" },
+      el("span", { className: "k pool-label", textContent: "pool" }));
     ["W", "U", "B", "R", "G", "C"].forEach((sym) => {
       wrap.append(el("span", { className: "fc-mana-edit-cell" },
         el("img", { className: "ms", alt: sym, loading: "lazy", src: `https://svgs.scryfall.io/card-symbols/${sym}.svg` }),
@@ -2490,28 +2593,37 @@ function renderBoard(f, edit = {}) {
   } else {
     pools.append(el("span", {}, el("span", { className: "k", textContent: "pool " }), poolPips(f.mana_pool)));
   }
+  // A third header row for other pool-like quantities (energy, ...), shown only
+  // when the deck uses them.
+  const extras = el("div", { className: "board-header pools" });
   if (flags.energy) {
-    if (ed) pools.append(hstat("energy ", f.energy || 0, (v) => edit.onSet("energy", v), 0));
-    else pools.append(el("span", {}, el("span", { className: "k", textContent: "energy " }), energyPips(f.energy || 0)));
+    if (ed) extras.append(hstat("energy ", f.energy || 0, (v) => edit.onSet("energy", v), 0));
+    else extras.append(el("span", {}, el("span", { className: "k", textContent: "energy " }), energyPips(f.energy || 0)));
   }
   const header = el("div", {}, line1, ints, pools);
+  if (extras.childNodes.length) header.append(extras);
 
   // MTGO-like layout: exile + graveyard piles on the left, the field in the
   // middle, command zone + stack/library on the right, hand across the bottom.
   const dz = (node, zone) => { if (ed) node.dataset.drop = zone; return node; };
 
+  const reorder = (zone) => (ed ? (from, to) => fcReorder(zone, from, to) : null);
   const gyBox = dz(el("div", { className: "side-box" },
     el("div", { className: "zlabel", textContent: `Graveyard (${(f.graveyard || []).length})` }),
-    pile(f.graveyard, { onMenu: zoneMenu("graveyard"), dragZone: ed ? "graveyard" : null })), "graveyard");
+    pile(f.graveyard, { onMenu: zoneMenu("graveyard"), dragZone: ed ? "graveyard" : null, reorder: reorder("graveyard") })), "graveyard");
   const exBox = dz(el("div", { className: "side-box" },
     el("div", { className: "zlabel", textContent: `Exile (${(f.exile || []).length})` }),
-    pile(f.exile, { onMenu: zoneMenu("exile"), dragZone: ed ? "exile" : null })), "exile");
+    pile(f.exile, { onMenu: zoneMenu("exile"), dragZone: ed ? "exile" : null, reorder: reorder("exile") })), "exile");
   const fieldArea = dz(el("div", { className: "bzone area-field" },
     el("div", { className: "field-row" },
       el("div", { className: "zlabel", textContent: `Battlefield (${nonlands.length + lands.length})` }),
       el("div", { className: "tiles" }, ...nonlands)),
     el("div", { className: "field-row lands" },
       el("div", { className: "tiles" }, ...lands))), "battlefield");
+  // Right-click empty battlefield space → add a token (tiles stopPropagation).
+  if (ed && edit.onFieldMenu) {
+    fieldArea.oncontextmenu = (e) => { e.preventDefault(); hideHover(); edit.onFieldMenu(e); };
+  }
   const handArea = dz(el("div", { className: "bzone area-hand" },
     el("div", { className: "zlabel", textContent: `Hand (${(f.hand || []).length})` }),
     el("div", { className: "tiles hand" }, ...(f.hand || []).map(handTile))), "hand");
@@ -2526,24 +2638,21 @@ function renderBoard(f, edit = {}) {
     edit.commanderTax.forEach((t) => {
       const inp = el("input", { type: "number", min: "0", value: String(t.count), className: "fc-num" });
       inp.onchange = () => edit.onSetTax(t.name, inp.value);
+      // Tax = {2} per prior cast, i.e. "Tax {2} × <casts>".
       tax.append(el("div", { className: "fc-tax-row" },
-        el("span", { className: "fc-tax-name", title: t.name, textContent: "cast" }),
-        inp, el("span", { className: "fc-tax-eq", textContent: "tax" }), manaSymbolOrText(2 * t.count)));
+        el("span", { className: "fc-tax-name", title: t.name, textContent: "Tax" }),
+        manaCostEl("{2}"), el("span", { className: "fc-tax-eq", textContent: "×" }), inp));
     });
     cmdBox.append(tax);
   }
   // Right column: command zone + (editor) library-top / (replay) stack.
   let rightSecond;
   if (ed) {
-    // The library-top is an ORDERED row of tiles: front (leftmost) = top of library.
-    const libTiles = (f.library_top || []).map((n, idx) => tile(n, {
-      editable: true,
-      onMenu: (e) => edit.onZoneMenu && edit.onZoneMenu("library", idx, n, e),
-      dragData: { move: true, from: "library", idx, name: n },
-    }));
+    // Library-top is an overlapping pile (like graveyard/exile); front = top.
+    // Drag a card onto another to reorder which is on top.
     rightSecond = dz(el("div", { className: "side-box" },
-      el("div", { className: "zlabel", textContent: `Library — front = top (${libTiles.length})` }),
-      el("div", { className: "tiles lib-tiles" }, ...libTiles)), "library");
+      el("div", { className: "zlabel", textContent: `Library — front = top (${(f.library_top || []).length})` }),
+      pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: reorder("library") })), "library");
   } else {
     rightSecond = el("div", { className: "side-box" },
       el("div", { className: "zlabel", textContent: `Stack (${(f.stack || []).length})` }),

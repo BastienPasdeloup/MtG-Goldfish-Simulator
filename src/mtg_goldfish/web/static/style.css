@@ -200,20 +200,17 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 /* inline number-input controls in the editable board header */
 .fc-hstat { display: inline-flex; align-items: center; gap: .2rem; }
 .fc-step { padding: 0 .35rem; min-width: 1.3rem; line-height: 1.5; font-size: 13px; border-radius: 4px; }
-.fc-num { width: 3.2rem; padding: .05rem .2rem; font-size: 12px; }
+.fc-num { width: 2.4rem; padding: .05rem .15rem; font-size: 12px; }
 .fc-mana-edit { display: inline-flex; align-items: center; gap: .1rem; flex-wrap: wrap; }
-.fc-mana-edit-cell { display: inline-flex; align-items: center; gap: .15rem; margin-right: .4rem; }
+.fc-mana-edit .pool-label { margin-right: .5rem; }
+.fc-mana-edit-cell { display: inline-flex; align-items: center; gap: .12rem; margin-right: .35rem; }
 .fc-mana-edit-cell .ms { width: 15px; height: 15px; }
-.fc-mana-edit-cell .fc-num { width: 2.8rem; }
+.fc-mana-edit-cell .fc-num { width: 2.1rem; }
 .fc-tax { margin-top: .4rem; }
 .fc-tax-row { display: flex; align-items: center; gap: .25rem; font-size: 12px; }
 .fc-tax-name, .fc-tax-eq { color: var(--muted); }
-.fc-tax-row .fc-num { width: 3rem; }
+.fc-tax-row .fc-num { width: 2.4rem; }
 .lib-tiles { overflow-x: auto; }
-/* generic-mana amount with no Scryfall symbol (tax > 20): grey circle w/ text */
-.gen-circle { display: inline-flex; align-items: center; justify-content: center;
-  min-width: 16px; height: 16px; padding: 0 3px; border-radius: 99px;
-  background: #c9ced6; color: #17130b; font-size: 10px; font-weight: 700; }
 /* per-keyword "until end of turn" toggle in the Add-keyword menu */
 .ctx-kwrow .ctx-eot { margin-left: auto; font-size: 10px; letter-spacing: .3px;
   border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--muted); padding: 0 .3rem; }
