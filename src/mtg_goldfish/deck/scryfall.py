@@ -52,6 +52,12 @@ def card_data_from_scryfall(raw: dict) -> CardData:
     oracle = raw.get("oracle_text", "")
     if not oracle and faces:
         oracle = "\n//\n".join(f.oracle_text for f in faces)
+    token_parts = [
+        {"name": p.get("name", ""), "type_line": p.get("type_line", ""),
+         "scryfall_id": p.get("id")}
+        for p in raw.get("all_parts", []) or []
+        if p.get("component") == "token"
+    ]
     return CardData(
         name=raw.get("name", ""),
         mana_cost=raw.get("mana_cost", "") or (faces[0].mana_cost if faces else ""),
@@ -68,6 +74,7 @@ def card_data_from_scryfall(raw: dict) -> CardData:
         image_normal=image,
         faces=faces,
         scryfall_id=raw.get("id"),
+        token_parts=token_parts,
     )
 
 
@@ -103,9 +110,36 @@ class ScryfallClient:
             pass  # cache is best-effort
 
     # ---- public API --------------------------------------------------------
-    def get_named(self, name: str) -> CardData:
-        """Resolve a single card by (fuzzy-tolerant) exact name."""
-        cached = self._read_cache(name)
+    def get_by_id(self, scryfall_id: str) -> CardData | None:
+        """Resolve a card (e.g. a token) by its Scryfall id, cached by id."""
+        if not scryfall_id:
+            return None
+        key = "__id__" + scryfall_id
+        cached = self._read_cache(key)
+        if cached:
+            return cached
+        try:
+            with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=20) as client:
+                resp = client.get(f"{SCRYFALL_API}/cards/{scryfall_id}")
+                if resp.status_code != 200:
+                    return None
+                card = card_data_from_scryfall(resp.json())
+                # Cache under the id key (token names collide across sets).
+                self._mem[key] = card
+                try:
+                    self._cache_path(key).write_text(card.model_dump_json(indent=2))
+                except Exception:
+                    pass
+                time.sleep(self.throttle_s)
+                return card
+        except Exception:
+            return None
+
+    def get_named(self, name: str, refresh: bool = False) -> CardData:
+        """Resolve a single card by (fuzzy-tolerant) exact name. `refresh` skips
+        the cache read (used to repopulate cards fetched before a schema change,
+        e.g. to pick up `token_parts`)."""
+        cached = None if refresh else self._read_cache(name)
         if cached:
             return cached
         with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=20) as client:

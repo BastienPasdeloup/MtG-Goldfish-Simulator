@@ -331,6 +331,8 @@ function enterSession(payload) {
     if (c.image) state.imageMap[c.name] = c.image;
     for (const f of c.faces || []) if (f.image) state.imageMap[f.name] = f.image;
   }
+  // Register token scans so tile() shows a real image in both viewers.
+  state.deckTokens.forEach((t) => { if (t.image && !state.imageMap[t.name]) state.imageMap[t.name] = t.image; });
   $("home-view").classList.add("hidden");
   $("session-view").classList.remove("hidden");
   $("bug-btn").classList.remove("hidden");
@@ -1130,13 +1132,15 @@ function fcAddToZone(name, zone, x, y) {
   renderConfigBuilder();
 }
 
-// Reorder a card within a name-list zone (graveyard / exile / library). For the
-// library this changes which card is on top (front = top).
-function fcReorder(zone, fromIdx, toIdx) {
-  const arr = state.fixedConfig[zone];
-  if (!Array.isArray(arr) || fromIdx === toIdx) return;
-  const [card] = arr.splice(fromIdx, 1);
-  arr.splice(fromIdx < toIdx ? toIdx - 1 : toIdx, 0, card);
+// Commit a live drag-reorder: read the new DOM order of a pile (each card
+// carries its ORIGINAL model index in data-idx) and rebuild the zone's list to
+// match. For the library this changes which card is on top (front = top).
+function fcCommitPileOrder(zone, wrap) {
+  const orig = state.fixedConfig[zone];
+  if (!Array.isArray(orig)) return;
+  const order = Array.prototype.map.call(wrap.querySelectorAll(".pile-img"), (c) => +c.dataset.idx);
+  const next = order.map((i) => orig[i]).filter((v) => v !== undefined);
+  if (next.length === orig.length) state.fixedConfig[zone] = next;
   renderConfigBuilder();
 }
 
@@ -1407,26 +1411,46 @@ function fcPermMenu(p, e) {
   }
 
   items.push({ sep: true }, { label: "Remove from battlefield", onClick: () => fcRemove("battlefield", idx) });
+  // A commander can always be shuffled into the library, wherever it is.
+  if (!it.token && fcIsCommander(it.name)) {
+    items.push({ label: "Shuffle to library", onClick: () => fcShuffleCommander(it.name) });
+  }
   showContextMenu(e.clientX, e.clientY, items);
 }
 
 // Right-click menu on a hand / graveyard / exile card.
 function fcZoneMenu(zone, idx, name, e) {
-  showContextMenu(e.clientX, e.clientY, [
-    { label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) },
-  ]);
+  const items = [{ label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) }];
+  if (fcIsCommander(name)) {
+    items.push({ label: "Shuffle to library", onClick: () => fcShuffleCommander(name) });
+  }
+  showContextMenu(e.clientX, e.clientY, items);
 }
 
-// Right-click menu on a commander in the command zone — the only action is to
-// remove it from every area (it is shuffled into the library at game start,
-// and shows as 0 in the picker).
+// Shuffle a commander into the library: remove it from every area and mark it
+// removed (the backend shuffles it into the deck at game start; the picker
+// shows it as 0). Available wherever the commander is.
+function fcShuffleCommander(name) {
+  const fc = state.fixedConfig;
+  const bi = fc.battlefield.findIndex((b) => !b.token && b.name === name);
+  if (bi >= 0) {
+    fc.battlefield.splice(bi, 1);
+    fc.battlefield.forEach((b) => {
+      if (b.attached_to === bi) b.attached_to = null;
+      else if (b.attached_to != null && b.attached_to > bi) b.attached_to -= 1;
+    });
+  }
+  ["hand", "graveyard", "exile", "library"].forEach((z) => {
+    fc[z] = (fc[z] || []).filter((n) => n !== name);
+  });
+  if (!fc.commander_removed.includes(name)) fc.commander_removed.push(name);
+  renderConfigBuilder();
+}
+
+// Right-click menu on a commander in the command zone.
 function fcCommandMenu(idx, name, e) {
   showContextMenu(e.clientX, e.clientY, [
-    { label: "Remove from any area", onClick: () => {
-        const r = state.fixedConfig.commander_removed;
-        if (!r.includes(name)) r.push(name);
-        renderConfigBuilder();
-      } },
+    { label: "Shuffle to library", onClick: () => fcShuffleCommander(name) },
   ]);
 }
 
@@ -2384,10 +2408,12 @@ function tile(name, opts = {}) {
       (opts.commander ? " commander" : "") + (opts.attacking ? " attacking" : ""),
     title: name + (opts.tapped ? " (tapped)" : "") + (opts.attacking ? " (attacking)" : ""),
   });
-  const img = opts.token ? null : state.imageMap[name];
-  if (opts.token) {
-    // Tokens have no card image: compose a card face with name, type line,
-    // textbox and P/T (for creatures), tinted by the token's colour(s).
+  // A token uses its real Scryfall scan when we have one; otherwise a composed
+  // face. Non-token cards use their card image.
+  const img = state.imageMap[name];
+  if (opts.token && !img) {
+    // No scan: compose a card face with name, type line, textbox and P/T,
+    // tinted by the token's colour(s).
     t.classList.add("token-card");
     const face = el("div", { className: "tok-face" },
       el("div", { className: "tok-name", textContent: name }),
@@ -2517,20 +2543,31 @@ function pile(items, edit = {}) {
       card.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); edit.onMenu(idx, item.name, e); };
     }
     if (edit.dragZone) {
+      card.dataset.idx = idx;
       card.draggable = true;
       card.ondragstart = (e) => {
         e.dataTransfer.setData("text/plain", JSON.stringify({ move: true, from: edit.dragZone, idx, name: item.name }));
         e.dataTransfer.effectAllowed = "move"; hideHover();
+        // Live in-zone sort: track the dragged element (fade it) so dragover can
+        // move it among its siblings and show the new order in real time.
+        if (edit.reorder) { state.fcSort = { zone: edit.dragZone, el: card }; setTimeout(() => card.classList.add("dragging"), 0); }
       };
-      // Drop onto a card of the SAME zone to reorder before it; cross-zone
-      // drops fall through (no stopPropagation) to the zone's own handler.
+      card.ondragend = () => {
+        if (state.fcSort && state.fcSort.zone === edit.dragZone && card.parentNode) {
+          fcCommitPileOrder(edit.dragZone, card.parentNode);
+        }
+        card.classList.remove("dragging");
+        state.fcSort = null;
+      };
+      // Same-zone drag over another card → move the dragged node before/after it
+      // live. Cross-zone drags (state.fcSort of another/no zone) fall through to
+      // the zone's own drop handler.
       if (edit.reorder) {
-        card.ondragover = (e) => { e.preventDefault(); card.classList.add("reorder-target"); };
-        card.ondragleave = () => card.classList.remove("reorder-target");
-        card.ondrop = (e) => {
-          card.classList.remove("reorder-target");
-          let d = null; try { d = JSON.parse(e.dataTransfer.getData("text/plain")); } catch (_) { /* not a move */ }
-          if (d && d.move && d.from === edit.dragZone) { e.preventDefault(); e.stopPropagation(); edit.reorder(d.idx, idx); }
+        card.ondragover = (e) => {
+          if (!state.fcSort || state.fcSort.zone !== edit.dragZone || state.fcSort.el === card) return;
+          e.preventDefault();
+          const r = card.getBoundingClientRect();
+          card.parentNode.insertBefore(state.fcSort.el, e.clientX > r.left + r.width / 2 ? card.nextSibling : card);
         };
       }
     }
@@ -2644,8 +2681,10 @@ function renderBoard(f, edit = {}) {
   }
   const ints = el("div", { className: "board-header" },
     hstat("life ", f.life, ed && ((v) => edit.onSet("life", v))),
-    hstat("opp ", f.opponent_life ?? 20, ed && ((v) => edit.onSet("opponent_life", v))),
-    el("span", {}, el("span", { className: "k", textContent: "library " }), String(f.library)));
+    hstat("opp ", f.opponent_life ?? 20, ed && ((v) => edit.onSet("opponent_life", v))));
+  // In the editor the library size moves into the Library zone label; replay
+  // keeps it in the header.
+  if (!ed) ints.append(el("span", {}, el("span", { className: "k", textContent: "library " }), String(f.library)));
   if (flags.storm) ints.append(hstat("storm ", c.storm || 0, ed && ((v) => edit.onSet("storm", v)), 0));
 
   const pools = el("div", { className: "board-header pools" });
@@ -2675,13 +2714,12 @@ function renderBoard(f, edit = {}) {
   // middle, command zone + stack/library on the right, hand across the bottom.
   const dz = (node, zone) => { if (ed) node.dataset.drop = zone; return node; };
 
-  const reorder = (zone) => (ed ? (from, to) => fcReorder(zone, from, to) : null);
   const gyBox = dz(el("div", { className: "side-box" },
     el("div", { className: "zlabel", textContent: `Graveyard (${(f.graveyard || []).length})` }),
-    pile(f.graveyard, { onMenu: zoneMenu("graveyard"), dragZone: ed ? "graveyard" : null, reorder: reorder("graveyard") })), "graveyard");
+    pile(f.graveyard, { onMenu: zoneMenu("graveyard"), dragZone: ed ? "graveyard" : null, reorder: ed })), "graveyard");
   const exBox = dz(el("div", { className: "side-box" },
     el("div", { className: "zlabel", textContent: `Exile (${(f.exile || []).length})` }),
-    pile(f.exile, { onMenu: zoneMenu("exile"), dragZone: ed ? "exile" : null, reorder: reorder("exile") })), "exile");
+    pile(f.exile, { onMenu: zoneMenu("exile"), dragZone: ed ? "exile" : null, reorder: ed })), "exile");
   const fieldArea = dz(el("div", { className: "bzone area-field" },
     el("div", { className: "field-row" },
       el("div", { className: "zlabel", textContent: `Battlefield (${nonlands.length + lands.length})` }),
@@ -2722,8 +2760,8 @@ function renderBoard(f, edit = {}) {
     // Library-top is an overlapping pile (like graveyard/exile); front = top.
     // Drag a card onto another to reorder which is on top.
     rightSecond = dz(el("div", { className: "side-box" },
-      el("div", { className: "zlabel", textContent: `Library — front = top (${(f.library_top || []).length})` }),
-      pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: reorder("library") })), "library");
+      el("div", { className: "zlabel", textContent: `Library — front = top (${(f.library_top || []).length} set of ${f.library} total)` }),
+      pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: true })), "library");
   } else {
     rightSecond = el("div", { className: "side-box" },
       el("div", { className: "zlabel", textContent: `Stack (${(f.stack || []).length})` }),

@@ -204,46 +204,57 @@ def deck_flags(deck: Deck) -> dict:
     return {"storm": storm, "energy": energy}
 
 
-_COLOR_WORDS = {"white", "blue", "black", "red", "green", "colorless"}
-_COLOR_LETTER = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
-# Artifact/enchantment tokens that carry no P/T (their type is their name).
-_NAMED_TOKENS = {"Treasure", "Food", "Clue", "Blood", "Gold", "Map", "Powerstone",
-                 "Incubator", "Junk", "Shard", "Role", "Walker"}
+_TOKEN_LIST_CACHE: dict[tuple, list[dict]] = {}
+
+
+def _int_or_none(v) -> int | None:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def deck_tokens(deck: Deck) -> list[dict]:
-    """Best-effort list of token permanents the deck's cards can create, scanned
-    from oracle text ("create a 1/1 white Soldier creature token", "create a
-    Treasure token", ...). Heuristic — the editor also offers a custom "Add
-    token…"; this just pre-populates common ones. Deduped by (name, P/T)."""
-    import re as _re
+    """The token permanents the deck's cards can create, resolved from Scryfall's
+    `all_parts` (authoritative name / type / P/T / colour / SCAN image). Cards
+    cached before token_parts existed are re-fetched once. Cached per deck; the
+    "Add token…" prompt still covers anything not found."""
+    from ..deck.scryfall import ScryfallClient
+
+    sig = tuple(sorted(e.card.name for e in deck.entries))
+    if sig in _TOKEN_LIST_CACHE:
+        return _TOKEN_LIST_CACHE[sig]
+
+    sc = ScryfallClient()
     seen: dict[tuple, dict] = {}
     for e in deck.entries:
-        for sent in _re.split(r"[.\n]", e.card.oracle_text or ""):
-            low = sent.lower()
-            if "token" not in low or "create" not in low or "copy" in low:
-                continue
-            frag = sent[_re.search(r"create[s]?\b", sent, _re.I).end():]
-            before = frag[:frag.lower().find("token")]
-            pt = _re.search(r"(\d+)/(\d+)", before)
-            power = int(pt.group(1)) if pt else None
-            tough = int(pt.group(2)) if pt else None
-            is_creature = "creature token" in frag.lower() or pt is not None
-            colors = [_COLOR_LETTER[w] for w in _COLOR_LETTER if w in before.lower()]
-            caps = [w for w in _re.findall(r"\b([A-Z][A-Za-z']+)\b", before)
-                    if w.lower() not in _COLOR_WORDS]
-            name = " ".join(caps[-2:]) if caps else ("Creature" if is_creature else "")
-            if is_creature:
-                type_line = f"Token Creature — {name}" if name else "Token Creature"
-            elif name in _NAMED_TOKENS or (caps and pt is None):
-                type_line = f"Token Artifact — {name}"
-            else:
-                continue  # too vague to be useful
-            key = (name, power, tough)
-            seen.setdefault(key, {"name": name or "Token", "power": power,
-                                  "toughness": tough, "type_line": type_line,
-                                  "colors": colors})
-    return sorted(seen.values(), key=lambda t: t["name"])
+        card = e.card
+        if "token" not in (card.oracle_text or "").lower():
+            continue
+        parts = card.token_parts
+        if not parts:  # cached before token_parts existed — refresh once
+            try:
+                parts = sc.get_named(card.name, refresh=True).token_parts
+            except Exception:
+                parts = []
+        for tp in parts:
+            tok = sc.get_by_id(tp.get("scryfall_id"))
+            if tok is not None:
+                is_creature = "creature" in tok.type_line.split("—")[0].lower()
+                spec = {"name": tok.name, "type_line": tok.type_line,
+                        "power": _int_or_none(tok.power) if is_creature else None,
+                        "toughness": _int_or_none(tok.toughness) if is_creature else None,
+                        "colors": list(tok.colors or []), "image": tok.image}
+            else:  # no image, but keep the name/type from all_parts
+                spec = {"name": tp.get("name") or "Token",
+                        "type_line": tp.get("type_line") or "Token",
+                        "power": None, "toughness": None, "colors": [], "image": None}
+            key = (spec["name"], spec["power"], spec["toughness"], tuple(spec["colors"]))
+            seen.setdefault(key, spec)
+
+    result = sorted(seen.values(), key=lambda t: t["name"])
+    _TOKEN_LIST_CACHE[sig] = result
+    return result
 
 
 def session_payload(session: Session) -> dict:

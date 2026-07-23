@@ -53,6 +53,9 @@ class CardData(BaseModel):
     image_normal: str | None = None
     faces: list[CardFace] = Field(default_factory=list)
     scryfall_id: str | None = None
+    # Related token permanents this card creates (from Scryfall `all_parts`):
+    # each {name, type_line, scryfall_id}. Used to show real token scans.
+    token_parts: list[dict] = Field(default_factory=list)
 
     # ---- convenience predicates over the type line -------------------------
     def _types(self) -> set[str]:
