@@ -100,6 +100,49 @@ class SimulateRequest(BaseModel):
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+_COUNTER_STOPWORDS = {"each", "that", "those", "many", "the", "a", "of", "no", "any",
+                      "some", "this", "these", "time", "with", "for", "one", "two",
+                      "three", "or", "and", "its", "their", "such", "another"}
+
+
+def _initial_counters(card) -> dict[str, int]:
+    """Counters a permanent of `card` ENTERS the battlefield with (planeswalker
+    loyalty, Peter Parker's Camera's film, a Saga's first lore counter, ...), so
+    the Fixed-config editor can initialise it to the correct count."""
+    from ..cards import build_card
+    from ..engine.game_state import GameState
+    try:
+        cs = dict(build_card(card).enters_with_counters(GameState()))
+    except Exception:
+        cs = {}
+    if "saga" in card.type_line.lower():
+        cs.setdefault("lore", 1)  # a Saga enters with its first lore counter
+    return {k: int(v) for k, v in cs.items() if v}
+
+
+def _counter_kinds(card) -> list[str]:
+    """Counter kinds this card deals in — scanned from its oracle text ("+1/+1
+    counters", "lore counter", ...) plus the ones it enters with and the ones
+    implied by its type — so the editor's "Add counter" menu can list them."""
+    kinds: list[str] = []
+    for k in re.findall(r"([+\-]?[A-Za-z0-9/][A-Za-z0-9+\-/]*)\s+counters?",
+                        card.oracle_text or "", re.I):
+        k = k.strip().lower()
+        if k and k not in _COUNTER_STOPWORDS and k not in kinds:
+            kinds.append(k)
+    head = card.type_line.split("—")[0].lower()
+    if "creature" in head:
+        for k in ("+1/+1", "-1/-1"):
+            if k not in kinds:
+                kinds.append(k)
+    if "planeswalker" in head and "loyalty" not in kinds:
+        kinds.append("loyalty")
+    for k in _initial_counters(card):
+        if k not in kinds:
+            kinds.append(k)
+    return kinds
+
+
 def card_view(deck: Deck) -> list[dict]:
     """Aggregate the deck into per-card rows for the UI (implemented flag,
     image, sort keys)."""
@@ -134,6 +177,8 @@ def card_view(deck: Deck) -> list[dict]:
             "implemented": is_implemented(c.name),
             "is_land": c.is_land,
             "loyalty": c.loyalty,  # for the Fixed-config editor (planeswalkers)
+            "enters_counters": _initial_counters(c),  # counters it enters play with
+            "counter_kinds": _counter_kinds(c),       # counter kinds it can carry
         }
     return list(agg.values())
 

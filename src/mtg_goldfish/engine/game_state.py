@@ -96,6 +96,7 @@ class Permanent:
     temp_power: int = 0                 # until end of turn
     temp_toughness: int = 0
     temp_keywords: set = field(default_factory=set)  # lowercase, until end of turn
+    extra_keywords: set = field(default_factory=set)  # lowercase, permanent grants (not cleared at cleanup)
     # P/T-defining behaviour stays anchored to the permanent even when its text
     # box moves (Deadpool's exchange): when set, dynamic P/T is read from this
     # impl instead of `impl`.
@@ -169,6 +170,7 @@ class Permanent:
             temp_power=self.temp_power,
             temp_toughness=self.temp_toughness,
             temp_keywords=set(self.temp_keywords),
+            extra_keywords=set(self.extra_keywords),
             pt_impl=self.pt_impl,
             damage=self.damage,
             attached_to=self.attached_to,
@@ -882,7 +884,8 @@ class GameState:
 
     def has_keyword(self, perm: Permanent, kw: str) -> bool:
         k = kw.lower()
-        return k in (x.lower() for x in perm.card.keywords) or k in perm.temp_keywords
+        return (k in (x.lower() for x in perm.card.keywords)
+                or k in perm.temp_keywords or k in perm.extra_keywords)
 
     # ---- energy (a pool: gained/spent, never emptied by phases) -------------
     def add_energy(self, n: int) -> None:
@@ -1277,8 +1280,8 @@ class GameState:
         }
         # Granted (until-end-of-turn) abilities, e.g. Cosmic Spider-Man's
         # combat buff: shown as badges for as long as they last.
-        if p.temp_keywords:
-            view["granted"] = sorted(p.temp_keywords)
+        if p.temp_keywords or p.extra_keywords:
+            view["granted"] = sorted(p.temp_keywords | p.extra_keywords)
         # "As it enters, choose ..." (Multiversal Passage's basic land type):
         # shown as a badge on the tile.
         if p.chosen:

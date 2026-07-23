@@ -14,8 +14,17 @@ class FixedBattlefieldCard(BaseModel):
     # Counters to put on it, by kind (e.g. {"+1/+1": 2, "loyalty": 5}). These
     # OVERRIDE the permanent's natural enters-with counters for the kinds given.
     counters: dict[str, int] = Field(default_factory=dict)
-    # Keywords granted until end of turn (lowercase, e.g. ["flying", "haste"]).
+    # Keywords granted permanently (lowercase, e.g. ["flying", "haste"]).
     granted: list[str] = Field(default_factory=list)
+    # Keywords granted only until end of turn (lowercase).
+    granted_eot: list[str] = Field(default_factory=list)
+    # For a double-faced card: True = on its back face.
+    transformed: bool = False
+    # Attacking this turn (honoured only in a combat phase).
+    attacking: bool = False
+    # Index (within `battlefield`) of the permanent this one is attached to
+    # (auras enchanting / equipment equipping it); None = unattached.
+    attached_to: int | None = None
 
 
 class FixedConfig(BaseModel):
@@ -27,13 +36,20 @@ class FixedConfig(BaseModel):
     hand: list[str] = Field(default_factory=list)
     graveyard: list[str] = Field(default_factory=list)
     exile: list[str] = Field(default_factory=list)
+    # Explicit top of the library (in order, top first). The remaining deck
+    # cards are shuffled in below.
+    library: list[str] = Field(default_factory=list)
     life: int = 20
     opponent_life: int = 20
     # Mana currently in the pool, by colour symbol: W/U/B/R/G/C.
     mana_pool: dict[str, int] = Field(default_factory=dict)
     storm_count: int = 0
+    energy: int = 0
     turn: int = 1
     phase: str = "precombat_main"  # a Phase value (see engine.phases)
+    # Commander tax: times each commander has already been cast this game
+    # ({name: count}); the recast tax is {2}×count.
+    commander_cast: dict[str, int] = Field(default_factory=dict)
 
 
 class SimConfig(BaseModel):

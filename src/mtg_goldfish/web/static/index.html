@@ -105,30 +105,15 @@
             <!-- Fixed-config builder: a fully-specified starting state -->
             <div id="config-builder" class="hidden">
               <p class="muted" style="font-size:12px;margin:.2rem 0 .5rem">
-                Set the exact state the search starts from. Deck cards not placed below
-                make up the library (shuffled each game). Battlefield permanents are not
-                summoning-sick and fire no enter-the-battlefield triggers.
+                Set the exact state the search starts from. Edit life / mana / turn / phase
+                with the +/- controls on the board; click a battlefield card to tap it,
+                right-click any card for more. Deck cards not placed make up the library
+                (shuffled each game). Battlefield permanents are not summoning-sick and fire
+                no enter-the-battlefield triggers.
               </p>
-              <div class="row" style="flex-wrap:wrap;gap:.5rem">
-                <div><label>Turn</label><br /><input id="fc-turn" type="number" min="1" value="1" style="width:4.5rem" /></div>
-                <div><label>Phase</label><br /><select id="fc-phase"></select></div>
-                <div><label>Your life</label><br /><input id="fc-life" type="number" value="20" style="width:4.5rem" /></div>
-                <div><label>Opp. life</label><br /><input id="fc-opp-life" type="number" value="20" style="width:4.5rem" /></div>
-                <div><label>Storm count</label><br /><input id="fc-storm" type="number" min="0" value="0" style="width:4.5rem" /></div>
-              </div>
-              <div class="row" style="margin-top:.4rem;align-items:flex-end;gap:.35rem;flex-wrap:wrap">
-                <label style="align-self:center;margin-right:.2rem">Mana pool</label>
-                <div id="fc-mana"></div>
-              </div>
-              <div class="sep"></div>
               <div id="fc-zones"></div>
-              <label style="margin-top:.5rem;display:block">Add cards to
-                <select id="fc-target-zone">
-                  <option value="battlefield">Battlefield</option>
-                  <option value="hand">Hand</option>
-                  <option value="graveyard">Graveyard</option>
-                  <option value="exile">Exile</option>
-                </select>
+              <label style="margin-top:.5rem;display:block">Add cards
+                <span class="muted" style="font-size:12px">— drag a card onto a zone above (battlefield, hand, graveyard, exile or library top); drag cards between zones to move them</span>
               </label>
               <div id="fc-card-picker" class="fixed-picker"></div>
               <div class="sep"></div>

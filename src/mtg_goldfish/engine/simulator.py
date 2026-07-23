@@ -802,16 +802,22 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     variant.graveyard, variant.exile = [], []
     variant.mana_pool.clear()
 
-    for spec in fixed.get("battlefield", []):
+    # `placed[i]` is the permanent built for battlefield spec i (or None if the
+    # card could not be taken), so attachment indices line up with the spec.
+    specs = list(fixed.get("battlefield", []))
+    placed: list = []
+    for spec in specs:
         name = spec.get("name") if isinstance(spec, dict) else spec
         card = take(name)
         if card is None:
+            placed.append(None)
             continue
         perm = make_permanent(variant, card,
                               is_commander=card.name in base_state.commander_names)
         perm.summoning_sick = False
         if isinstance(spec, dict):
             perm.tapped = bool(spec.get("tapped"))
+            perm.transformed = bool(spec.get("transformed"))  # DFC back face
             # Counters OVERRIDE the natural enters-with counters for the kinds
             # given (a planeswalker keeps its base loyalty unless set here).
             for kind, n in (spec.get("counters") or {}).items():
@@ -819,10 +825,22 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                     perm.counters[kind] = int(n)
                 else:
                     perm.counters.pop(kind, None)
-            # Keywords granted until end of turn (Cosmic Spider-Man-style).
+            # Granted keywords: permanent (extra_keywords) vs until end of turn
+            # (temp_keywords) — separate per-keyword lists.
             for kw in (spec.get("granted") or []):
+                perm.extra_keywords.add(str(kw).lower())
+            for kw in (spec.get("granted_eot") or []):
                 perm.temp_keywords.add(str(kw).lower())
+        placed.append(perm)
         variant.battlefield.append(perm)
+    # Resolve attachments (auras/equipment) now that all permanents exist.
+    for i, spec in enumerate(specs):
+        perm = placed[i]
+        if perm is None or not isinstance(spec, dict):
+            continue
+        host_idx = spec.get("attached_to")
+        if host_idx is not None and 0 <= host_idx < len(placed) and placed[host_idx] is not None:
+            perm.attached_to = placed[host_idx].uid
     for name in fixed.get("hand", []):
         card = take(name)
         if card is not None:
@@ -836,13 +854,24 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         if card is not None:
             variant.exile.append(card)
 
+    # Explicit top of the library (in order); the rest of the deck is shuffled
+    # in below. The player "knows" the set-top cards, so mark them known (with
+    # fake shuffling on, a later shuffle keeps them near the top).
+    top: list = []
+    for name in fixed.get("library", []):
+        card = take(name)
+        if card is not None:
+            top.append(card)
     rng.shuffle(lib_pool)
-    variant.library = lib_pool           # what is left of the deck
+    variant.library = top + lib_pool     # set top, then the shuffled remainder
     variant.command_zone = cmd_pool      # commanders not placed on the battlefield
+    if top:
+        variant.mark_known_in_library(*top)
 
     variant.life = int(fixed.get("life", 20))
     variant.opponent_life = int(fixed.get("opponent_life", 20))
     variant.storm_count = int(fixed.get("storm_count", 0))
+    variant.energy = int(fixed.get("energy", 0))
     for sym, n in (fixed.get("mana_pool") or {}).items():
         if n:
             variant.mana_pool.add(sym, int(n))
@@ -851,6 +880,28 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         variant.phase = Phase(fixed.get("phase", "precombat_main"))
     except ValueError:
         variant.phase = Phase.PRECOMBAT_MAIN
+
+    # Declared attackers (only meaningful in a combat phase): mark them as
+    # attacking so the search resolves combat from here (combat_actions returns
+    # [] once state.attackers is set, so the attack is "already declared").
+    combat = variant.phase in (Phase.BEGIN_COMBAT, Phase.DECLARE_ATTACKERS,
+                               Phase.DECLARE_BLOCKERS, Phase.COMBAT_DAMAGE, Phase.END_COMBAT)
+    if combat:
+        for i, spec in enumerate(specs):
+            perm = placed[i]
+            if perm is not None and isinstance(spec, dict) and spec.get("attacking") \
+                    and perm.is_creature_now:
+                variant.attackers.append(perm.uid)
+                perm.turn_flags["attacked"] = 1
+                variant.attacked_this_turn = True
+
+    # Commander tax: the commander has already been cast `count` times this game.
+    for name, count in (fixed.get("commander_cast") or {}).items():
+        count = int(count)
+        if count > 0:
+            variant.commander_cast_count[name] = count
+            variant.commander_cast_this_game = True
+
     variant.rng_seed = seed  # drives mid-game shuffles
     return variant
 
