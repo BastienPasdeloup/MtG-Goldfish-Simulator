@@ -1630,7 +1630,9 @@ function renderConfigBuilder() {
   // tile/pile drop carries JSON {move,from,idx,name} = move between zones).
   $("fc-zones").querySelectorAll("[data-drop]").forEach((node) => {
     node.ondragover = (ev) => { ev.preventDefault(); node.classList.add("drop-hover"); };
-    node.ondragleave = () => node.classList.remove("drop-hover");
+    // Only drop the highlight when the cursor truly leaves the zone — not when
+    // it crosses between the zone's own cards (which would flicker mid-reorder).
+    node.ondragleave = (ev) => { if (!node.contains(ev.relatedTarget)) node.classList.remove("drop-hover"); };
     node.ondrop = (ev) => {
       ev.preventDefault();
       node.classList.remove("drop-hover");
@@ -2644,16 +2646,28 @@ function pile(items, edit = {}) {
   // Live vertical sortable: while a same-zone card is dragged, insert it before
   // the first card whose middle is below the cursor (else at the end), so the
   // real order shows in real time. Cross-zone drags fall through to the zone.
+  // `dragover` fires many times per frame; we coalesce the DOM work to one
+  // update per animation frame (via rAF) so reordering stays smooth.
   if (edit.dragZone && edit.reorder) {
+    let raf = 0, cursorY = 0;
+    const apply = () => {
+      raf = 0;
+      if (!state.fcSort || state.fcSort.zone !== edit.dragZone) return;
+      const el = state.fcSort.el;
+      let target = null;
+      for (const c of wrap.querySelectorAll(".pile-img:not(.dragging)")) {
+        const r = c.getBoundingClientRect();
+        if (cursorY < r.top + r.height / 2) { target = c; break; }
+      }
+      if (target) { if (el.nextElementSibling !== target) wrap.insertBefore(el, target); }
+      else if (wrap.lastElementChild !== el) wrap.appendChild(el);
+    };
     wrap.ondragover = (e) => {
       if (!state.fcSort || state.fcSort.zone !== edit.dragZone) return;
       e.preventDefault();
-      const el = state.fcSort.el;
-      const target = Array.prototype.find.call(
-        wrap.querySelectorAll(".pile-img:not(.dragging)"),
-        (c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
-      if (target) { if (el.nextElementSibling !== target) wrap.insertBefore(el, target); }
-      else if (wrap.lastElementChild !== el) wrap.appendChild(el);
+      e.dataTransfer.dropEffect = "move";
+      cursorY = e.clientY;
+      if (!raf) raf = requestAnimationFrame(apply);
     };
   }
   return wrap;
@@ -2839,7 +2853,7 @@ function renderBoard(f, edit = {}) {
     // Library-top is an overlapping pile (like graveyard/exile); front = top.
     // Drag a card onto another to reorder which is on top.
     rightSecond = dz(el("div", { className: "side-box" },
-      el("div", { className: "zlabel", textContent: `Library — front = top (${(f.library_top || []).length} set of ${f.library} total)` }),
+      el("div", { className: "zlabel", textContent: `Library — front = top (${f.library})` }),
       pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: true })), "library");
   } else {
     rightSecond = el("div", { className: "side-box" },
