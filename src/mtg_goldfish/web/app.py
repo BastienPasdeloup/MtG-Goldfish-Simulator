@@ -205,6 +205,7 @@ def deck_flags(deck: Deck) -> dict:
 
 
 _TOKEN_LIST_CACHE: dict[tuple, list[dict]] = {}
+_TOKEN_SEARCH_CACHE: dict[str, list[dict]] = {}
 
 
 def _int_or_none(v) -> int | None:
@@ -291,6 +292,56 @@ def favicon() -> FileResponse:
     the site root, and every modern browser accepts an SVG there as long as
     the media type says so."""
     return FileResponse(_STATIC / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/api/tokens/search")
+def token_search(q: str = "") -> dict:
+    """Search Scryfall for token cards matching a name, so the fixed-config
+    "Add token…" popup can offer real candidates (with scans / P·T / colours).
+    Returns distinct tokens deduped by name + P/T + colours."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"tokens": []}
+    key = q.lower()
+    if key in _TOKEN_SEARCH_CACHE:
+        return {"tokens": _TOKEN_SEARCH_CACHE[key]}
+
+    import httpx
+
+    from ..deck.scryfall import SCRYFALL_API, card_data_from_scryfall
+
+    out: list[dict] = []
+    try:
+        resp = httpx.get(
+            f"{SCRYFALL_API}/cards/search",
+            params={"q": f"type:token {q}", "unique": "cards"},
+            headers={"User-Agent": "MtGGoldfishSimulator/0.1 (personal deck-testing tool)"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            seen: set[tuple] = set()
+            for raw in resp.json().get("data", []):
+                card = card_data_from_scryfall(raw)
+                is_creature = "creature" in card.type_line.split("—")[0].lower()
+                spec = {
+                    "name": card.name,
+                    "type_line": card.type_line,
+                    "power": _int_or_none(card.power) if is_creature else None,
+                    "toughness": _int_or_none(card.toughness) if is_creature else None,
+                    "colors": list(card.colors or []),
+                    "image": card.image,
+                }
+                k = (spec["name"], spec["power"], spec["toughness"], tuple(spec["colors"]))
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(spec)
+                if len(out) >= 40:
+                    break
+    except Exception:
+        out = []
+    _TOKEN_SEARCH_CACHE[key] = out
+    return {"tokens": out}
 
 
 @app.get("/api/meta")

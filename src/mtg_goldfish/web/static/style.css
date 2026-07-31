@@ -222,6 +222,9 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .picker-row.full { opacity: .5; }
 .tile.editable[draggable=true], .pile-img[draggable=true] { cursor: grab; }
 .pile-img.dragging { opacity: .35; }
+/* while reordering, spread the pile out so the live order is clearly visible */
+.pile.sorting .pile-img + .pile-img { margin-top: 4px; }
+.pile.sorting { padding-bottom: 4px; }
 [data-drop].drop-hover { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 6px; }
 /* context-menu stepper rows */
 .ctx-stepper { justify-content: space-between; gap: .3rem; }
@@ -372,6 +375,21 @@ table.sessions-table tbody tr.session-row:hover { background: var(--panel-2); }
 .bug-steps { margin: 0; padding-left: 1.2rem; }
 .bug-steps > li { margin-bottom: .8rem; }
 .modal-body { overflow: auto; padding: .5rem 1rem 1rem; }
+/* token-search popup (fixed-config "Add token…") */
+#fc-token-modal .modal { width: min(760px, 94vw); }
+#fc-token-q { width: 100%; margin-bottom: .4rem; }
+#fc-token-hint { margin-bottom: .6rem; }
+.tok-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: .7rem; }
+.tok-cand { display: flex; flex-direction: column; align-items: center; gap: .3rem; cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: .3rem; }
+.tok-cand:hover { border-color: var(--accent); background: var(--panel-2); }
+.tok-cand.custom { grid-column: 1 / -1; flex-direction: row; justify-content: center; }
+.tok-cand-img { width: 92px; height: 128px; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--panel-2); position: relative; }
+.tok-cand.custom .tok-cand-img { width: 60px; height: 84px; }
+.tok-cand-img img { width: 100%; height: 100%; object-fit: cover; }
+.tok-cand-img.token-card { flex-direction: column; padding: .3rem; text-align: center; border: 1px solid var(--border); }
+.tok-cand-name { font-size: 11px; font-weight: 600; }
+.tok-cand-pt { position: absolute; right: 4px; bottom: 3px; font-size: 12px; font-weight: 700; }
+.tok-cand-label { font-size: 11px; text-align: center; color: var(--muted); line-height: 1.2; }
 table.runs { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.runs th, table.runs td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 table.runs th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; position: sticky; top: 0; background: var(--panel); z-index: 2; }

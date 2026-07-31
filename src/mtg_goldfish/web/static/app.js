@@ -1090,20 +1090,90 @@ function fcAddToken(spec) {
   renderConfigBuilder();
 }
 
-function fcAddTokenPrompt() {
-  const name = (prompt("Token name (e.g. Soldier, Treasure):", "") || "").trim();
-  if (!name) return;
-  const pt = (prompt("Power/toughness for a creature token (blank for none):", "1/1") || "").trim();
-  const m = pt.match(/^(\d+)\s*\/\s*(\d+)$/);
-  const col = (prompt("Colour(s) — any of W U B R G (blank = colorless):", "") || "")
-    .toUpperCase().replace(/[^WUBRG]/g, "").split("");
-  const spec = { name, text: "", colors: [...new Set(col)] };
-  if (m) { spec.power = +m[1]; spec.toughness = +m[2]; spec.type_line = `Token Creature — ${name}`; }
-  else { spec.type_line = `Token Artifact — ${name}`; }
+// A plain, editable token carrying just the typed name (fallback when the
+// search finds nothing, or the user wants a bare token).
+const fcPlainTokenSpec = (name) => ({
+  name, type_line: "Token", text: "", colors: [], power: null, toughness: null, image: null,
+});
+
+// Lazily build (once) and return the token-search modal.
+function fcTokenModal() {
+  let ov = document.getElementById("fc-token-modal");
+  if (ov) return ov;
+  ov = el("div", { id: "fc-token-modal", className: "modal-overlay hidden" });
+  const input = el("input", { id: "fc-token-q", type: "text", autocomplete: "off",
+    placeholder: "Token name (e.g. Soldier, Treasure, Spirit)…" });
+  const hint = el("div", { id: "fc-token-hint", className: "muted sub" });
+  const results = el("div", { id: "fc-token-results", className: "tok-results" });
+  ov.append(el("div", { className: "modal" },
+    el("div", { className: "modal-head" },
+      el("b", {}, "Add token"),
+      el("span", { className: "spacer" }),
+      el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
+        onclick: () => ov.classList.add("hidden") })),
+    el("div", { className: "modal-body" }, input, hint, results)));
+  ov.onclick = (e) => { if (e.target === ov) ov.classList.add("hidden"); };
+  document.body.append(ov);
+  let timer = null;
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => fcTokenSearch(input.value), 250); };
+  input.onkeydown = (e) => { if (e.key === "Enter") { clearTimeout(timer); fcTokenSearch(input.value); } };
+  return ov;
+}
+
+async function fcTokenSearch(q) {
+  q = (q || "").trim();
+  const results = document.getElementById("fc-token-results");
+  const hint = document.getElementById("fc-token-hint");
+  results.replaceChildren();
+  if (q.length < 2) { hint.textContent = "Type at least 2 letters to search."; return; }
+  hint.textContent = "Searching…";
+  let toks = [];
+  try { toks = (await api("/api/tokens/search?q=" + encodeURIComponent(q))).tokens || []; }
+  catch (err) { hint.textContent = "Search failed: " + err.message; return; }
+  // Ignore results for a query the user has since changed.
+  if ((document.getElementById("fc-token-q").value || "").trim() !== q) return;
+  hint.textContent = toks.length
+    ? `${toks.length} match${toks.length === 1 ? "" : "es"} — click one to add it.`
+    : "No Scryfall tokens found — add a plain token below.";
+  for (const spec of toks) results.append(fcTokenCandidate(spec, false));
+  results.append(fcTokenCandidate(fcPlainTokenSpec(q), true));
+}
+
+function fcTokenCandidate(spec, isCustom) {
+  const face = el("div", { className: "tok-cand-img" });
+  if (spec.image) face.append(el("img", { src: spec.image, alt: spec.name, loading: "lazy" }));
+  else {
+    face.classList.add("token-card");
+    const tint = tokenTint(spec.colors);
+    if (tint) { face.style.boxShadow = `inset 0 0 0 3px ${tint}`; face.style.borderColor = tint; }
+    face.append(el("div", { className: "tok-cand-name", textContent: spec.name }));
+    if (spec.power != null) face.append(el("div", { className: "tok-cand-pt", textContent: `${spec.power}/${spec.toughness}` }));
+  }
+  const wrap = el("div", { className: "tok-cand" + (isCustom ? " custom" : "") }, face,
+    el("div", { className: "tok-cand-label", textContent: isCustom ? `Add “${spec.name}” as a plain token` : fcTokenLabel(spec) }));
+  wrap.onclick = () => fcPickToken(spec);
+  return wrap;
+}
+
+function fcPickToken(spec) {
+  // Register the scan so both visualizers show the real token art.
+  if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
   // Remember it so it can be re-added (quantity) from the "Add token" menu.
   state.customTokens = state.customTokens || [];
   if (!state.customTokens.some((t) => fcTokenLabel(t) === fcTokenLabel(spec))) state.customTokens.push(spec);
   fcAddToken(spec);
+  const ov = document.getElementById("fc-token-modal");
+  if (ov) ov.classList.add("hidden");
+}
+
+function fcAddTokenPrompt() {
+  const ov = fcTokenModal();
+  ov.classList.remove("hidden");
+  const input = document.getElementById("fc-token-q");
+  input.value = "";
+  document.getElementById("fc-token-results").replaceChildren();
+  document.getElementById("fc-token-hint").textContent = "Type a token name to search Scryfall.";
+  setTimeout(() => input.focus(), 30);
 }
 
 // Right-click menu on empty battlefield space: add a token (deck tokens +
@@ -2548,28 +2618,22 @@ function pile(items, edit = {}) {
       card.ondragstart = (e) => {
         e.dataTransfer.setData("text/plain", JSON.stringify({ move: true, from: edit.dragZone, idx, name: item.name }));
         e.dataTransfer.effectAllowed = "move"; hideHover();
-        // Live in-zone sort: track the dragged element (fade it) so dragover can
-        // move it among its siblings and show the new order in real time.
-        if (edit.reorder) { state.fcSort = { zone: edit.dragZone, el: card }; setTimeout(() => card.classList.add("dragging"), 0); }
+        // Live in-zone sort: fade the dragged card and spread the pile out so
+        // the order is visible while dragging.
+        if (edit.reorder) {
+          state.fcSort = { zone: edit.dragZone, el: card };
+          wrap.classList.add("sorting");
+          setTimeout(() => card.classList.add("dragging"), 0);
+        }
       };
       card.ondragend = () => {
+        wrap.classList.remove("sorting");
+        card.classList.remove("dragging");
         if (state.fcSort && state.fcSort.zone === edit.dragZone && card.parentNode) {
           fcCommitPileOrder(edit.dragZone, card.parentNode);
         }
-        card.classList.remove("dragging");
         state.fcSort = null;
       };
-      // Same-zone drag over another card → move the dragged node before/after it
-      // live. Cross-zone drags (state.fcSort of another/no zone) fall through to
-      // the zone's own drop handler.
-      if (edit.reorder) {
-        card.ondragover = (e) => {
-          if (!state.fcSort || state.fcSort.zone !== edit.dragZone || state.fcSort.el === card) return;
-          e.preventDefault();
-          const r = card.getBoundingClientRect();
-          card.parentNode.insertBefore(state.fcSort.el, e.clientX > r.left + r.width / 2 ? card.nextSibling : card);
-        };
-      }
     }
     wrap.append(hoverable(card, img, {
       title: item.kind === "spell" || item.kind === "card" ? item.name : source,
@@ -2577,6 +2641,21 @@ function pile(items, edit = {}) {
       ability: item.kind === "spell" || item.kind === "card" ? null : item.ability,
     }));
   });
+  // Live vertical sortable: while a same-zone card is dragged, insert it before
+  // the first card whose middle is below the cursor (else at the end), so the
+  // real order shows in real time. Cross-zone drags fall through to the zone.
+  if (edit.dragZone && edit.reorder) {
+    wrap.ondragover = (e) => {
+      if (!state.fcSort || state.fcSort.zone !== edit.dragZone) return;
+      e.preventDefault();
+      const el = state.fcSort.el;
+      const target = Array.prototype.find.call(
+        wrap.querySelectorAll(".pile-img:not(.dragging)"),
+        (c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+      if (target) { if (el.nextElementSibling !== target) wrap.insertBefore(el, target); }
+      else if (wrap.lastElementChild !== el) wrap.appendChild(el);
+    };
+  }
   return wrap;
 }
 
