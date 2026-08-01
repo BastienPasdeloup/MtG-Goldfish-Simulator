@@ -58,6 +58,12 @@ ability_activated(X) and creatures_in_play() >= 1): that passes even when some \
 OTHER effect produced the result. The property is that THIS ability caused it. \
 "uses / activates its ability" -> via_kind="activated"; "its triggered ability / \
 when ... triggers" -> via_kind="triggered".
+- For a NAMED card put into play BY a source — "X is FETCHED by Y", "Y puts X onto \
+the battlefield / into play", "Y searches up X" — test membership by NAME on \
+permanents_put_by/cards_put_by (they compare by count AND contain by name): \
+'Tropical Island' in state.permanents_put_by('Misty Rainforest', via_kind='activated'). \
+This is `str in <card-list>`; NEVER `str in <int>`. Only use a numeric compare \
+(>= N) for COUNTS, never with a card name.
 - "PUTS cards INTO HAND" is NOT "draws" and NOT the hand SIZE. "X puts / reveals \
 and puts N cards into your hand", "Atraxa's ETB puts at least 3 cards to hand", \
 "a tutor put a card into hand" -> cards_put_in_hand_by(source, via_kind=..., ) >= N \

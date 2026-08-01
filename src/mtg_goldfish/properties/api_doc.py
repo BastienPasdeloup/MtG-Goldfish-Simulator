@@ -38,16 +38,22 @@ with the spell or ability that CAUSED it, so properties can test what a
 resolution actually did):
   state.commander_name() -> str            # the deck's commander (stable name)
   state.permanents_put_by(source: str, via_kind=None, land=None, creature=None,
-                          token=None, turn=None) -> int
+                          token=None, name=None, turn=None) -> card-list
       # permanents put onto the battlefield by a resolving spell/ability of
       # `source` (name substring). via_kind narrows the cause:
-      # "triggered" | "activated" | "spell" | "land_drop".
-  state.cards_put_by(source: str, via_kind=None, turn=None) -> list[card]
+      # "triggered" | "activated" | "spell" | "land_drop". `name` (substring)
+      # keeps only permanents with that name. The result compares by COUNT and
+      # tests membership by NAME — so "X was put into play / FETCHED by Y" is:
+      #   "Tropical Island" in permanents_put_by("Misty Rainforest", via_kind="activated")
+      #   (or, equivalently, permanents_put_by("Misty Rainforest",
+      #    via_kind="activated", name="Tropical Island") >= 1)
+  state.cards_put_by(source: str, via_kind=None, turn=None) -> card-list
       # the CARD OBJECTS put onto the battlefield by `source`'s resolving
       # spell/ability — test any characteristic (.type_line, .cmc, .faces,
-      # .is_double_faced, .colors, ...). For a COUNT ("put at least one card"),
-      # prefer permanents_put_by(...) >= N; cards_put_by(...) also compares by
-      # length so cards_put_by(...) >= N works too.
+      # .is_double_faced, .colors, ...). Compares by COUNT (cards_put_by(...) >= N)
+      # AND tests membership by NAME ("Elf" in cards_put_by(...)), like
+      # permanents_put_by. A named card in play via a specific source ->
+      # permanents_put_by / cards_put_by with `in`; a specific TRAIT -> iterate.
   state.cards_drawn_by(source: str, turn=None) -> int
   state.cards_put_in_hand_by(source: str, via_kind=None, turn=None,
                              min_turn=None, max_turn=None) -> list[card]

@@ -408,6 +408,45 @@ def test_cards_put_by_supports_numeric_comparison():
     assert not (g.cards_put_by("Fetcher", via_kind="activated") >= 2)
 
 
+def test_permanents_put_by_membership_by_name():
+    # "X was fetched / put into play by Y": test membership by NAME on the
+    # card-list (compares by count AND contains by name). str-in-int must NOT
+    # happen — permanents_put_by returns a card-list, not a bare int.
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState(turn=2)
+    g.resolving = ("activated", "Misty Rainforest")
+    g.put_on_battlefield(_cd("Tropical Island", "", "Land — Forest Island"))
+    g.resolving = None
+    put = g.permanents_put_by("Misty Rainforest", via_kind="activated")
+    assert put >= 1 and len(put) == 1                       # count semantics
+    assert "Tropical Island" in put                         # membership by name
+    assert "Plains" not in put
+    assert g.permanents_put_by("Misty Rainforest", via_kind="activated",
+                               name="Tropical Island") >= 1  # explicit name filter
+    assert "Tropical Island" in g.cards_put_by("Misty Rainforest", via_kind="activated")
+
+
+def test_validation_runs_property_and_catches_runtime_errors():
+    # A property that compiles but blows up at runtime ("Name" in <int>) must be
+    # reported invalid by the validate endpoint, not pass and fail mid-search.
+    from mtg_goldfish.properties.models import PropertySpec
+    from mtg_goldfish.session import Session, new_id, now_iso
+    from mtg_goldfish.web.app import store, validate_properties
+
+    s = Session(id=new_id(), name="t", created_at=now_iso(), deck=Deck(name="t"))
+    s.properties = [
+        PropertySpec(id="ok", english="x", manual=True,
+                     code="def check(state):\n    return state.opponent_life <= 20\n"),
+        PropertySpec(id="boom", english="y", manual=True,
+                     code="def check(state):\n    return 'Tropical Island' in state.opponent_life\n"),
+    ]
+    store.save(s)
+    out = validate_properties(s.id)
+    assert out["results"]["ok"]["valid"] is True
+    assert out["results"]["boom"]["valid"] is False        # caught at validation
+    assert out["ok"] is False
+
+
 def _atraxa_camera_state(instant_speed):
     """Atraxa's ETB about to resolve, with Peter Parker's Camera in play (film
     counters, untapped) and mana for its {2}. Top 10 of the library are one

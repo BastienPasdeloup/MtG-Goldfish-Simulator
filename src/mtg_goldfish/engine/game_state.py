@@ -54,6 +54,21 @@ class CardList(list):
     def __ne__(self, other):
         n = self._n(other); return n != other if n is not None else super().__ne__(other)
 
+    def __contains__(self, item):
+        # `"Tropical Island" in cards_put_by(...)` — a STRING tests membership by
+        # card NAME (case-insensitive substring, matching the rest of the API's
+        # name handling, and any face of a DFC), so a property can ask "was this
+        # named card put into play" without pulling `.name` off each object.
+        if isinstance(item, str):
+            needle = item.lower()
+            for c in self:
+                names = [getattr(c, "name", "") or ""]
+                names += [getattr(f, "name", "") or "" for f in getattr(c, "faces", []) or []]
+                if any(needle in nm.lower() for nm in names):
+                    return True
+            return False
+        return super().__contains__(item)
+
     __hash__ = None  # lists are unhashable; keep it that way
 
 
@@ -1016,14 +1031,24 @@ class GameState:
         land: bool | None = None,
         creature: bool | None = None,
         token: bool | None = None,
+        name: str | None = None,
         turn: int | None = None,
-    ) -> int:
-        """How many permanents entered the battlefield because a spell or
-        ability of `source` (name substring) resolved. `via_kind` narrows the
-        cause: "triggered" | "activated" | "spell" | "land_drop"; land /
-        creature / token filter what entered. e.g. "the commander's triggered
-        ability put at least 2 lands into play" ->
-        permanents_put_by(state.commander_name(), via_kind="triggered", land=True) >= 2."""
+    ) -> "CardList":
+        """The permanents that entered the battlefield because a spell or ability
+        of `source` (name substring) resolved. `via_kind` narrows the cause:
+        "triggered" | "activated" | "spell" | "land_drop"; land / creature / token
+        filter what entered; `name` (substring) keeps only permanents with that
+        name. Returns a CardList that compares by COUNT and tests membership by
+        NAME, so all of these read naturally:
+          # "the commander's triggered ability put at least 2 lands into play"
+          permanents_put_by(state.commander_name(), via_kind="triggered", land=True) >= 2
+          # "Misty Rainforest fetched Tropical Island" (its activated ability put
+          #  a permanent named Tropical Island into play)
+          "Tropical Island" in permanents_put_by("Misty Rainforest", via_kind="activated")
+          #  ...equivalently:
+          permanents_put_by("Misty Rainforest", via_kind="activated", name="Tropical Island") >= 1"""
+        name_l = name.lower() if name else None
+
         def ok(e):
             if land is not None and e.get("is_land") != land:
                 return False
@@ -1031,9 +1056,17 @@ class GameState:
                 return False
             if token is not None and e.get("is_token") != token:
                 return False
+            if name_l is not None:
+                nm = (getattr(e.get("card"), "name", None) or e.get("name") or "")
+                if name_l not in nm.lower():
+                    return False
             return True
-        return self.count_events(kind="enter_battlefield", via=source,
-                                 via_kind=via_kind, turn=turn, pred=ok)
+
+        return CardList(
+            e["card"] for e in self.events_matching(
+                kind="enter_battlefield", via=source, via_kind=via_kind, turn=turn, pred=ok)
+            if e.get("card") is not None
+        )
 
     def cards_put_by(
         self, source: str, *, via_kind: str | None = None, turn: int | None = None

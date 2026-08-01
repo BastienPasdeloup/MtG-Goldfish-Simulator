@@ -616,6 +616,22 @@ def compile_one_property(session_id: str, prop_id: str) -> dict:
     return {"property": spec.model_dump(), "warnings": warnings}
 
 
+def _sample_state_for_validation(turn: int):
+    """A small, representative game state to smoke-test property code against
+    (validation only — never simulated). It carries one permanent and one
+    recorded event so properties that touch the board / event helpers exercise a
+    non-empty path, while still surfacing structural errors like `"Name" in <int>`."""
+    from ..deck.models import CardData
+    from ..engine.game_state import GameState
+
+    state = GameState(turn=max(1, turn), commander_names=("Sample Commander",))
+    state.resolving = ("activated", "Sample Source")
+    state.put_on_battlefield(
+        CardData(name="Sample Permanent", type_line="Creature — Human", cmc=1))
+    state.resolving = None
+    return state
+
+
 @app.post("/api/sessions/{session_id}/properties/validate")
 def validate_properties(session_id: str) -> dict:
     """Check that every enabled property has valid, runnable code — WITHOUT
@@ -643,11 +659,16 @@ def validate_properties(session_id: str) -> dict:
                 f"before running.")
             continue
         try:
-            CompiledProperty(spec)  # compiles the code and checks `check` exists
+            prop = CompiledProperty(spec)  # compiles the code and checks `check` exists
+            # Smoke-test: actually RUN it against a representative state, so
+            # runtime errors that compilation can't see — e.g. `"Name" in <int>`
+            # — are caught here instead of only surfacing (as a per-game 🐛) once
+            # the search is underway.
+            prop.evaluate(_sample_state_for_validation(spec.turn))
             results[spec.id] = {"valid": True, "problem": None}
         except Exception as exc:  # noqa: BLE001 - surface per-property
             results[spec.id] = {"valid": False, "problem": str(exc)}
-            warnings.append(f"{label}: the code is invalid — {exc}")
+            warnings.append(f"{label}: the code raised when run — {exc}")
     if enabled == 0:
         warnings.append("Add at least one enabled property before running.")
     ok = enabled > 0 and not any(not r["valid"] for r in results.values())
