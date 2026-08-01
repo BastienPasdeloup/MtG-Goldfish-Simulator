@@ -437,14 +437,13 @@ async function openRunsModal() {
         // Fixed-config run: no opening hand — describe the starting state.
         mulligansShown = "—";
         const fcHand = cfg.fixed_config.hand || [];
-        const icon = el("span", { className: "hand-icon", textContent: "⚙",
-          title: `fixed config — turn ${cfg.fixed_config.turn}, ${cfg.fixed_config.phase} (hover for the starting board)` });
-        boardHover(icon, cfg.fixed_config);  // preview the full starting board
+        const icon = el("span", { className: "hand-icon", textContent: "⚙" });
+        boardHover(icon, cfg.fixed_config);  // hover shows the full starting board
         handCell = el("td", {}, el("span", { textContent: "config " }), icon);
       } else if (fh.length) {
         const handSize = cfg.fixed_hand_pad_to != null ? cfg.fixed_hand_pad_to : fh.length;
         mulligansShown = Math.max(0, 7 - handSize);
-        const icon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the fixed hand" });
+        const icon = el("span", { className: "hand-icon", textContent: "✋" });
         const backs = cfg.fixed_hand_pad_to != null ? Math.max(0, cfg.fixed_hand_pad_to - fh.length) : 0;
         hoverGrid(icon, fh, backs);
         handCell = el("td", {}, el("span", { textContent: "fixed " }), icon);
