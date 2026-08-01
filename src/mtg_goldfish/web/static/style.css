@@ -461,6 +461,14 @@ table.viz-runs tbody tr.run-row.active { background: rgba(217,164,65,.14); outli
   background: radial-gradient(ellipse at center, #5a4634 0%, #3a2d20 60%, #241b12 100%);
   display: flex; align-items: center; justify-content: center; }
 #hover-grid .gback::after { content: ""; width: 68%; height: 55%; border-radius: 50%; border: 2px solid rgba(217, 164, 65, .35); }
+/* Full starting-board preview for a fixed-config run (hover the ⚙ in the runs
+   modal). Scaled down and floated above the modal (z-index 100). */
+#board-hover {
+  position: fixed; z-index: 300; display: none; pointer-events: none;
+  transform: scale(0.62); transform-origin: top left;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 14px 44px rgba(0,0,0,.65); padding: 6px; max-width: 1200px;
+}
 
 /* ---- properties help popup ---- */
 .help-btn {

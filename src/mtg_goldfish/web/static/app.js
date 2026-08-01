@@ -438,8 +438,8 @@ async function openRunsModal() {
         mulligansShown = "—";
         const fcHand = cfg.fixed_config.hand || [];
         const icon = el("span", { className: "hand-icon", textContent: "⚙",
-          title: `fixed config — turn ${cfg.fixed_config.turn}, ${cfg.fixed_config.phase}` });
-        if (fcHand.length) hoverGrid(icon, fcHand, 0);
+          title: `fixed config — turn ${cfg.fixed_config.turn}, ${cfg.fixed_config.phase} (hover for the starting board)` });
+        boardHover(icon, cfg.fixed_config);  // preview the full starting board
         handCell = el("td", {}, el("span", { textContent: "config " }), icon);
       } else if (fh.length) {
         const handSize = cfg.fixed_hand_pad_to != null ? cfg.fixed_hand_pad_to : fh.length;
@@ -2100,6 +2100,39 @@ function hoverGrid(node, names, backs = 0) {
     hoverGridEl.style.top = Math.max(8, y) + "px";
   };
   node.onmouseleave = () => { if (hoverGridEl) hoverGridEl.style.display = "none"; };
+}
+
+// Build a board frame (as fcFrame does) from an ARBITRARY fixed-config dict
+// (e.g. a stored run's config) — fcFrame + its helpers read state.fixedConfig,
+// so briefly swap it in, then restore. Synchronous, so it never races a render.
+function fcFrameFor(config) {
+  const saved = state.fixedConfig, base = newFixedConfig();
+  state.fixedConfig = { ...base, ...config,
+    mana_pool: { ...base.mana_pool, ...((config || {}).mana_pool || {}) } };
+  try { return fcFrame(); } finally { state.fixedConfig = saved; }
+}
+
+// Hover `node` to preview the full starting BOARD of a fixed-config run (the
+// same layout as game replay), floated near the cursor and scaled down.
+let boardHoverEl = null;
+function boardHover(node, config) {
+  const show = () => {
+    if (!boardHoverEl) { boardHoverEl = el("div", { id: "board-hover" }); document.body.append(boardHoverEl); }
+    // Wrap in .board so it looks exactly like the replay/config board.
+    boardHoverEl.replaceChildren(el("div", { className: "board" }, renderBoard(fcFrameFor(config), {})));
+    boardHoverEl.style.display = "block";
+  };
+  node.onmouseenter = show;
+  node.onmousemove = (e) => {
+    if (!boardHoverEl) return;
+    const S = 0.62;  // #board-hover is transform: scale(0.62)
+    const w = (boardHoverEl.offsetWidth || 760) * S, h = (boardHoverEl.offsetHeight || 460) * S;
+    const x = Math.min(e.clientX + 18, window.innerWidth - w - 12);
+    const y = Math.min(e.clientY + 18, window.innerHeight - h - 12);
+    boardHoverEl.style.left = Math.max(8, x) + "px";
+    boardHoverEl.style.top = Math.max(8, y) + "px";
+  };
+  node.onmouseleave = () => { if (boardHoverEl) boardHoverEl.style.display = "none"; };
 }
 
 // Inflate a gzip+base64 tree stored by the server.
