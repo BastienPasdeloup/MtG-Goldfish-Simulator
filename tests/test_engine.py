@@ -474,6 +474,28 @@ def test_camera_does_not_copy_without_instant_speed():
         assert not cam.tapped and cam.counters["film"] == 3
 
 
+def test_tree_nodes_carry_replay_steps():
+    # Each tree node records the replay frames it produced (abilities, plays,
+    # taps...) so the tree view can show everything the board replay shows —
+    # not just the one-line label.
+    deck = _mono_red_deck()
+    prop = _Prop("t", "at", Phase.POSTCOMBAT_MAIN, 2, lambda s: True)  # trivially reached
+    seen = []
+    run_simulation(deck, [prop], SimulationConfig(num_games=1, timeout_per_game_s=3,
+                                                  parallel_workers=1),
+                   on_game=lambda o, st: seen.append(o))
+    o = seen[0]
+    assert o.success and o.tree is not None
+    steps, stack = [], [o.tree]
+    while stack:
+        n = stack.pop()
+        steps += n.get("steps", [])
+        stack += n.get("children", [])
+    # The land plays / taps / passes that the replay shows are attached to nodes.
+    assert steps, "no per-node replay steps recorded"
+    assert any(("play" in s or "tap" in s or "cast" in s or "pass" in s) for s in steps)
+
+
 def test_response_window_suppressed_during_nonbranching_settle():
     # Cast/combat/direct-entry triggers resolve via settle_nonbranching, which
     # must stay atomic. A Camera in play under instant speed must NOT open a

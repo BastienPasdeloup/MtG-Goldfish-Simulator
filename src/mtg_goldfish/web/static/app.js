@@ -2396,11 +2396,16 @@ function drawNode(n) {
   const title = document.createElementNS(NS, "title");
   const where = n.phase && n.phase !== "start"
     ? "turn " + n.turn + ", " + n.phase.replace(/_/g, " ") : "";
+  // The per-node replay steps (abilities resolving, triggers, reveals, ...) —
+  // everything the board replay shows for this node, listed on hover.
+  const steps = (n.steps && n.steps.length)
+    ? "\\n\\nWhat happens here:\\n" + n.steps.map(s => "  · " + s).join("\\n") : "";
   title.textContent = n.hand
     ? "Opening hand:\\n" + n.hand.map(c => "  · " + c).join("\\n")   // initial state
     : (n.label || "") + (where ? "\\n" + where : "") +
       (kids.length ? "\\n" + kids.length + " subbranch" + (kids.length > 1 ? "es" : "") : "") +
-      (n._dead ? "\\n✗ line dies at turn " + n._dead.turn + ", " + (n._dead.phase || "").replace(/_/g, " ") : "");
+      (n._dead ? "\\n✗ line dies at turn " + n._dead.turn + ", " + (n._dead.phase || "").replace(/_/g, " ") : "") +
+      steps;
   g.appendChild(title); // on the group: hovering anywhere but a circle shows it
   g.appendChild(t);
   if (kids.length) {

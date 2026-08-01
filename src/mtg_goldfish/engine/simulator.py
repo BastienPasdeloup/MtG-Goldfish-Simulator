@@ -62,6 +62,10 @@ INSTANT_STEPS: tuple[Phase, ...] = (
     Phase.END_STEP,
 )
 
+#: Cap the replay-step detail stored per tree node (keeps a pathological
+#: single-action resolution from bloating the serialized tree).
+_MAX_NODE_STEPS = 40
+
 
 class CompiledProperty(Protocol):
     """What the simulator needs from a property (see `properties` package)."""
@@ -205,14 +209,18 @@ class _SearchContext:
 
     def new_tree_node(
         self, parent: dict | None, label: str, state: GameState,
-        satisfied: frozenset[str] = frozenset(),
+        satisfied: frozenset[str] = frozenset(), steps: list[str] | None = None,
     ) -> dict | None:
         """Attach a child node to `parent` for a newly created state. Returns
         the new node, or None once the recording cap is hit. Nodes carry a
         transient "_p" parent reference (stripped before the tree is returned)
         so the winning line can be marked bottom-up, and "sat" — the property
         ids verified on this line so far (refreshed at the node's own
-        checkpoint) — for the per-property status circles in the tree view."""
+        checkpoint) — for the per-property status circles in the tree view.
+        `steps` is the ordered list of replay-frame descriptions that occurred
+        while reaching this node (abilities resolving, triggers, reveals, ...) —
+        the same detail the board replay shows — so the tree view can expose
+        everything that happened at the node, not just its one-line label."""
         if self.tree_cap is not None and self.tree_count >= self.tree_cap:
             self.tree_truncated = True
             return None
@@ -226,6 +234,8 @@ class _SearchContext:
             "sat": sorted(satisfied),
             "_p": parent,
         }
+        if steps:
+            node["steps"] = steps[:_MAX_NODE_STEPS]
         self.tree_count += 1
         if parent is not None:
             parent["children"].append(node)
@@ -489,13 +499,25 @@ def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
         _goto_next_phase(state)
 
 
+def _is_noise_frame(desc: str) -> bool:
+    """Bookkeeping frames that shouldn't be chosen as a branch's distinguishing
+    detail: mana taps and "(on the stack)" announcements. Two branches that
+    differ only in WHICH lands they tapped are not meaningfully different for a
+    label — skip past those to the actual effect (the ability, the reveal, ...)."""
+    d = desc or ""
+    return d.startswith("tap for mana") or d.endswith("(on the stack)")
+
+
 def _option_details(blist: list[GameState], base_len: int) -> list[str | None]:
     """When one action fans out into several branches, describe what makes each
-    branch different: the first log message (past the parent's `base_len`) at
-    which the branches diverge — e.g. "exchange text boxes with X" vs "... Y",
-    or two different fetch targets. Returns one detail per branch (None when
-    the branches' logs never diverge)."""
-    seqs = [[fr.get("desc", "") for fr in b.log[base_len:]] for b in blist]
+    branch different: the first MEANINGFUL log message (past the parent's
+    `base_len`) at which the branches diverge — e.g. "exchange text boxes with
+    X" vs "... Y", two fetch targets, or "Peter Parker's Camera: copy ..." vs
+    the plain resolution. Bookkeeping frames (mana taps, "on the stack") are
+    skipped so a trivial mana-tap difference doesn't mask the real choice.
+    Returns one detail per branch (None when the branches never diverge)."""
+    seqs = [[d for fr in b.log[base_len:]
+             if not _is_noise_frame(d := fr.get("desc", ""))] for b in blist]
     for i in range(max((len(s) for s in seqs), default=0)):
         if len({s[i] if i < len(s) else None for s in seqs}) > 1:
             return [s[i] if i < len(s) else None for s in seqs]
@@ -561,13 +583,18 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         pop = lambda: heapq.heappop(frontier)[2]  # noqa: E731
         push = lambda it: heapq.heappush(frontier, (_progress_score(it[0], it[1]), next(seq), it))  # noqa: E731
 
-    def offer_child(branch, satisfied, parent_node, label, ckind, child_depth):
+    def offer_child(branch, satisfied, parent_node, label, ckind, child_depth,
+                    base_len=None):
         """Give a newly created child state its tree node and route it: onto
         the frontier (normal), or into the split collection (during a split
         expansion, children at the collection depth are handed back to the
         caller — for the workers, or for another expansion round — instead of
-        being explored here)."""
-        node = ctx.new_tree_node(parent_node, label, branch, satisfied)
+        being explored here). `base_len` is the parent's log length, so the new
+        replay frames (this node's `steps`) can be captured."""
+        steps = None
+        if base_len is not None:
+            steps = [d for fr in branch.log[base_len:] if (d := fr.get("desc"))]
+        node = ctx.new_tree_node(parent_node, label, branch, satisfied, steps=steps)
         if ctx.stop_depth is not None and child_depth >= ctx.stop_depth:
             ctx.depth_leaves.append(
                 (branch, satisfied, node, ckind, node is not None, child_depth))
@@ -592,12 +619,21 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
             # — anything verified during this advance belongs to LATER phases
             # and shows up on the nodes created there (otherwise circles would
             # turn green one phase early in the tree).
+            adv_base = len(state.log)
             try:
                 status, satisfied, branches = _advance(state, ctx, satisfied)
             except Exception as exc:  # a crash while stepping the game forward
                 ctx.record_bug(exc, state=state, context=f"advancing @ {state.phase.value}")
                 ctx.new_tree_node(node, "⚠ error advancing the game", state, satisfied)
                 continue
+            # The frames emitted while advancing (phase transitions, upkeep/step
+            # triggers resolving) belong to this advance node — record them so the
+            # tree exposes them, matching the board replay. Per-branch frames past
+            # here are captured on the child nodes (offer_child, below).
+            if node is not None and own:
+                node.setdefault("steps", []).extend(
+                    d for fr in state.log[adv_base:] if (d := fr.get("desc")))
+                node["steps"] = node["steps"][:_MAX_NODE_STEPS]
             if status == "success":
                 _finish_success(state, ctx, satisfied, node)
                 return True
@@ -620,7 +656,8 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                     label = f"{state.phase.value} trigger · option {k + 1}/{len(branches)}"
                     if details[k]:
                         label += f" — {details[k]}"
-                    offer_child(branch, satisfied, node, label, "advance", depth + 1)
+                    offer_child(branch, satisfied, node, label, "advance", depth + 1,
+                                base_len=len(state.log))
                 continue
             kind = status  # "decision"
 
@@ -688,7 +725,8 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
                 # Every created state gets a node (inside offer_child); past
                 # the recording cap the nearest recorded ancestor is kept for
                 # success marking (flagged not-owned so "sat" isn't overwritten).
-                offer_child(branch, satisfied, node, label, ckind, depth + 1)
+                offer_child(branch, satisfied, node, label, ckind, depth + 1,
+                            base_len=len(state.log))
     return False
 
 
