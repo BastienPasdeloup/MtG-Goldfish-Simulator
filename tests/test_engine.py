@@ -408,6 +408,77 @@ def test_cards_put_by_supports_numeric_comparison():
     assert not (g.cards_put_by("Fetcher", via_kind="activated") >= 2)
 
 
+def _atraxa_camera_state(instant_speed):
+    """Atraxa's ETB about to resolve, with Peter Parker's Camera in play (film
+    counters, untapped) and mana for its {2}. Top 10 of the library are one
+    creature type, the next 10 another, so each Atraxa resolution puts exactly
+    one card in hand — letting a copy show up as a doubling."""
+    from mtg_goldfish.engine.game_state import GameState
+
+    zombie = _cd("Zombie Token Card", "", "Creature — Zombie")
+    goblin = _cd("Goblin Token Card", "", "Creature — Goblin")
+    g = GameState(instant_speed=instant_speed)
+    g.library = [zombie] * 10 + [goblin] * 10
+    g.mana_pool.add("R", 2)  # pays the Camera's {2}
+    cam = g.put_on_battlefield(_cd("Peter Parker's Camera", "{1}", "Artifact"))
+    assert cam.counters.get("film") == 3 and not cam.tapped
+    atraxa = _cd("Atraxa, Grand Unifier", "{3}{G}{W}{U}{B}",
+                 "Legendary Creature — Phyrexian Angel", pt=("7", "7"))
+    perm = g.put_on_battlefield(atraxa, fire_etb=False)
+    g.queue_entry_triggers([perm])
+    return g, cam
+
+
+def test_camera_copies_atraxa_etb_under_instant_speed():
+    # With instant-speed exploration on, the priority window before Atraxa's ETB
+    # resolves lets Peter Parker's Camera copy it: one line copies (two reveals =
+    # two cards to hand), one declines (one card).
+    g, _ = _atraxa_camera_state(instant_speed=True)
+    branches = g.settle()
+    assert branches is not None
+    counts = [len(b.cards_put_in_hand_by("Atraxa, Grand Unifier", via_kind="triggered"))
+              for b in branches]
+    assert max(counts) == 2, counts   # the copy doubled the intake
+    assert min(counts) == 1, counts   # declining still resolves the original once
+    # The copying line taps the Camera, spends a film counter, and notes it.
+    copied = [b for b in branches
+              if len(b.cards_put_in_hand_by("Atraxa, Grand Unifier", via_kind="triggered")) == 2]
+    assert copied
+    for b in copied:
+        cam = next(p for p in b.battlefield if p.name == "Peter Parker's Camera")
+        assert cam.tapped and cam.counters["film"] == 2
+        assert b.count_events(kind="activated", name="Peter Parker's Camera") == 1
+
+
+def test_camera_does_not_copy_without_instant_speed():
+    # Default (no instant-speed exploration): no priority window opens, so the
+    # copy is never offered and Atraxa resolves exactly once.
+    g, _ = _atraxa_camera_state(instant_speed=False)
+    branches = g.settle()
+    states = branches if branches is not None else [g]
+    counts = [len(b.cards_put_in_hand_by("Atraxa, Grand Unifier", via_kind="triggered"))
+              for b in states]
+    assert counts and max(counts) == 1, counts
+    for b in states:
+        cam = next(p for p in b.battlefield if p.name == "Peter Parker's Camera")
+        assert not cam.tapped and cam.counters["film"] == 3
+
+
+def test_response_window_suppressed_during_nonbranching_settle():
+    # Cast/combat/direct-entry triggers resolve via settle_nonbranching, which
+    # must stay atomic. A Camera in play under instant speed must NOT open a
+    # (branching) response window there — that would raise.
+    from mtg_goldfish.engine.game_state import GameState, StackAbility
+
+    g = GameState(instant_speed=True)
+    g.mana_pool.add("R", 2)
+    cam = g.put_on_battlefield(_cd("Peter Parker's Camera", "{1}", "Artifact"))
+    g.stack.append(StackAbility("Dummy: trigger", lambda st: None,
+                                source_name="Dummy", kind="triggered"))
+    g.settle_nonbranching("test")               # must not raise
+    assert not cam.tapped and cam.counters["film"] == 3   # never got to respond
+
+
 def test_raising_property_is_recorded_not_silently_false():
     deck = _mono_red_deck()
     # A property whose code raises at evaluation time (here: comparing a list to

@@ -264,6 +264,14 @@ class Card:
         """Non-mana activated abilities (fetch, equip, draw engines, ...)."""
         return []
 
+    def stack_response_actions(self, state: "GameState", perm: "Permanent") -> list:
+        """Instant-speed responses this permanent can make to the ability on top
+        of the stack — copying it, countering it — BEFORE it resolves. Returns a
+        list of `StackResponse` (see game_state). Offered only in the priority
+        window opened while a triggered/activated ability waits to resolve, and
+        only under instant-speed exploration. Default: no response."""
+        return []
+
     def alt_cast_actions(self, state: "GameState", perm: "Permanent") -> list["CardAction"]:
         """Alternative ways to cast OTHER cards granted by this permanent while
         it is on the battlefield — a static that changes how spells may be cast

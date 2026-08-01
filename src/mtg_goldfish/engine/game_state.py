@@ -204,6 +204,20 @@ class StackAbility:
         }
 
 
+@dataclass
+class StackResponse:
+    """A player's instant-speed response to an ability waiting on the stack —
+    e.g. Peter Parker's Camera copying a triggered/activated ability before it
+    resolves. `apply(state)` mutates the state in place (pays the cost, taps the
+    source, pushes whatever the response puts on the stack) and returns True if
+    it actually happened. Offered in the priority window that
+    `resolve_triggered_abilities` opens before it resolves the top ability
+    (see `GameState._stack_response_branches`)."""
+
+    label: str
+    apply: Callable[["GameState"], bool]
+
+
 def _commander_return_trigger(card: CardData, from_zone: str) -> "StackAbility":
     """A commander that left the battlefield may be returned to the command zone
     by its owner (it briefly passed through `from_zone`). Resolves as a BRANCH:
@@ -340,6 +354,11 @@ class GameState:
     # resolving once the current resolution completes (nested settle calls
     # defer — see resolve_triggered_abilities / settle).
     _resolve_depth: int = 0
+    # Transient: set while a resolution is required to be non-branching
+    # (settle_nonbranching — cast/combat-damage triggers, direct battlefield
+    # entries). It closes the instant-speed response window so those atomic
+    # settles can't fan out (see _stack_response_branches). Never cloned.
+    _suppress_responses: bool = False
     # Transient: when a phase-entry triggered ability BRANCHES (e.g. Emperor of
     # Bones' begin-of-combat exile with several graveyard choices), the search
     # fans the branches back onto its frontier as "advance" items. Each branch
@@ -456,6 +475,15 @@ class GameState:
                     next_states.append(state)
                     continue
                 progressed = True
+                # Priority window: before `top` resolves, let the player respond
+                # at instant speed (e.g. Peter Parker's Camera copying it). Each
+                # response is its own branch that acts and then re-enters the loop
+                # with what it put on the stack now on top; THIS state still goes
+                # on to resolve `top` (the "decline to respond" line).
+                responders = state._stack_response_branches(top)
+                if responders:
+                    branched = True
+                    next_states.extend(responders)
                 ability = state.stack.pop()
                 if ability.kind == "triggered":
                     state.note_event("trigger_resolved", ability.source_name or ability.label,
@@ -494,6 +522,31 @@ class GameState:
                 break
         return states if branched else None
 
+    def _stack_response_branches(self, top) -> list["GameState"]:
+        """Priority window opened while `top` (a triggered/activated ability)
+        waits on the stack: gather every instant-speed response any permanent can
+        make to it (Peter Parker's Camera copying it, a future stifle, ...) and
+        return ONE fully-applied branch state per response — the cost already
+        paid and the response already on the stack. Returns [] when nothing can
+        (or wants to) respond.
+
+        Only opens under instant-speed exploration (`instant_speed`), so ordinary
+        games add no branching. Each response taps/consumes its source, so the
+        branching is naturally bounded (a source responds at most once per line)."""
+        if self._suppress_responses:
+            return []
+        if not self.instant_speed or not isinstance(top, StackAbility):
+            return []
+        if top.kind not in ("triggered", "activated"):
+            return []
+        branches: list[GameState] = []
+        for perm in list(self.battlefield):
+            for resp in perm.impl.stack_response_actions(self, perm):
+                child = self.clone()
+                if resp.apply(child):
+                    branches.append(child)
+        return branches
+
     def settle(self, branches: list["GameState"] | None = None) -> list["GameState"] | None:
         # Called from inside an atomic resolution (e.g. put_on_battlefield with
         # fire_etb=True in card code): defer — the queued abilities stay on the
@@ -519,7 +572,14 @@ class GameState:
         return out if branched else None
 
     def settle_nonbranching(self, context: str) -> None:
-        branches = self.settle()
+        # This resolution must not fan out, so close the instant-speed response
+        # window for its duration (a Camera-style copy would otherwise branch it).
+        prev = self._suppress_responses
+        self._suppress_responses = True
+        try:
+            branches = self.settle()
+        finally:
+            self._suppress_responses = prev
         if branches is not None:
             raise RuntimeError(f"Branching triggered abilities are unsupported during {context}")
 
