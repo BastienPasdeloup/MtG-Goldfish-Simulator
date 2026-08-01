@@ -2626,11 +2626,14 @@ function pile(items, edit = {}) {
         e.dataTransfer.setData("text/plain", JSON.stringify({ move: true, from: edit.dragZone, idx, name: item.name }));
         e.dataTransfer.effectAllowed = "move"; hideHover();
         // Live in-zone sort: fade the dragged card and spread the pile out so
-        // the order is visible while dragging.
+        // the order is visible while dragging. BOTH must be deferred to a
+        // timeout: spreading the pile (`.sorting`) reflows and MOVES the dragged
+        // card, and Chrome aborts a native drag whose source element moves
+        // during `dragstart` — which is why only the first card (that never
+        // moves when the pile spreads) used to be draggable.
         if (edit.reorder) {
           state.fcSort = { zone: edit.dragZone, el: card };
-          wrap.classList.add("sorting");
-          setTimeout(() => card.classList.add("dragging"), 0);
+          setTimeout(() => { wrap.classList.add("sorting"); card.classList.add("dragging"); }, 0);
         }
       };
       card.ondragend = () => {
