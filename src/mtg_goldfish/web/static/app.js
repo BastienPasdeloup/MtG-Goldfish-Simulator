@@ -2117,8 +2117,10 @@ let boardHoverEl = null;
 function boardHover(node, config) {
   const show = () => {
     if (!boardHoverEl) { boardHoverEl = el("div", { id: "board-hover" }); document.body.append(boardHoverEl); }
-    // Wrap in .board so it looks exactly like the replay/config board.
-    boardHoverEl.replaceChildren(el("div", { className: "board" }, renderBoard(fcFrameFor(config), {})));
+    // Wrap in .board so it looks exactly like the replay/config board; show the
+    // Library (not the empty Stack) since this is a fixed-config STARTING state.
+    boardHoverEl.replaceChildren(el("div", { className: "board" },
+      renderBoard(fcFrameFor(config), { showLibrary: true })));
     boardHoverEl.style.display = "block";
   };
   node.onmouseenter = show;
@@ -2887,14 +2889,19 @@ function renderBoard(f, edit = {}) {
     });
     cmdBox.append(tax);
   }
-  // Right column: command zone + (editor) library-top / (replay) stack.
+  // Right column: command zone + (editor / config preview) library-top /
+  // (replay) stack. The library COUNT is the TOTAL library — the revealed top
+  // cards PLUS the (shuffled) rest.
   let rightSecond;
-  if (ed) {
+  if (ed || edit.showLibrary) {
+    const libTotal = (f.library || 0) + (f.library_top || []).length;
     // Library-top is an overlapping pile (like graveyard/exile); front = top.
-    // Drag a card onto another to reorder which is on top.
-    rightSecond = dz(el("div", { className: "side-box" },
-      el("div", { className: "zlabel", textContent: `Library — front = top (${f.library})` }),
-      pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: true })), "library");
+    // In the editor you can drag to reorder; a read-only preview just shows it.
+    const box = el("div", { className: "side-box" },
+      el("div", { className: "zlabel", textContent: `Library — front = top (${libTotal})` }),
+      ed ? pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: true })
+         : pile(f.library_top));
+    rightSecond = ed ? dz(box, "library") : box;
   } else {
     rightSecond = el("div", { className: "side-box" },
       el("div", { className: "zlabel", textContent: `Stack (${(f.stack || []).length})` }),
