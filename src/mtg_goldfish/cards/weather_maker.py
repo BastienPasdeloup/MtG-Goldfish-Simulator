@@ -1,12 +1,14 @@
 """Weather Maker — {3} Artifact.
-Landfall: put a charge counter on it. {T}: Add one mana of any color. The
-charge-removal abilities ({C}{C}; 3 damage) are situational and not modelled;
-its role here is a landfall-fed mana rock."""
+Landfall: put a charge counter on it. {T}: Add one mana of any color.
+{T}, Remove three charge counters: it deals 3 damage to any target — modelled
+as a repeatable reach/finisher once landfall has built up three charges. (The
+minor {T}, remove two charge: add {C}{C} mode is left out — converting charges
+to colourless is marginal when {T} already taps for any colour.)"""
 from __future__ import annotations
 
 from ..engine.mana import ManaAbility
-from ._common import any_identity_color
-from .base import Card
+from ._common import any_identity_color, damage_any_target_options
+from .base import Card, CardAction
 from .registry import register
 
 
@@ -16,6 +18,35 @@ class WeatherMaker(Card):
 
     def mana_abilities(self, state):
         return [ManaAbility(amount=1, choices=any_identity_color(state))]
+
+    def battlefield_actions(self, state, perm):
+        # {T}, Remove three charge counters: 3 damage to any target.
+        if perm.tapped or perm.counters.get("charge", 0) < 3:
+            return []
+        acts: list[CardAction] = []
+        for suffix, apply in damage_any_target_options(state):
+
+            def make(apply=apply):
+                def pay(st):
+                    live = st.find_permanent(perm.uid)
+                    if live is None or live.tapped or live.counters.get("charge", 0) < 3:
+                        return False
+                    live.tapped = True
+                    live.counters["charge"] -= 3
+                    return True
+
+                def resolve(st):
+                    apply(st, 3)
+                    return None
+                return pay, resolve
+
+            pay, resolve = make()
+            acts.append(CardAction.activated(
+                f"Weather Maker: remove 3 charge → 3 damage to {suffix}",
+                pay, resolve,
+                source_name="Weather Maker",
+                ability_text="Deal 3 damage to any target"))
+        return acts
 
     def other_etb_stack_items(self, state, perm, entering):
         if not entering.is_land:

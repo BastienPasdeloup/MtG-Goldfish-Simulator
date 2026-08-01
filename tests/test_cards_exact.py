@@ -824,3 +824,83 @@ def test_mdfc_creature_front_is_castable_no_front_land_drop():
     labels = [a.label for a in legal_actions(state)]
     assert any(l.startswith("cast Boggart") for l in labels)
     assert "play land Boggart Trawler // Boggart Bog" not in labels
+
+
+def test_weather_maker_removes_three_charge_for_three_damage():
+    """{T}, remove three charge counters: 3 damage to any target."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    wm = g.put_on_battlefield(card("Weather Maker"))
+    wm.counters["charge"] = 3
+    opp = [a for a in wm.impl.battlefield_actions(g, wm) if "opponent" in a.label]
+    assert opp, "no 3-damage-to-opponent action offered"
+    before = g.opponent_life
+    opp[0].apply(g)
+    assert g.opponent_life == before - 3
+    assert wm.counters["charge"] == 0 and wm.tapped
+    # unavailable below three charges
+    wm.counters["charge"] = 2
+    wm.tapped = False
+    assert not wm.impl.battlefield_actions(g, wm)
+
+
+def test_lazotep_quarry_reanimates_as_4_4_zombie():
+    """{X}{2},{T},Sac a Desert: exile a graveyard creature (MV X), make a 4/4 Zombie."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    lq = g.put_on_battlefield(card("Lazotep Quarry"))
+    lq.tapped = False
+    g.graveyard.append(CardData(name="Fallen Beast", type_line="Creature — Beast",
+                                cmc=0, power="5", toughness="5"))
+    g.mana_pool.add("R", 2)  # X=0 -> {2}
+    acts = lq.impl.battlefield_actions(g, lq)
+    assert len(acts) == 1
+    acts[0].apply(g)
+    zombie = next((p for p in g.battlefield if "Zombie" in p.type_line), None)
+    assert zombie and zombie.base_power() == 4 and zombie.base_toughness() == 4
+    assert any(c.name == "Fallen Beast" for c in g.exile)   # exiled from graveyard
+    assert g.find_permanent(lq.uid) is None                 # sacrificed itself
+
+
+def test_natures_rhythm_harmonize_from_graveyard():
+    """Harmonize: cast from the graveyard (then exile) to tutor a creature into play."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    nr = card("Nature's Rhythm")
+    g.graveyard.append(nr)
+    g.library = [CardData(name="Elf Mystic", type_line="Creature — Elf", cmc=1,
+                          power="1", toughness="1")]
+    g.mana_pool.add("G", 5)  # X=1 -> {1}{G}{G}{G}{G}
+    acts = build_card(nr).graveyard_actions(g)
+    assert acts and any("harmonize" in a.label for a in acts)
+    next(a for a in acts if "harmonize" in a.label).apply(g)
+    assert g.has_permanent_named("Elf Mystic")
+    assert any(c.name == "Nature's Rhythm" for c in g.exile)
+
+
+def test_brainsurge_looks_four_keeps_two():
+    """Draw four, put two back on top = look 4 / keep 2 (dig depth over the top)."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    g.library = [CardData(name=f"Card{i}", type_line="Instant", cmc=0) for i in range(6)]
+    branches = build_card(card("Brainsurge")).on_resolve(g)
+    assert branches is not None and len(branches) == 6  # C(4,2)
+    assert all(len(b.hand) == 2 and len(b.library) == 4 for b in branches)
+
+
+def test_venom_attack_sacrifices_for_cards():
+    """Venom (back face) attacking: sacrifice a creature -> draw X (= its MV)."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    venom = g.put_on_battlefield(card("Eddie Brock // Venom, Lethal Protector"))
+    venom.transformed = True
+    fodder = g.put_on_battlefield(CardData(name="Spare Body", type_line="Creature — Human",
+                                           cmc=2, power="2", toughness="2"))
+    g.library = [CardData(name=f"D{i}", type_line="Instant", cmc=0) for i in range(3)]
+    branches = venom.impl.on_attack(g, venom)
+    assert branches is not None and len(branches) == 2  # no-sac + sac Spare Body
+    sac = [b for b in branches if b.find_permanent(fodder.uid) is None]
+    assert sac and len(sac[0].hand) == 2                # drew X=2
+    # the front face (Eddie Brock) has no attack trigger
+    venom.transformed = False
+    assert venom.impl.on_attack(g, venom) is None

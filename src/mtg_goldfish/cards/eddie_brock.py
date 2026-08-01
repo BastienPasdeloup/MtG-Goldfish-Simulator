@@ -1,8 +1,11 @@
 """Eddie Brock // Venom, Lethal Protector — {2}{B} Legendary Creature 3/3.
 ETB: return target creature card with mana value ≤1 from your graveyard to the
 battlefield (branch; fizzles with no target). {3}{B}{R}{G}: transform (sorcery).
-Venom's attack trigger (sacrifice → draw) is combat/branching-heavy and is not
-modelled — documented approximation."""
+Venom (back face, 5/5 menace/trample/haste): whenever it attacks you may
+sacrifice another creature; if you do, draw X and may put a permanent card with
+mana value ≤ X from hand onto the battlefield, where X is the sacrificed
+creature's mana value (branch over which creature to sacrifice, then over which
+permanent to cheat in)."""
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
@@ -38,3 +41,43 @@ class EddieBrock(Card):
             ManaCost(generic=3, pips=(("B", 1), ("R", 1), ("G", 1))),
             "Venom, Lethal Protector",
         )
+
+    def on_attack(self, state, perm):
+        # Only Venom (the back face) has the attack trigger.
+        if not perm.transformed:
+            return None
+        fodder: dict[str, tuple[int, int]] = {}
+        for p in state.battlefield:
+            if p.uid == perm.uid or not p.is_creature_now:
+                continue
+            fodder.setdefault(p.name, (p.uid, int(p.card.cmc)))
+        options = ["no sacrifice"] + list(fodder)
+
+        def fn(st, opt):
+            if opt == "no sacrifice":
+                return None
+            uid, x = fodder[opt]
+            victim = st.find_permanent(uid)
+            if victim is None:
+                return None
+            st.emit(f"Venom attacks: sacrifice {opt} → draw {x}")
+            st.leaves_battlefield(victim, "graveyard", reason="sacrifice")
+            if x > 0:
+                st.draw(x)
+            # ...then you MAY put a permanent card with mana value ≤ X into play.
+            puttable = sorted({c.name for c in st.hand if c.is_permanent and c.cmc <= x})
+
+            def put_fn(b, choice):
+                if choice == "put nothing":
+                    return None
+                card = next((c for c in b.hand if c.name == choice), None)
+                if card is None:
+                    return None
+                b.hand.remove(card)
+                enter_battlefield(b, card,
+                                  announce=f"Venom: put {choice} onto the battlefield")
+                return None
+
+            return branch_over(st, ["put nothing"] + puttable, put_fn)
+
+        return branch_over(state, options, fn)
