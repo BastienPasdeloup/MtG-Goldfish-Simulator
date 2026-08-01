@@ -474,6 +474,27 @@ def test_camera_does_not_copy_without_instant_speed():
         assert not cam.tapped and cam.counters["film"] == 3
 
 
+def test_progress_score_prioritizes_on_track_lines():
+    # A line whose pending "at end of X" condition ALREADY holds is scored better
+    # (lower) than an equivalent line where it doesn't, so best-first drives the
+    # on-track line to its deadline. It never beats a line with more properties
+    # actually verified.
+    import time as _t
+    from mtg_goldfish.engine.game_state import GameState
+    from mtg_goldfish.engine.simulator import _SearchContext, _is_on_track, _progress_score
+
+    prop = _Prop("p", "at", Phase.END_STEP, 3, lambda s: s.opponent_life <= 17)
+    ctx = _SearchContext([prop], deadline=_t.monotonic() + 10)
+    on = GameState(); on.opponent_life = 15    # condition holds -> on track
+    off = GameState(); off.opponent_life = 40  # condition fails
+    assert _is_on_track(on, ctx, frozenset()) is True
+    assert _is_on_track(off, ctx, frozenset()) is False
+    on._on_track = True
+    assert _progress_score(on, frozenset()) < _progress_score(off, frozenset())
+    # A genuinely-verified property still outranks a mere on-track board.
+    assert _progress_score(off, frozenset({"p"})) < _progress_score(on, frozenset())
+
+
 def test_tree_nodes_carry_replay_steps():
     # Each tree node records the replay frames it produced (abilities, plays,
     # taps...) so the tree view can show everything the board replay shows —

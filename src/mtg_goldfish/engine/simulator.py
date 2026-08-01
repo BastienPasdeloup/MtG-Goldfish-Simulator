@@ -431,15 +431,45 @@ def _action_priority(action) -> int:
     return 60  # activated abilities, attacks, everything else
 
 
+def _is_on_track(state: GameState, ctx: "_SearchContext", satisfied: frozenset[str]) -> bool:
+    """Whether EVERY still-pending property already holds in `state` — its board
+    condition is met even though a future "at the end of X" deadline hasn't
+    formally verified it yet. Evaluated ONCE per decision checkpoint (never per
+    frontier push — that was too slow); a property whose code raises simply
+    doesn't hold. Used only to ORDER the search, never to mark a property
+    satisfied (that stays with `_check_due` at the property's own timing)."""
+    pending = [p for p in ctx.properties if p.id not in satisfied]
+    if not pending:
+        return False
+    for p in pending:
+        try:
+            if not p.evaluate(state):
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def _progress_score(state: GameState, satisfied: frozenset[str]) -> int:
     """Score for best-first search: lower = more promising. Rewards satisfied
-    properties first, then board development and cards seen."""
-    return -(
+    properties first, then board development and cards seen.
+
+    On-track boost: a state flagged `_on_track` (all pending properties already
+    hold — see `_is_on_track`) is prioritized, and among on-track states the ones
+    further along (nearer the "end of X" deadline) come first, so the search
+    commits to driving such a line to its deadline instead of wandering across
+    siblings. The boost is smaller than one satisfied property, so it only orders
+    among lines with the same satisfied count — it never overrides real
+    verification, and it drops as soon as the condition stops holding."""
+    base = (
         len(satisfied) * 1_000_000
         + len(state.battlefield) * 1_000
         + state.cards_drawn * 10
         + state.turn
     )
+    if getattr(state, "_on_track", False):
+        base += 500_000 + state.turn * 100 + phase_index(state.phase)
+    return -base
 
 
 def _advance(state: GameState, ctx: _SearchContext, satisfied: frozenset[str]):
@@ -594,6 +624,10 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         steps = None
         if base_len is not None:
             steps = [d for fr in branch.log[base_len:] if (d := fr.get("desc"))]
+        # Inherit the parent line's on-track flag as a cheap ordering hint (a
+        # clone doesn't carry it). It's recomputed accurately when this child is
+        # itself reached and checkpointed.
+        branch._on_track = getattr(state, "_on_track", False)
         node = ctx.new_tree_node(parent_node, label, branch, satisfied, steps=steps)
         if ctx.stop_depth is not None and child_depth >= ctx.stop_depth:
             ctx.depth_leaves.append(
@@ -671,6 +705,10 @@ def _search(items: list[tuple], ctx: _SearchContext, mode: str) -> bool:
         if _all_satisfied(ctx, satisfied):
             _finish_success(state, ctx, satisfied, node)
             return True
+        # Evaluate "on track" ONCE here (per decision checkpoint, not per push):
+        # if every pending property already holds, this line's continuations are
+        # prioritized so the search drives it to its "end of X" deadline.
+        state._on_track = _is_on_track(state, ctx, satisfied)
         if not _viable(state, ctx, satisfied):
             ctx.new_tree_node(node, "✗ dead end — a property can no longer be verified",
                               state, satisfied)

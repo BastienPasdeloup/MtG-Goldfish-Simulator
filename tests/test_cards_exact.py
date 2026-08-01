@@ -878,14 +878,22 @@ def test_natures_rhythm_harmonize_from_graveyard():
     assert any(c.name == "Nature's Rhythm" for c in g.exile)
 
 
-def test_brainsurge_looks_four_keeps_two():
-    """Draw four, put two back on top = look 4 / keep 2 (dig depth over the top)."""
+def test_brainsurge_draws_four_puts_two_back_on_top():
+    """Draw four, then put ANY two from the hand back on top (incl. cards already
+    held), in a chosen order. Net +2, and the put-back card is drawn next."""
     from mtg_goldfish.engine.game_state import GameState
     g = GameState()
     g.library = [CardData(name=f"Card{i}", type_line="Instant", cmc=0) for i in range(6)]
+    g.hand = [CardData(name="Held", type_line="Instant", cmc=0)]  # a pre-existing hand card
     branches = build_card(card("Brainsurge")).on_resolve(g)
-    assert branches is not None and len(branches) == 6  # C(4,2)
-    assert all(len(b.hand) == 2 and len(b.library) == 4 for b in branches)
+    # Draw 4 -> hand of 5 distinct names; ordered distinct pairs = 5*4 = 20.
+    assert branches is not None and len(branches) == 20
+    # Net +2 cards in hand (5 drawn-into-hand minus 2 put back), library -2.
+    assert all(len(b.hand) == 3 and len(b.library) == 4 for b in branches)
+    # A line that puts the pre-existing "Held" card back on top exists (proves
+    # put-back is from the whole hand, not just the four drawn) and it's on top.
+    held_top = [b for b in branches if b.library[0].name == "Held"]
+    assert held_top
 
 
 def test_venom_attack_sacrifices_for_cards():
@@ -904,3 +912,63 @@ def test_venom_attack_sacrifices_for_cards():
     # the front face (Eddie Brock) has no attack trigger
     venom.transformed = False
     assert venom.impl.on_attack(g, venom) is None
+
+
+def test_smugglers_copter_crews_attacks_and_loots():
+    """Crew 1 makes it a 3/3 flying artifact creature; attacking loots (draw/discard)."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    cop = g.put_on_battlefield(card("Smuggler's Copter"))
+    cop.summoning_sick = False                    # controlled since last turn
+    bird = g.put_on_battlefield(CardData(name="Bird", type_line="Creature — Bird",
+                                         cmc=0, power="1", toughness="1"))
+    bird.summoning_sick = True                    # can't attack, but can crew
+    acts = cop.impl.battlefield_actions(g, cop)
+    assert len(acts) == 1 and acts[0].label.startswith("crew")
+    acts[0].apply(g)
+    assert cop.is_creature_now and g.effective_power(cop) == 3
+    assert g.find_permanent(bird.uid).tapped      # the bird crewed
+    # Attack loot: don't loot, or draw one then discard it (one distinct card).
+    g.library = [CardData(name="Dig", type_line="Instant", cmc=0)]
+    branches = cop.impl.on_attack(g, cop)
+    assert branches is not None and len(branches) == 2
+    looted = [b for b in branches if "Dig" in b.graveyard_names()]
+    assert looted, "the loot branch should draw then discard"
+
+
+def test_shorikai_can_crew_eight():
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    sho = g.put_on_battlefield(card("Shorikai, Genesis Engine"))
+    sho.summoning_sick = False
+    # No creatures -> can't crew 8.
+    assert not [a for a in sho.impl.battlefield_actions(g, sho) if a.label.startswith("crew")]
+    big = g.put_on_battlefield(CardData(name="Giant", type_line="Creature — Giant",
+                                        cmc=0, power="9", toughness="9"))
+    big.summoning_sick = True
+    crew = [a for a in sho.impl.battlefield_actions(g, sho) if a.label.startswith("crew")]
+    assert len(crew) == 1
+    crew[0].apply(g)
+    assert sho.is_creature_now and g.effective_power(sho) == 8
+
+
+def test_six_retrace_casts_permanents_from_graveyard():
+    """Retrace: cast a nonland permanent from the graveyard by discarding a land."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    six = g.put_on_battlefield(card("Six"))
+    g.graveyard.append(CardData(name="Grizzly Bears", type_line="Creature — Bear",
+                                cmc=2, mana_cost="{1}{G}", power="2", toughness="2"))
+    g.hand.append(CardData(name="Forest", type_line="Basic Land — Forest", cmc=0))
+    g.mana_pool.add("G", 2)
+    acts = six.impl.alt_cast_actions(g, six)
+    assert len(acts) == 1 and "retrace" in acts[0].label
+    acts[0].apply(g)
+    assert g.has_permanent_named("Grizzly Bears")            # retraced into play
+    assert "Forest" in g.graveyard_names()                   # discarded land
+    assert not any(c.name == "Grizzly Bears" for c in g.graveyard)
+    # Needs a land in hand to discard.
+    g.hand.clear()
+    g.graveyard.append(CardData(name="Grizzly Bears", type_line="Creature — Bear",
+                                cmc=2, mana_cost="{1}{G}", power="2", toughness="2"))
+    assert not six.impl.alt_cast_actions(g, six)

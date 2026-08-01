@@ -1,11 +1,12 @@
 """Shorikai, Genesis Engine — {2}{W}{U} Legendary Artifact — Vehicle 8/8.
 {1}, {T}: Draw two cards, then discard a card (branch), and create a 1/1 Pilot
-token. Crew 8 is not modelled (vehicles never attack in this goldfish — a
-Vehicle is not a creature unless crewed, and combat with crewing subsets is
-out of scope)."""
+token. Crew 8: tap creatures with total power >= 8 to make it an 8/8 artifact
+creature until end of turn (each activation also makes a Pilot, so it can
+build its own crew over several turns)."""
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
+from ._common import crew_action
 from .base import Card, CardAction
 from .registry import register
 
@@ -17,9 +18,10 @@ class Shorikai(Card):
     def battlefield_actions(self, state, perm):
         from ..engine.actions import can_afford, pay_cost
 
+        acts = crew_action(self, state, perm, 8)
         cost = ManaCost(generic=1)
         if perm.tapped or not can_afford(state, cost):
-            return []
+            return acts
 
         def pay(st):
             p = st.find_permanent(perm.uid)
@@ -48,7 +50,7 @@ class Shorikai(Card):
                 branches.append(b)
             return branches
 
-        return [CardAction.activated(
+        return acts + [CardAction.activated(
             "Shorikai: draw 2, discard 1, create Pilot",
             pay,
             resolve,

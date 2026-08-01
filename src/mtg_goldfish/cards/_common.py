@@ -550,6 +550,79 @@ def animate_land_action(
     )]
 
 
+def _creature_type_line(type_line: str) -> str:
+    """Insert 'Creature' into a Vehicle/artifact type line so it reads as a
+    creature: 'Artifact — Vehicle' -> 'Artifact Creature — Vehicle'."""
+    head, sep, tail = type_line.partition("—")
+    if "creature" in head.lower():
+        return type_line
+    return head.rstrip() + " Creature " + (sep + tail if sep else "")
+
+
+def crew_action(
+    self: Card, state: "GameState", perm: "Permanent", n: int, *,
+    power: int | None = None, toughness: int | None = None,
+    keywords: Iterable[str] = (),
+) -> list[CardAction]:
+    """Crew N: tap any number of untapped creatures you control with total power
+    >= N to make this Vehicle an artifact creature (its printed P/T) until end of
+    turn — after which it can attack, and its own attack/loot triggers fire via
+    `on_attack`. Summoning-sick creatures CAN crew (tapping is a cost, not a {T}
+    ability). The crew cost taps the LEAST useful creatures first (summoning-sick,
+    then lowest power) so real attackers stay back — a deterministic
+    approximation of the 'any number of creatures' choice. Instant speed."""
+    if perm.becomes is not None:  # already a creature this turn
+        return []
+    pw = int(power if power is not None else perm.base_power())
+    tf = int(toughness if toughness is not None else perm.base_toughness())
+    cands = [c for c in state.battlefield
+             if c.uid != perm.uid and c.is_creature_now and not c.tapped]
+
+    def _key(c):
+        can_attack = not c.summoning_sick or state.has_keyword(c, "Haste")
+        return (1 if can_attack else 0, state.effective_power(c))
+
+    picked, total = [], 0
+    for c in sorted(cands, key=_key):
+        if total >= n:
+            break
+        picked.append(c.uid)
+        total += state.effective_power(c)
+    if total < n:
+        return []
+    kws = tuple(k.lower() for k in keywords)
+    new_type = _creature_type_line(perm.type_line)
+
+    def pay(st: "GameState"):
+        v = st.find_permanent(perm.uid)
+        if v is None or v.becomes is not None:
+            return False
+        crew = [st.find_permanent(u) for u in picked]
+        if any(c is None or c.tapped for c in crew):
+            return False
+        if sum(st.effective_power(c) for c in crew) < n:
+            return False
+        for c in crew:
+            c.tapped = True
+        st.emit(f"crew {self.card_name}: tap {', '.join(c.name for c in crew)}")
+        return True
+
+    def resolve(st: "GameState"):
+        v = st.find_permanent(perm.uid)
+        if v is None:
+            return None
+        v.becomes = {"type_line": new_type, "power": pw, "toughness": tf}
+        v.temp_keywords.update(kws)
+        st.emit(f"{self.card_name} becomes a {pw}/{tf} artifact creature until end of turn")
+        return None
+
+    return [CardAction.activated(
+        f"crew {self.card_name} (crew {n}) → {pw}/{tf}",
+        pay, resolve,
+        source_name=self.card_name,
+        ability_text=f"Crew {n}: becomes a {pw}/{tf} artifact creature until end of turn")]
+
+
 def sacrifice_outlet_actions(
     self: Card, state: "GameState", perm: "Permanent", *,
     cost: ManaCost | None, effect: Callable, label: str,

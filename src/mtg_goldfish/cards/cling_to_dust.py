@@ -24,8 +24,10 @@ def _effect(state):
             st.life += 3
             st.emit(f"Cling to Dust: exile {name} (creature) — gain 3 life")
         else:
-            st.emit(f"Cling to Dust: exile {name} — draw a card")
+            # Draw BEFORE emitting so the replay frame's snapshot shows the drawn
+            # card in hand (draw() emits nothing on its own).
             st.draw(1)
+            st.emit(f"Cling to Dust: exile {name} — draw a card")
         return None
 
     return branch_over(state, names, fn)
