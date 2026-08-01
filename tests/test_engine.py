@@ -448,6 +448,16 @@ def test_camera_copies_atraxa_etb_under_instant_speed():
         cam = next(p for p in b.battlefield if p.name == "Peter Parker's Camera")
         assert cam.tapped and cam.counters["film"] == 2
         assert b.count_events(kind="activated", name="Peter Parker's Camera") == 1
+        # The property vocabulary: "the Camera is activated and copies Atraxa's
+        # TRIGGERED ability" is one call.
+        assert b.ability_copied("Atraxa, Grand Unifier",
+                                by="Peter Parker's Camera", target_kind="triggered") >= 1
+        assert b.ability_copied("Atraxa", target_kind="activated") == 0  # it's a trigger
+    # A line that declined to copy never records the copy.
+    declined = [b for b in branches
+                if len(b.cards_put_in_hand_by("Atraxa, Grand Unifier", via_kind="triggered")) == 1]
+    for b in declined:
+        assert b.ability_copied("Atraxa", by="Peter Parker's Camera") == 0
 
 
 def test_camera_does_not_copy_without_instant_speed():

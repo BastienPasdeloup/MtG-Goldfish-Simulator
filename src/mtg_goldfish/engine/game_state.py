@@ -1099,6 +1099,29 @@ class GameState:
         e.g. Nick Fury's power-up actually put a card onto the battlefield)."""
         return bool(self.events_matching("ability_success", source, turn))
 
+    def ability_copied(
+        self, source: str | None = None, *, by: str | None = None,
+        target_kind: str | None = None, turn: int | None = None,
+    ) -> int:
+        """How many times an ability was COPIED (e.g. Peter Parker's Camera
+        copying a triggered/activated ability). `source` (name substring) = the
+        source of the COPIED ability — "Atraxa, Grand Unifier" for "copy
+        Atraxa's ETB"; `by` = the copier's name (substring); `target_kind` =
+        the copied ability's kind, "triggered" or "activated". Compares
+        numerically, so `ability_copied(...) >= 1` ("was copied at all") works.
+        e.g. "Peter Parker's Camera copies Atraxa's triggered ability" ->
+          ability_copied("Atraxa", by="Peter Parker's Camera", target_kind="triggered") >= 1."""
+        by_l = by.lower() if by else None
+
+        def ok(e) -> bool:
+            if target_kind is not None and e.get("target_kind") != target_kind:
+                return False
+            if by_l is not None and by_l not in (e.get("copied_by") or "").lower():
+                return False
+            return True
+
+        return self.count_events(kind="copy_ability", name=source, turn=turn, pred=ok)
+
     @staticmethod
     def _turn_range_pred(min_turn: int | None, max_turn: int | None):
         def in_range(e) -> bool:

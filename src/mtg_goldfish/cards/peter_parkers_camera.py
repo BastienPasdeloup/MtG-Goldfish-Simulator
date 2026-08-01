@@ -67,8 +67,12 @@ class PeterParkersCamera(Card):
             live.counters["film"] = live.counters.get("film", 0) - 1
             st.note_event("activated", "Peter Parker's Camera",
                           detail=f"copy {tgt.label}")
+            # `name` = the copied ability's source (e.g. "Atraxa, Grand Unifier");
+            # `copied_by` = the copier; `target_kind` = the copied ability's kind
+            # ("triggered"/"activated"). Queried via state.ability_copied(...).
             st.note_event("copy_ability", tgt.source_name or tgt.label,
-                          detail=tgt.label)
+                          detail=tgt.label, copied_by="Peter Parker's Camera",
+                          target_kind=tgt.kind)
             # The copy resolves first: push it ABOVE the original on the stack.
             # It carries the original's source/kind so its effects (cards put in
             # hand, permanents made, ...) are attributed to the same source.

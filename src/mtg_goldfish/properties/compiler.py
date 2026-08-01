@@ -40,6 +40,14 @@ play" -> state.count_permanents(type_contains="Creature", transformed=True) >= 1
 - For "an ability activated / resolved / found something", use \
 ability_activated / trigger_resolved / ability_succeeded / cards_put_by / \
 cards_drawn_by, or count_events for anything else.
+- For "X COPIES Y's ability / trigger" (e.g. Peter Parker's Camera copying a \
+trigger) use ability_copied(source, by=, target_kind=): `source` is the COPIED \
+ability's source (the card whose trigger was copied), `by` is the copier, \
+`target_kind` is "triggered"/"activated". "Peter Parker's Camera is activated and \
+it targets/copies Atraxa's triggered ability" -> ability_copied("Atraxa, Grand \
+Unifier", by="Peter Parker's Camera", target_kind="triggered") >= 1. (The copy \
+event already means the copier activated, so this ONE call covers both clauses — \
+do NOT also add a separate ability_activated check.)
 - When the English says an ability DID something — "X uses its <ability>, which \
 puts a creature into play", "X's ability draws two cards" — BIND the outcome to \
 that ability in ONE assertion via the source + via_kind, e.g. \

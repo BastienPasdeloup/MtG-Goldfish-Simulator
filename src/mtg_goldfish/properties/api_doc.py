@@ -61,6 +61,14 @@ resolution actually did):
       # of a card whose name contains `source` was activated (optionally on `turn`)
   state.ability_succeeded(source: str, turn=None) -> bool  # ...and it achieved its
       # purpose (e.g. Nick Fury's power-up actually put a card onto the battlefield)
+  state.ability_copied(source=None, by=None, target_kind=None, turn=None) -> int
+      # how many times an ability was COPIED (e.g. Peter Parker's Camera copying
+      # a trigger). `source` = the COPIED ability's source (the card whose
+      # trigger/ability was copied, e.g. "Atraxa, Grand Unifier"); `by` = the
+      # copier's name; `target_kind` = "triggered" | "activated". Compares by
+      # count, so `>= 1` means "was copied at all". "Peter Parker's Camera is
+      # activated and copies Atraxa's TRIGGERED ability" -> ability_copied(
+      #   "Atraxa, Grand Unifier", by="Peter Parker's Camera", target_kind="triggered") >= 1
 
   ==== "played/cast" vs "entered the battlefield" — THESE ARE DIFFERENT ====
   Playing/casting is an ACTION the player takes. Entering the battlefield is
