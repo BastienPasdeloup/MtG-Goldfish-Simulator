@@ -513,6 +513,30 @@ def test_camera_does_not_copy_without_instant_speed():
         assert not cam.tapped and cam.counters["film"] == 3
 
 
+def test_fixed_config_unknown_library_slots():
+    # A fixed-config library entry of the "__unknown__" sentinel pins a RANDOM
+    # card at that depth: known cards keep their positions, the unknown slot is
+    # filled from the shuffled remainder.
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _FC_UNKNOWN, _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                         card=_cd("Cmd", "{G}", "Legendary Creature — Elf"))]
+    for nm in ["A", "B", "C", "D", "E", "F"]:
+        entries.append(DeckEntry(quantity=1, board=DeckBoard.MAINBOARD,
+                                 card=_cd(nm, "", "Creature — Human")))
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    fixed = {"turn": 1, "phase": "precombat_main", "library": ["A", _FC_UNKNOWN, "B"]}
+    filled = set()
+    for seed in range(6):
+        names = [c.name for c in _build_fixed_variant(base, fixed, seed).library]
+        assert names[0] == "A" and names[2] == "B"      # known cards pinned in place
+        assert names[1] in {"C", "D", "E", "F"}          # unknown = a random pool card
+        assert len(names) == 6                           # nothing lost
+        filled.add(names[1])
+    assert len(filled) > 1  # the unknown slot draws a DIFFERENT card across seeds
+
+
 def test_progress_score_prioritizes_on_track_lines():
     # A line whose pending "at end of X" condition ALREADY holds is scored better
     # (lower) than an equivalent line where it doesn't, so best-first drives the

@@ -66,6 +66,11 @@ INSTANT_STEPS: tuple[Phase, ...] = (
 #: single-action resolution from bloating the serialized tree).
 _MAX_NODE_STEPS = 40
 
+#: Sentinel used in a fixed-config `library` list for an UNKNOWN card pinned at
+#: that depth (a random card fills it) — see _build_fixed_variant. Mirrored in
+#: the web UI as FC_UNKNOWN.
+_FC_UNKNOWN = "__unknown__"
+
 
 class CompiledProperty(Protocol):
     """What the simulator needs from a property (see `properties` package)."""
@@ -949,19 +954,33 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                 lib_pool.append(cmd_pool.pop(i))
                 break
 
-    # Explicit top of the library (in order); the rest of the deck is shuffled
-    # in below. The player "knows" the set-top cards, so mark them known (with
-    # fake shuffling on, a later shuffle keeps them near the top).
-    top: list = []
-    for name in fixed.get("library", []):
-        card = take(name)
-        if card is not None:
-            top.append(card)
+    # Explicit ordering of the library top (front = top). Each entry is either a
+    # card NAME (a KNOWN card at that depth) or the "__unknown__" sentinel (a
+    # RANDOM card pinned at that depth), so the player can say e.g. "I know the
+    # top card and the 3rd card, the 2nd is unknown". Known cards are reserved
+    # first, then the unknown slots are filled from the shuffled remainder; what
+    # is left forms the (shuffled) rest below. Only the KNOWN cards are marked
+    # known in the library (fake-shuffle keeps them near the top).
+    ordered: list = []
+    unknown_slots: list[int] = []
+    known: list = []
+    for entry in fixed.get("library", []):
+        if entry == _FC_UNKNOWN:
+            unknown_slots.append(len(ordered))
+            ordered.append(None)  # placeholder, filled from the pool below
+        else:
+            card = take(entry)
+            if card is not None:
+                ordered.append(card)
+                known.append(card)
     rng.shuffle(lib_pool)
-    variant.library = top + lib_pool     # set top, then the shuffled remainder
-    variant.command_zone = cmd_pool      # commanders not placed on the battlefield
-    if top:
-        variant.mark_known_in_library(*top)
+    for slot in unknown_slots:
+        ordered[slot] = lib_pool.pop() if lib_pool else None
+    ordered = [c for c in ordered if c is not None]
+    variant.library = ordered + lib_pool  # set top (known + filled unknowns), then rest
+    variant.command_zone = cmd_pool       # commanders not placed on the battlefield
+    if known:
+        variant.mark_known_in_library(*known)
 
     variant.life = int(fixed.get("life", 20))
     variant.opponent_life = int(fixed.get("opponent_life", 20))

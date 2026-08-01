@@ -51,6 +51,10 @@ const FC_PHASES = [
   ["postcombat_main", "Postcombat main"], ["end_step", "End step"],
 ];
 const FC_MANA = ["W", "U", "B", "R", "G", "C"];
+// A fixed-config library entry that is an UNKNOWN card pinned at that depth (a
+// random card fills it at game start). Rendered as a card back. Mirrors the
+// backend's _FC_UNKNOWN sentinel.
+const FC_UNKNOWN = "__unknown__";
 // Token tile tint by colour: the MTG pip colours; multicolour → gold; colorless → none.
 const FC_COLOR_BG = { W: "#f7f0dc", U: "#a9cbe8", B: "#b3a9a2", R: "#eda28c", G: "#9fcf9a" };
 function tokenTint(colors) {
@@ -1197,7 +1201,10 @@ function fcAddToZone(name, zone, x, y) {
   const card = placeableCards().find((c) => c.name === name);
   if (!card || fcUsage(name) >= card.quantity || !fcCanPlace(name, zone)) return;
   if (zone === "battlefield") { fcPlaceOnBattlefield(name, x, y); return; }
-  state.fixedConfig[zone].push(name);
+  // A card dropped on the library goes to the TOP of the deck (fc.library[0] =
+  // front), which the reversed display shows at the bottom of the pile.
+  if (zone === "library") state.fixedConfig.library.unshift(name);
+  else state.fixedConfig[zone].push(name);
   renderConfigBuilder();
 }
 
@@ -1205,10 +1212,16 @@ function fcAddToZone(name, zone, x, y) {
 // carries its ORIGINAL model index in data-idx) and rebuild the zone's list to
 // match. For the library this changes which card is on top (front = top).
 function fcCommitPileOrder(zone, wrap) {
+  // Only the draggable cards carry data-idx (the library's fixed "rest" back
+  // does not), so it never participates in the reorder.
+  const order = Array.prototype.map.call(
+    wrap.querySelectorAll(".pile-img[data-idx]"), (c) => +c.dataset.idx);
   const orig = state.fixedConfig[zone];
   if (!Array.isArray(orig)) return;
-  const order = Array.prototype.map.call(wrap.querySelectorAll(".pile-img"), (c) => +c.dataset.idx);
-  const next = order.map((i) => orig[i]).filter((v) => v !== undefined);
+  // data-idx are MODEL indices. The library DOM is top→bottom of the REVERSED
+  // display, so reverse the read-out order to get the model (top-first) order.
+  const mapped = order.map((i) => orig[i]).filter((v) => v !== undefined);
+  const next = zone === "library" ? mapped.reverse() : mapped;
   if (next.length === orig.length) state.fixedConfig[zone] = next;
   renderConfigBuilder();
 }
@@ -1230,11 +1243,22 @@ function fcMoveCard(fromZone, fromIdx, toZone, x, y) {
     if (toZone !== "battlefield") fcRemove("battlefield", fromIdx);
     return;
   }
-  name = fromZone === "battlefield" ? (fc.battlefield[fromIdx] || {}).name : fc[fromZone][fromIdx];
-  if (!name || !fcCanPlace(name, toZone)) return;
-  fcRemove(fromZone, fromIdx);  // re-renders; fixes attachment indices
+  if (fromZone === "library") {
+    // fromIdx is a MODEL index; only a known card leaves the library (unknown
+    // placeholders / the rest back stay).
+    const entry = (fc.library || [])[fromIdx];
+    if (entry === undefined || entry === FC_UNKNOWN || !fcCanPlace(entry, toZone)) return;
+    name = entry;
+    fcRemove("library", fromIdx);  // re-renders
+  } else {
+    name = fromZone === "battlefield" ? (fc.battlefield[fromIdx] || {}).name : fc[fromZone][fromIdx];
+    if (!name || !fcCanPlace(name, toZone)) return;
+    fcRemove(fromZone, fromIdx);  // re-renders; fixes attachment indices
+  }
   if (toZone === "command") { renderConfigBuilder(); return; }  // returns to command zone
   if (toZone === "battlefield") fcPlaceOnBattlefield(name, x, y);  // DFC front/back checked here too
+  // Dropped on the library -> top of the deck (front); other zones -> end.
+  else if (toZone === "library") { fc.library.unshift(name); renderConfigBuilder(); }
   else { fc[toZone].push(name); renderConfigBuilder(); }
 }
 
@@ -1487,11 +1511,154 @@ function fcPermMenu(p, e) {
   showContextMenu(e.clientX, e.clientY, items);
 }
 
-// Right-click menu on a hand / graveyard / exile card.
+// ---- the library --------------------------------------------------------------
+// The library is a list of entries (card names + FC_UNKNOWN sentinels for random
+// cards pinned at a depth). It is displayed REVERSED (the top of the library, the
+// next draw, is at the BOTTOM of the page). Each unknown is its OWN entry; runs
+// of adjacent unknowns are FUSED visually (fully overlapped, marked with N) but
+// spread apart while dragging so a card can be dropped between them. Indices used
+// in drag/menu/reorder are MODEL indices into fc.library.
+// The random pool = deck cards not placed and not pinned as a known top card.
+function fcLibraryPool() {
+  return mainboardCards().reduce((s, c) => s + Math.max(0, c.quantity - fcUsage(c.name)), 0);
+}
+// Room for another unknown card = the pool still has an unpinned random card.
+function fcLibraryHasRoomForUnknown() {
+  const unknowns = (state.fixedConfig.library || []).filter((x) => x === FC_UNKNOWN).length;
+  return unknowns < fcLibraryPool();
+}
+function fcInsertUnknown(pos, count = 1) {
+  const lib = state.fixedConfig.library || (state.fixedConfig.library = []);
+  const n = Math.max(0, Math.floor(count));
+  if (!n) return;
+  lib.splice(Math.max(0, Math.min(pos, lib.length)), 0, ...Array(n).fill(FC_UNKNOWN));
+  renderConfigBuilder();
+}
+// The number of random cards still free in the pool (= the "rest" count) — the
+// max unknown cards that can be pinned.
+function fcLibraryRest() {
+  const unknowns = (state.fixedConfig.library || []).filter((x) => x === FC_UNKNOWN).length;
+  return Math.max(0, fcLibraryPool() - unknowns);
+}
+// Generic small "how many?" popup: number input (1..max, default 1) + a button;
+// calls opts.onConfirm(n).
+function fcCountPopup(x, y, opts) {
+  const max = opts.max;
+  if (max < 1) return;
+  closeContextMenu();
+  const pop = el("div", { className: "num-popup" });
+  const input = el("input", { type: "number", min: "1", max: String(max), value: "1", className: "num-popup-input" });
+  const close = () => { pop.remove(); document.removeEventListener("mousedown", away, true); };
+  const away = (ev) => { if (!pop.contains(ev.target)) close(); };
+  const confirm = () => {
+    let n = parseInt(input.value, 10);
+    if (!Number.isFinite(n)) n = 1;
+    n = Math.max(1, Math.min(n, max));
+    close();
+    opts.onConfirm(n);
+  };
+  const btn = el("button", { className: "num-popup-add", textContent: opts.button || "OK" });
+  btn.onclick = (ev) => { ev.stopPropagation(); confirm(); };
+  input.onkeydown = (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); confirm(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); close(); }
+  };
+  pop.append(
+    el("div", { className: "num-popup-label", textContent: opts.label }),
+    el("div", { className: "num-popup-row" }, input, btn));
+  document.body.append(pop);
+  pop.style.left = Math.min(x, window.innerWidth - pop.offsetWidth - 8) + "px";
+  pop.style.top = Math.min(y, window.innerHeight - pop.offsetHeight - 8) + "px";
+  setTimeout(() => document.addEventListener("mousedown", away, true), 0);
+  setTimeout(() => { input.focus(); input.select(); }, 20);
+}
+// "Add how many unknown cards?" (1..rest) → insert at model position `pos`.
+function fcAddUnknownPopup(x, y, pos) {
+  const rest = fcLibraryRest();
+  fcCountPopup(x, y, { label: `Add unknown cards (1–${rest})`, max: rest, button: "Add",
+    onConfirm: (n) => fcInsertUnknown(pos, n) });
+}
+// The contiguous run of unknown cards containing model index `idx`: [start, size].
+function fcUnknownRun(idx) {
+  const lib = state.fixedConfig.library || [];
+  if (lib[idx] !== FC_UNKNOWN) return [idx, 0];
+  let s = idx, e = idx;
+  while (s > 0 && lib[s - 1] === FC_UNKNOWN) s--;
+  while (e + 1 < lib.length && lib[e + 1] === FC_UNKNOWN) e++;
+  return [s, e - s + 1];
+}
+function fcRemoveUnknowns(start, count) {
+  const lib = state.fixedConfig.library || [];
+  lib.splice(start, Math.max(0, count));
+  renderConfigBuilder();
+}
+// Remove unknown cards from the run at `idx`: a lone unknown goes immediately,
+// a fused run of N asks HOW MANY (1..N) via the popup.
+function fcRemoveUnknownAt(x, y, idx) {
+  const [start, size] = fcUnknownRun(idx);
+  if (size <= 1) { fcRemove("library", idx); return; }
+  fcCountPopup(x, y, { label: `Remove unknown cards (1–${size})`, max: size, button: "Remove",
+    onConfirm: (n) => fcRemoveUnknowns(start, n) });
+}
+// Trailing unknowns (deepest, right against the shuffled rest) are redundant —
+// a random card pinned just before the random rest is indistinguishable from the
+// rest — so they FUSE into the deck. Keeps the model clean (adding an unknown
+// below the deepest known card is a no-op). Also strips a lone all-unknown list.
+function fcStripTrailingUnknowns(arr) {
+  const a = arr.slice();
+  while (a.length && a[a.length - 1] === FC_UNKNOWN) a.pop();
+  return a;
+}
+function fcNormalizeLibrary() {
+  const lib = state.fixedConfig.library;
+  if (Array.isArray(lib)) state.fixedConfig.library = fcStripTrailingUnknowns(lib);
+}
+
+// Right-click menu on a hand / graveyard / exile / library card (the library has
+// its own menu, incl. add/remove unknown cards; idx is a MODEL index).
 function fcZoneMenu(zone, idx, name, e) {
+  if (zone === "library") return fcLibraryMenu(idx, e);
   const items = [{ label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) }];
   if (fcIsCommander(name)) {
     items.push({ label: "Shuffle to library", onClick: () => fcShuffleCommander(name) });
+  }
+  showContextMenu(e.clientX, e.clientY, items);
+}
+function fcLibraryMenu(idx, e) {
+  const lib = state.fixedConfig.library || [];
+  const isRestBack = idx >= lib.length;   // the "rest" back (top of the reversed pile)
+  const entry = lib[idx];
+  const items = [];
+  // No room = the pool has no free random card left, so no unknown can be added.
+  const noRoom = !fcLibraryHasRoomForUnknown();
+  if (isRestBack) {
+    // The base "rest" pack IS the shuffled deck; an unknown next to it is
+    // redundant — the option is shown but never clickable.
+    items.push({ label: "Add unknown card", disabled: true });
+    showContextMenu(e.clientX, e.clientY, items);
+    return;
+  }
+  // Each add-unknown opens a popup for HOW MANY to add (1..rest). Entries are
+  // always SHOWN; disabled when there's no room. For an UNKNOWN card, above and
+  // below are equivalent (they fuse into the run), so offer a single entry; for
+  // a known card, "above"/"below" pick the side (and "below" is also disabled on
+  // the deepest card — the first above the rest — since it would sit against the
+  // shuffled rest). Reversed display: "above" is the top-of-library side.
+  if (entry === FC_UNKNOWN) {
+    items.push({ label: "Remove unknown card",
+      onClick: () => fcRemoveUnknownAt(e.clientX, e.clientY, idx) });
+    items.push({ label: "Add unknown card", disabled: noRoom,
+      onClick: () => fcAddUnknownPopup(e.clientX, e.clientY, idx) });
+  } else {
+    items.push({ label: `Remove ${entry} from library`, onClick: () => fcRemove("library", idx) });
+    if (fcIsCommander(entry)) {
+      items.push({ label: "Shuffle to library", onClick: () => fcShuffleCommander(entry) });
+    }
+    const isDeepest = idx === lib.length - 1;
+    items.push({ label: "Add unknown card above", disabled: noRoom,
+      onClick: () => fcAddUnknownPopup(e.clientX, e.clientY, idx) });
+    items.push({ label: "Add unknown card below", disabled: noRoom || isDeepest,
+      onClick: () => fcAddUnknownPopup(e.clientX, e.clientY, idx + 1) });
   }
   showContextMenu(e.clientX, e.clientY, items);
 }
@@ -1563,9 +1730,12 @@ function buildMenu(items) {
       return;
     }
     const check = el("span", { className: "ctx-check", textContent: it.checked ? "✓" : "" });
-    const row = el("div", { className: "ctx-item" + (it.submenu ? " has-sub" : "") },
-      check, el("span", { className: "ctx-label", textContent: it.label }));
-    if (it.submenu) {
+    const row = el("div", {
+      className: "ctx-item" + (it.submenu ? " has-sub" : "") + (it.disabled ? " disabled" : ""),
+    }, check, el("span", { className: "ctx-label", textContent: it.label }));
+    if (it.disabled) {
+      // Shown but not clickable (e.g. an add-unknown option with no room).
+    } else if (it.submenu) {
       row.append(el("span", { className: "ctx-arrow", textContent: "▸" }));
       let sub = null;
       row.onmouseenter = () => { if (!sub) { sub = buildMenu(it.submenu); sub.classList.add("ctx-submenu"); row.append(sub); } };
@@ -1601,6 +1771,7 @@ function fcSyncGlobals() {}
 
 function renderConfigBuilder() {
   if (!state.fixedConfig) state.fixedConfig = newFixedConfig();
+  fcNormalizeLibrary();  // trailing unknowns fuse into the shuffled deck
   const fc = state.fixedConfig;
 
   const commanderTax = fcCommanderCards().map((c) => ({
@@ -2638,22 +2809,37 @@ function normalizePileItem(raw) {
 function pile(items, edit = {}) {
   const wrap = el("div", { className: "pile" });
   const list = items || [];
-  if (!list.length) {
-    wrap.append(el("div", { className: "pile-empty", textContent: "—" }));
-    return wrap;
-  }
-  list.forEach((raw, idx) => {
+  if (!list.length) return wrap;  // empty zone: no "—" placeholder, just the label
+  list.forEach((raw, loopIdx) => {
+    // The model index for this item (drag/menu/reorder). Library piles pass
+    // `edit.indexOf` because they render reversed + grouped, so display position
+    // != model (group) index; other piles map 1:1.
+    const idx = edit.indexOf ? edit.indexOf(loopIdx) : loopIdx;
+    // Library-pile specials: an UNKNOWN card (a blank card back; a run of N>1
+    // adjacent unknowns fuses into one back marked with just "N"), and the
+    // "rest" card back showing how many shuffled cards remain (fixed).
+    const isRestBack = raw && typeof raw === "object" && raw.back;
+    const isUnknown = raw && typeof raw === "object" && raw.unknown;
     const item = normalizePileItem(raw);
     const source = item.source_name || item.name;
-    const img = state.imageMap[source] || state.imageMap[item.name];
-    const card = el("div", { className: "pile-img", title: item.name });
-    if (img) card.append(el("img", { src: img, alt: item.name, loading: "lazy" }));
+    const img = (!isUnknown && !isRestBack) && (state.imageMap[source] || state.imageMap[item.name]);
+    const card = el("div", {
+      className: "pile-img" + (isUnknown || isRestBack ? " card-back" : "")
+        + (isRestBack ? " rest-back" : "") + (isUnknown ? " unknown-back" : ""),
+      title: isRestBack ? `${raw.count} more shuffled card${raw.count === 1 ? "" : "s"}`
+        : isUnknown ? (raw.count > 1 ? `${raw.count} unknown cards` : "unknown card (a random card at this depth)")
+        : item.name,
+    });
+    if (isRestBack) card.append(el("div", { className: "back-count", textContent: String(raw.count) }));
+    // A fused run shows just the number; a lone unknown shows nothing.
+    else if (isUnknown) { if (raw.count > 1) card.append(el("div", { className: "back-count-run", textContent: String(raw.count) })); }
+    else if (img) card.append(el("img", { src: img, alt: item.name, loading: "lazy" }));
     else card.append(el("div", { className: "fallback", textContent: item.name }));
     if (edit.onMenu) {
       card.classList.add("editable");
       card.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); edit.onMenu(idx, item.name, e); };
     }
-    if (edit.dragZone) {
+    if (edit.dragZone && !isRestBack) {  // the rest card back is fixed at the bottom
       card.dataset.idx = idx;
       card.draggable = true;
       card.ondragstart = (e) => {
@@ -2696,8 +2882,10 @@ function pile(items, edit = {}) {
       raf = 0;
       if (!state.fcSort || state.fcSort.zone !== edit.dragZone) return;
       const el = state.fcSort.el;
+      // Only reorder among the draggable cards (the fixed "rest" back has no
+      // data-idx and stays put at the top of the library pile).
       let target = null;
-      for (const c of wrap.querySelectorAll(".pile-img:not(.dragging)")) {
+      for (const c of wrap.querySelectorAll(".pile-img[data-idx]:not(.dragging)")) {
         const r = c.getBoundingClientRect();
         if (cursorY < r.top + r.height / 2) { target = c; break; }
       }
@@ -2894,13 +3082,44 @@ function renderBoard(f, edit = {}) {
   // cards PLUS the (shuffled) rest.
   let rightSecond;
   if (ed || edit.showLibrary) {
-    const libTotal = (f.library || 0) + (f.library_top || []).length;
-    // Library-top is an overlapping pile (like graveyard/exile); front = top.
-    // In the editor you can drag to reorder; a read-only preview just shows it.
+    // The library is displayed REVERSED — the TOP of the library (front) is at
+    // the BOTTOM of the page. The pile is (top→bottom): a fixed "rest" card back
+    // (how many shuffled cards remain), then the pinned entries deepest→top —
+    // known cards and unknown card backs (adjacent unknowns fused into one, "?×N").
+    // TOTAL = known cards + the whole random pool (pool = unknown slots + rest);
+    // f.library is that pool (deck cards not placed and not pinned as a known top).
+    // Trailing unknowns (against the shuffled rest) fuse into the deck — they
+    // count toward the rest, not as their own backs.
+    const rawTop = fcStripTrailingUnknowns(f.library_top || []);
+    const N = rawTop.length;
+    const U = rawTop.filter((x) => x === FC_UNKNOWN).length;    // unknown slots
+    const pool = f.library || 0;                                // random pool
+    const rest = Math.max(0, pool - U);                         // shuffled rest
+    const libTotal = (N - U) + pool;                           // known + pool
+    const hasRest = rest > 0;  // no rest card back when there are 0 shuffled cards
+    // Reversed entries (top of library at the bottom); each unknown is its own
+    // item. Consecutive unknowns fuse visually (CSS) — mark the LAST of each run
+    // (the one on top when collapsed) with the run size so it shows "N" (a lone
+    // unknown shows nothing).
+    const revEntries = rawTop.slice().reverse().map((x) => (x === FC_UNKNOWN ? { unknown: true } : x));
+    for (let i = 0; i < revEntries.length; i++) {
+      if (revEntries[i] && revEntries[i].unknown) {
+        let j = i;
+        while (j + 1 < revEntries.length && revEntries[j + 1] && revEntries[j + 1].unknown) j++;
+        if (j > i) revEntries[j] = { unknown: true, count: j - i + 1 };
+        i = j;
+      }
+    }
+    const items = [];
+    if (hasRest) items.push({ back: true, count: rest });       // rest at the TOP (deepest)
+    items.push(...revEntries);
+    // display position -> model index (rest back -> N sentinel = "rest")
+    const off = hasRest ? 1 : 0;
+    const indexOf = (di) => (di < off ? N : (N - 1 - (di - off)));
     const box = el("div", { className: "side-box" },
-      el("div", { className: "zlabel", textContent: `Library — front = top (${libTotal})` }),
-      ed ? pile(f.library_top, { onMenu: zoneMenu("library"), dragZone: "library", reorder: true })
-         : pile(f.library_top));
+      el("div", { className: "zlabel", textContent: `Library (${libTotal})` }),
+      ed ? pile(items, { onMenu: zoneMenu("library"), dragZone: "library", reorder: true, indexOf })
+         : pile(items, { indexOf }));
     rightSecond = ed ? dz(box, "library") : box;
   } else {
     rightSecond = el("div", { className: "side-box" },

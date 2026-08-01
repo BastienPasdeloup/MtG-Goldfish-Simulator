@@ -242,6 +242,16 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .ctx-item { display: flex; align-items: center; gap: .35rem; padding: .28rem .5rem;
   border-radius: 5px; cursor: pointer; white-space: nowrap; position: relative; color: #ffffff; }
 .ctx-item:hover { background: var(--accent); color: #1a1205; }
+/* Shown but not actionable (e.g. an add-unknown option with no room). */
+.ctx-item.disabled { color: var(--muted); cursor: default; }
+.ctx-item.disabled:hover { background: transparent; color: var(--muted); }
+/* "how many unknown cards?" popup */
+.num-popup { position: fixed; z-index: 350; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: .5rem .6rem; box-shadow: 0 12px 34px rgba(0,0,0,.55); }
+.num-popup-label { font-size: 12px; color: var(--muted); margin-bottom: .4rem; }
+.num-popup-row { display: flex; gap: .4rem; align-items: center; }
+.num-popup-input { width: 64px; }
+.num-popup-add { padding: .25rem .7rem; }
 .ctx-item .ctx-label { flex: 1; }
 .ctx-item .ctx-check { width: .9rem; text-align: center; color: var(--accent); }
 .ctx-item:hover .ctx-check { color: #1a1205; }
@@ -313,6 +323,38 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .pile-img + .pile-img { margin-top: -83px; } /* reveal ~26px top strip of each */
 .pile-img:hover { z-index: 5; outline: 2px solid var(--accent); }
 .pile-empty { color: var(--muted); font-size: 12px; }
+/* Library card backs: an "unknown card" pinned at a depth (a run of N fuses to
+   one back marked "N"), and the fixed "rest" back whose number is how many
+   shuffled cards remain. `isolation` contains the number in the card's own
+   layer so it never floats above the overlapping cards next to it. */
+.pile-img.card-back {
+  background: radial-gradient(ellipse at center, #5a4634 0%, #3a2d20 60%, #241b12 100%);
+  display: flex; align-items: center; justify-content: center; isolation: isolate;
+}
+.pile-img.card-back::after {
+  content: ""; position: absolute; width: 62%; height: 52%; border-radius: 50%;
+  border: 2px solid rgba(217, 164, 65, .35);
+}
+/* The count sits in the visible TOP strip of the card back (the rest of the card
+   is covered by the card overlapping it below), and `isolation` on .card-back
+   keeps it in this card's own layer — so it shows without floating over the
+   cards next to it. */
+.pile-img .back-count, .pile-img .back-count-run {
+  position: absolute; top: 3px; left: 0; right: 0; text-align: center;
+  z-index: 1; font-size: 14px; font-weight: 700; color: #f0d9a8; line-height: 1;
+}
+.pile-img.rest-back { cursor: default; }
+/* Fuse a run of adjacent unknown backs (fully overlap) when static; while
+   dragging (.sorting) they spread apart so a card can be dropped between them,
+   and the fused count hides so each reads as one distinct card. */
+.pile-img.unknown-back + .pile-img.unknown-back { margin-top: -109px; }
+/* When static, draw ONLY the top card of a fused run (the others are fully
+   behind it) so its drop shadow/border doesn't stack and "grow" with the count.
+   While dragging, spread them out and show them all (distinct, droppable). */
+.pile-img.unknown-back:has(+ .pile-img.unknown-back) { visibility: hidden; }
+.pile.sorting .pile-img.unknown-back { visibility: visible; }
+.pile.sorting .pile-img.unknown-back + .pile-img.unknown-back { margin-top: 4px; }
+.pile.sorting .back-count-run { display: none; }
 /* tile rows reserve at least one full card's height (small rows one small card) */
 .tiles { display: flex; flex-wrap: wrap; gap: .35rem; align-content: flex-start; min-height: 109px; }
 .tile {
