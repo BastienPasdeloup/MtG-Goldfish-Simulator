@@ -799,7 +799,10 @@ def deal_combat_damage(state: GameState) -> None:
         state.emit(f"combat: {total} damage to opponent (opponent at {state.opponent_life})")
     for perm, dmg in hits:
         state.queue_combat_damage_triggers(perm, dmg)
-    state.settle_nonbranching("combat damage triggers")
+    # Do NOT settle here. The COMBAT_DAMAGE step in simulator._apply_step_entry
+    # (this function's only caller) runs its final branch-capable state.settle(),
+    # which resolves these queued triggers — so a combat-damage trigger MAY BRANCH
+    # (Malcolm's discard choice / free cast) exactly like a phase-entry trigger.
 
 
 # --------------------------------------------------------------------------

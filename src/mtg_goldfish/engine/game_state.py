@@ -878,6 +878,23 @@ class GameState:
         self.emit(f"create token {name} ({power}/{toughness})")
         return perm
 
+    def make_token_copy(self, source: Permanent, *, tapped: bool = False,
+                        attacking: bool = False, fire_etb: bool = True) -> Permanent:
+        """Create a token that's a copy of `source` — its PRINTED characteristics
+        (same underlying CardData, so same name, types, P/T, and abilities/impl,
+        and its ETB fires). Counters, auras, animations and other continuous
+        effects on the original are NOT copied (copiable values only). Used by
+        "create a token that's a copy of target creature" effects (Mirrorpool)."""
+        perm = self.put_on_battlefield(
+            source.card, token=True, fire_etb=fire_etb,
+            announce=f"create a token copy of {source.name}")
+        if tapped:
+            perm.tapped = True
+        if attacking:
+            perm.summoning_sick = False
+            self.attackers.append(perm.uid)
+        return perm
+
     def leaves_battlefield(self, perm: Permanent, to: str = "graveyard",
                            reason: str | None = None) -> None:
         """Move a permanent off the battlefield (graveyard/exile/hand/none).

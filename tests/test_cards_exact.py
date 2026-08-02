@@ -1028,3 +1028,86 @@ def test_ba_sing_se_earthbend_animates_a_land_permanently():
     state.phase = Phase.CLEANUP
     _apply_step_entry(state)
     assert state.find_permanent(target.uid).is_creature_now
+
+
+def test_malcolm_combat_damage_branches_and_free_casts_at_four_chorus():
+    """Malcolm's combat-damage trigger now BRANCHES: chorus++ then draw, one
+    line per distinct discardable card, and — at 4+ chorus for a castable
+    nonland discard — an extra line that free-casts it from the graveyard.
+    Combat damage is dealt in every branch."""
+    from mtg_goldfish.engine.phases import Phase
+    from mtg_goldfish.engine.simulator import _apply_step_entry
+
+    # Under 4 chorus: only the discard choice branches (no free cast).
+    state = _state([])
+    m = state.put_on_battlefield(card("Malcolm, Alluring Scoundrel"))
+    m.counters["chorus"] = 1
+    state.library = [card("Forest")]           # drawn card (a land)
+    state.hand = [card("Psychic Frog")]        # a castable nonland
+    low = build_card(m.card).on_combat_damage(state, m, 2)
+    assert len(low) == 2                        # discard Forest / discard Frog
+    assert not any(b.has_permanent_named("Psychic Frog") for b in low)
+
+    # At 4 chorus, through the real COMBAT_DAMAGE pipeline: the step BRANCHES.
+    state = _state([])
+    state.turn, state.phase = 5, Phase.COMBAT_DAMAGE
+    m = state.put_on_battlefield(card("Malcolm, Alluring Scoundrel"))
+    m.summoning_sick = False
+    m.counters["chorus"] = 3                     # this hit makes it 4
+    state.library = [card("Forest")]
+    state.hand = [card("Psychic Frog")]
+    state.attackers = [m.uid]
+    branches = _apply_step_entry(state)
+    assert branches is not None and len(branches) == 3
+    # chorus counter reached 4 everywhere; combat damage (2) dealt in every line.
+    assert all(b.find_permanent(m.uid).counters.get("chorus") == 4 for b in branches)
+    assert all(b.opponent_life == 18 for b in branches)
+    # Exactly one line free-cast the discarded Frog onto the battlefield.
+    assert sum(1 for b in branches if b.has_permanent_named("Psychic Frog")) == 1
+
+
+def test_mirrorpool_copies_target_creature_with_its_abilities():
+    """Mirrorpool: {4}{C}, {T}, Sacrifice: create a token that's a copy of target
+    creature you control — a full copy (P/T + abilities), sacrificing Mirrorpool."""
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    mp = state.put_on_battlefield(card("Mirrorpool"))
+    mp.tapped = False
+    for _ in range(5):                       # colorless sources for {4}{C}
+        s = state.put_on_battlefield(card("Mirrorpool"))
+        s.tapped = False
+        s.summoning_sick = False
+    frog = state.put_on_battlefield(card("Psychic Frog"))
+    frog.summoning_sick = False
+    act = next(a for a in build_card(mp.card).battlefield_actions(state, mp)
+               if "Psychic Frog" in a.label)
+    act.apply(state)
+    frogs = state.permanents_named("Psychic Frog")
+    assert len(frogs) == 2                    # original + token copy
+    token = next(p for p in frogs if p.is_token)
+    assert state.effective_power(token) == 1 and state.effective_toughness(token) == 2
+    assert not state.has_permanent_named("Mirrorpool") or \
+        any(not p.is_token for p in state.permanents_named("Mirrorpool"))  # activated one gone
+    assert "Mirrorpool" in state.graveyard_names()   # sacrificed as a cost
+
+    # The copy adopts the original's (branching) ETB: copying Arboreal Grazer
+    # branches on its "put a land from hand" ETB.
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    mp = state.put_on_battlefield(card("Mirrorpool"))
+    mp.tapped = False
+    for _ in range(5):
+        s = state.put_on_battlefield(card("Mirrorpool"))
+        s.tapped = False
+        s.summoning_sick = False
+    grazer = state.put_on_battlefield(card("Arboreal Grazer"))
+    grazer.summoning_sick = False
+    state.hand = [card("Forest")]
+    act = next(a for a in build_card(mp.card).battlefield_actions(state, mp)
+               if "Arboreal Grazer" in a.label)
+    branches = act.apply(state)
+    assert branches is not None and len(branches) == 2
+    assert all(sum(1 for p in b.battlefield if p.name == "Arboreal Grazer" and p.is_token) == 1
+               for b in branches)
+    assert any(b.has_permanent_named("Forest") for b in branches)
+    assert any(not b.has_permanent_named("Forest") for b in branches)
