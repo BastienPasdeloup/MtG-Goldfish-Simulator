@@ -25,5 +25,5 @@ class GauFeralYouth(Card):
         dmg = state.effective_power(perm)
         if dmg <= 0:
             return
-        state.opponent_life -= dmg
+        state.damage_opponent(dmg)  # noncombat -> amplifiers apply
         state.emit(f"Gau: {dmg} damage to each opponent ({state.opponent_life})")

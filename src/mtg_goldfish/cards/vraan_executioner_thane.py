@@ -17,7 +17,7 @@ class VraanExecutionerThane(Card):
         if perm.turn_flags.get("vraan_fired"):
             return
         perm.turn_flags["vraan_fired"] = 1
-        state.opponent_life -= 2
+        state.damage_opponent(2)  # noncombat -> amplifiers apply
         state.life += 2
         state.emit(f"Vraan: opponent loses 2 ({state.opponent_life}), "
                    f"you gain 2 ({state.life})")

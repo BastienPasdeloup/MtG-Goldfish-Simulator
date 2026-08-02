@@ -972,3 +972,59 @@ def test_six_retrace_casts_permanents_from_graveyard():
     g.graveyard.append(CardData(name="Grizzly Bears", type_line="Creature — Bear",
                                 cmc=2, mana_cost="{1}{G}", power="2", toughness="2"))
     assert not six.impl.alt_cast_actions(g, six)
+
+
+def test_torture_pit_amplifies_noncombat_damage():
+    """Torture Pit: your noncombat damage to an opponent deals +2 (via
+    GameState.damage_opponent); combat damage is unaffected."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    assert g.damage_opponent(3) == 3                    # no amplifier yet
+    tp = g.put_on_battlefield(card("Spiked Corridor // Torture Pit"))
+    tp.counters["torture"] = 1
+    opp = g.opponent_life
+    assert g.damage_opponent(3) == 5                    # +2
+    assert g.opponent_life == opp - 5
+    # The 'any target' burn helper (used by Lightning Bolt, Devils, ...) routes
+    # opponent damage through damage_opponent, so it's amplified.
+    from mtg_goldfish.cards._common import damage_any_target_options
+    opp_apply = dict(damage_any_target_options(g))["opponent"]
+    opp2 = g.opponent_life
+    opp_apply(g, 3)                                     # 3 -> 5 with Torture Pit
+    assert g.opponent_life == opp2 - 5
+    # Two Torture Pits stack (+2 each); the Spiked (Devil) door alone does NOT.
+    g2 = GameState()
+    for _ in range(2):
+        p = g2.put_on_battlefield(card("Spiked Corridor // Torture Pit"))
+        p.counters["torture"] = 1
+    assert g2.damage_opponent(1) == 5                   # 1 + 2 + 2
+    g3 = GameState()
+    g3.put_on_battlefield(card("Spiked Corridor // Torture Pit")).counters["spiked"] = 1
+    assert g3.damage_opponent(4) == 4
+
+
+def test_ba_sing_se_earthbend_animates_a_land_permanently():
+    """{2}{G}, {T}: Earthbend 2 — target land you control becomes a permanent
+    2/2 land creature with haste (survives cleanup, attacks next turn too)."""
+    from mtg_goldfish.engine.simulator import _apply_step_entry
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    bs = state.put_on_battlefield(card("Ba Sing Se"))
+    bs.summoning_sick = False
+    bs.tapped = False
+    for _ in range(4):
+        f = state.put_on_battlefield(card("Forest"))
+        f.summoning_sick = False
+    target = next(p for p in state.battlefield if p.name == "Forest")
+    act = next(a for a in build_card(bs.card).battlefield_actions(state, bs)
+               if a.label.endswith("Forest"))
+    act.apply(state)
+    live = state.find_permanent(target.uid)
+    assert live.is_creature_now and live.is_land          # still a land, now a creature
+    assert state.effective_power(live) == 2 and state.effective_toughness(live) == 2
+    assert state.has_keyword(live, "Haste") and not live.summoning_sick
+    assert state.find_permanent(bs.uid).tapped             # paid its own {T}
+    # A normal man-land loses its animation at cleanup; earthbend is permanent.
+    state.phase = Phase.CLEANUP
+    _apply_step_entry(state)
+    assert state.find_permanent(target.uid).is_creature_now

@@ -264,6 +264,12 @@ class Card:
         """Non-mana activated abilities (fetch, equip, draw engines, ...)."""
         return []
 
+    def noncombat_damage_bonus(self, state: "GameState", perm: "Permanent") -> int:
+        """Extra noncombat damage this permanent adds when a source you control
+        deals noncombat damage to an opponent (Torture Pit's "+2 instead"). Read
+        by `GameState.damage_opponent`. Default: none."""
+        return 0
+
     def stack_response_actions(self, state: "GameState", perm: "Permanent") -> list:
         """Instant-speed responses this permanent can make to the ability on top
         of the stack — copying it, countering it — BEFORE it resolves. Returns a

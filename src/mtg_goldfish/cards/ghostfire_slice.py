@@ -24,7 +24,7 @@ class GhostfireSlice(Card):
             if card is None or not begin_cast(st, card, cost):
                 return None
             resolve_to_graveyard(st, card)
-            st.opponent_life -= 4
+            st.damage_opponent(4)  # noncombat -> amplifiers apply
             st.note_crime()
             st.emit(f"Ghostfire Slice: 4 damage to opponent ({st.opponent_life})")
             return None

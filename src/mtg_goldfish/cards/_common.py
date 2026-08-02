@@ -336,9 +336,9 @@ def damage_any_target_options(state: "GameState", *, players_only: bool = False)
     options: list[tuple[str, Callable]] = []
 
     def opp(st: "GameState", amount: int):
-        st.opponent_life -= amount
+        dealt = st.damage_opponent(amount)  # noncombat — Torture Pit etc. amplify
         st.note_crime()
-        st.emit(f"{amount} damage to opponent ({st.opponent_life})")
+        st.emit(f"{dealt} damage to opponent ({st.opponent_life})")
 
     options.append(("opponent", opp))
     if players_only:

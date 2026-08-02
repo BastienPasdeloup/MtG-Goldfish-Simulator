@@ -33,7 +33,7 @@ class MountDoom(Card):
             return True
 
         def resolve(st):
-            st.opponent_life -= 1
+            st.damage_opponent(1)  # noncombat -> amplifiers apply
             st.note_crime()
             st.emit(f"Mount Doom: 1 damage to opponent ({st.opponent_life})")
             return None

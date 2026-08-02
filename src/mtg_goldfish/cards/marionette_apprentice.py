@@ -31,5 +31,5 @@ class MarionetteApprentice(Card):
         if to != "graveyard":
             return
         if left.is_creature_now or "artifact" in left.type_line.lower():
-            state.opponent_life -= 1
+            state.damage_opponent(1)  # noncombat -> amplifiers apply
             state.emit(f"Marionette Apprentice: opponent loses 1 ({state.opponent_life})")

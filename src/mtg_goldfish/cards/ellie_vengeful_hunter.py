@@ -37,7 +37,7 @@ class EllieVengefulHunter(Card):
 
                 def resolve(st):
                     src = st.find_permanent(perm.uid)
-                    st.opponent_life -= 2
+                    st.damage_opponent(2)  # noncombat -> amplifiers apply
                     st.note_crime()
                     if src is not None:
                         src.temp_keywords.add("indestructible")

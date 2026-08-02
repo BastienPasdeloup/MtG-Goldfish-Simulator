@@ -71,7 +71,7 @@ class SephirothFabledSoldier(Card):
     def on_other_leave(self, state, perm, left, to, reason):
         if to != "graveyard" or not left.is_creature_now:
             return
-        state.opponent_life -= 1
+        state.damage_opponent(1)  # noncombat -> amplifiers apply
         state.life += 1
         state.emit(f"Sephiroth: opponent loses 1 ({state.opponent_life}), "
                    f"gain 1 ({state.life})")

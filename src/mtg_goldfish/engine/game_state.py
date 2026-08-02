@@ -750,6 +750,19 @@ class GameState:
             nth = self.cards_drawn_this_turn
             self.queue_draw_triggers(nth)
 
+    def damage_opponent(self, amount: int) -> int:
+        """Deal `amount` NONCOMBAT damage to the opponent, applying any 'a source
+        you control dealing noncombat damage to an opponent deals +N instead'
+        amplifiers on the battlefield (Torture Pit). Returns the amount actually
+        dealt. Card code should call this instead of `opponent_life -= n` for any
+        NONCOMBAT damage (burn, death triggers, pingers) so amplifiers apply;
+        combat damage stays in deal_combat_damage (a different replacement)."""
+        dealt = amount
+        if amount > 0:
+            dealt += sum(p.impl.noncombat_damage_bonus(self, p) for p in self.battlefield)
+        self.opponent_life -= dealt
+        return dealt
+
     # ---- library search / shuffle -------------------------------------------
     def mark_known_in_library(self, *cards) -> None:
         """Record that the player knows WHERE these library cards sit (put on

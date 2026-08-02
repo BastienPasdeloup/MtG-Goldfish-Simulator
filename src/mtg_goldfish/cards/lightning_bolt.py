@@ -25,7 +25,7 @@ class LightningBolt(Card):
                     return None
                 resolve_to_graveyard(st, card)
                 if opponent:
-                    st.opponent_life -= 3
+                    st.damage_opponent(3)  # noncombat -> amplifiers apply
                     st.emit(f"Lightning Bolt: 3 damage to opponent ({st.opponent_life})")
                 else:
                     st.life -= 3

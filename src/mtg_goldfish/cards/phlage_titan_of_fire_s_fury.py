@@ -13,7 +13,7 @@ _ESCAPE = ManaCost(pips=(("R", 2), ("W", 2)))
 
 
 def _fury(state, perm) -> None:
-    state.opponent_life -= 3
+    state.damage_opponent(3)  # noncombat -> amplifiers apply
     state.life += 3
     state.emit(f"Phlage: 3 damage to opponent ({state.opponent_life}), gain 3 life ({state.life})")
 

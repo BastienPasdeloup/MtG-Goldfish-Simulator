@@ -1,10 +1,10 @@
 """Spiked Corridor // Torture Pit — split Room enchantment ({3}{R} per door).
 Spiked Corridor: when you unlock this door, create three 1/1 red Devil tokens
 with "When this token dies, it deals 1 damage to any target."
-Torture Pit: a source you control dealing noncombat damage to an opponent deals
-+2 (this static is not modelled — hooking every damage source is out of scope).
-Either half can be cast; the other door can then be unlocked from the battlefield
-by paying its cost as a sorcery."""
+Torture Pit: while unlocked, a source you control dealing noncombat damage to an
+opponent deals +2 (via `noncombat_damage_bonus` — all noncombat damage routes
+through GameState.damage_opponent). Either half can be cast; the other door can
+then be unlocked from the battlefield by paying its cost as a sorcery."""
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
@@ -22,7 +22,7 @@ class Devil(Card):
     card_name = "Devil"
 
     def on_leave(self, state, permanent):
-        state.opponent_life -= 1
+        state.damage_opponent(1)  # noncombat — Torture Pit amplifies
         state.emit(f"Devil dies: 1 damage to opponent ({state.opponent_life})")
 
 
@@ -37,6 +37,10 @@ def _make_devils(state):
 @register
 class SpikedCorridor(Card):
     card_name = "Spiked Corridor // Torture Pit"
+
+    def noncombat_damage_bonus(self, state, perm):
+        # Torture Pit door unlocked: your noncombat damage to an opponent is +2.
+        return 2 if perm.counters.get("torture") else 0
 
     def cast_cost(self, state):
         return _ROOM_COST
@@ -62,7 +66,7 @@ class SpikedCorridor(Card):
                 if door == "spiked":
                     _make_devils(st)
                 else:
-                    st.emit("Torture Pit: +2 noncombat damage static not modelled")
+                    st.emit("Torture Pit: unlocked (noncombat damage to opponents +2)")
                 return None
             return fn
 
@@ -96,7 +100,7 @@ class SpikedCorridor(Card):
                     if door == "spiked":
                         _make_devils(st)
                     else:
-                        st.emit("Torture Pit: +2 noncombat damage static not modelled")
+                        st.emit("Torture Pit: unlocked (noncombat damage to opponents +2)")
                     return None
                 return pay, resolve
 

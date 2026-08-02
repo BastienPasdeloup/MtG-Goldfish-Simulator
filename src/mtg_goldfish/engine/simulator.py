@@ -333,7 +333,10 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             perm.temp_power = 0
             perm.temp_toughness = 0
             perm.temp_keywords.clear()
-            perm.becomes = None  # man-land animation ends
+            # Man-land animation ends at cleanup — but a PERMANENT animation
+            # (Ba Sing Se's earthbend) stays a creature.
+            if perm.becomes is not None and not perm.becomes.get("permanent"):
+                perm.becomes = None
             perm.damage = 0
         state.check_deaths()
 
