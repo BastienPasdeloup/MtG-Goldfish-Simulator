@@ -971,12 +971,16 @@ function placeableCards() {
 }
 
 // Total number of copies of `name` placed across every fixed-config zone.
+// An exile entry is either a bare name or {name, exiled_with}; this reads the
+// card name from either form (hand/graveyard/library are always bare names).
+const fcName = (x) => (x && typeof x === "object" ? x.name : x);
+
 function fcUsage(name) {
   const fc = state.fixedConfig;
   return fc.battlefield.filter((x) => x.name === name).length
     + fc.hand.filter((x) => x === name).length
     + fc.graveyard.filter((x) => x === name).length
-    + fc.exile.filter((x) => x === name).length
+    + fc.exile.filter((x) => fcName(x) === name).length
     + (fc.library || []).filter((x) => x === name).length;
 }
 
@@ -1251,7 +1255,7 @@ function fcMoveCard(fromZone, fromIdx, toZone, x, y) {
     name = entry;
     fcRemove("library", fromIdx);  // re-renders
   } else {
-    name = fromZone === "battlefield" ? (fc.battlefield[fromIdx] || {}).name : fc[fromZone][fromIdx];
+    name = fromZone === "battlefield" ? (fc.battlefield[fromIdx] || {}).name : fcName(fc[fromZone][fromIdx]);
     if (!name || !fcCanPlace(name, toZone)) return;
     fcRemove(fromZone, fromIdx);  // re-renders; fixes attachment indices
   }
@@ -1335,7 +1339,9 @@ function fcFrame() {
   const phaseLabel = (FC_PHASES.find(([v]) => v === fc.phase) || [null, fc.phase])[1];
   return {
     battlefield, hand: fc.hand.slice(), graveyard: fc.graveyard.slice(),
-    exile: fc.exile.slice(), command_zone: command, stack: [],
+    // Show the "exiled by" badge in the editor/preview too (exiled_with -> exiled_by).
+    exile: fc.exile.map((e) => (typeof e === "string" ? e : { name: e.name, exiled_by: e.exiled_with })),
+    command_zone: command, stack: [],
     library_top: (fc.library || []).slice(),  // editor: the set top of the library
     turn: fc.turn, phase: phaseLabel, desc: "",
     life: fc.life, opponent_life: fc.opponent_life, library,
@@ -1619,10 +1625,35 @@ function fcNormalizeLibrary() {
 function fcZoneMenu(zone, idx, name, e) {
   if (zone === "library") return fcLibraryMenu(idx, e);
   const items = [{ label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) }];
+  if (zone === "exile") {
+    // Link this exiled card to a permanent on the battlefield, so the game sets
+    // it up in that card's mechanism (playable from exile / exiled with it).
+    const fc = state.fixedConfig;
+    const entry = fc.exile[idx];
+    const linked = entry && typeof entry === "object" ? entry.exiled_with : null;
+    const perms = [...new Set(fc.battlefield.map((b) => b.name))];
+    if (perms.length) {
+      items.push({ label: "Exiled with…", submenu: perms.map((pn) => ({
+        label: pn + (pn === linked ? "  ✓" : ""),
+        onClick: () => fcSetExileSource(idx, pn),
+      })) });
+    }
+    if (linked) items.push({ label: `Clear link (${linked})`, onClick: () => fcSetExileSource(idx, null) });
+  }
   if (fcIsCommander(name)) {
     items.push({ label: "Shuffle to library", onClick: () => fcShuffleCommander(name) });
   }
   showContextMenu(e.clientX, e.clientY, items);
+}
+
+// Mark an exiled card as "exiled with <permName>" (or clear the link). The entry
+// becomes {name, exiled_with} when linked, or a bare name when cleared.
+function fcSetExileSource(idx, permName) {
+  const fc = state.fixedConfig;
+  const nm = fcName(fc.exile[idx]);
+  if (nm === undefined) return;
+  fc.exile[idx] = permName ? { name: nm, exiled_with: permName } : nm;
+  renderConfigBuilder();
 }
 function fcLibraryMenu(idx, e) {
   const lib = state.fixedConfig.library || [];
@@ -1677,7 +1708,7 @@ function fcShuffleCommander(name) {
     });
   }
   ["hand", "graveyard", "exile", "library"].forEach((z) => {
-    fc[z] = (fc[z] || []).filter((n) => n !== name);
+    fc[z] = (fc[z] || []).filter((n) => fcName(n) !== name);
   });
   if (!fc.commander_removed.includes(name)) fc.commander_removed.push(name);
   renderConfigBuilder();
@@ -2803,6 +2834,9 @@ function normalizePileItem(raw) {
     kind: typeof raw?.kind === "string" ? raw.kind : "card",
     trigger: typeof raw?.trigger === "string" ? raw.trigger : null,
     ability: typeof raw?.ability === "string" ? raw.ability : name,
+    // The card that exiled this one, when still relevant (playable from exile /
+    // exiled "until" that permanent) — rendered as a badge on the exile pile.
+    exiled_by: asName(raw?.exiled_by) || null,
   };
 }
 
@@ -2835,6 +2869,15 @@ function pile(items, edit = {}) {
     else if (isUnknown) { if (raw.count > 1) card.append(el("div", { className: "back-count-run", textContent: String(raw.count) })); }
     else if (img) card.append(el("img", { src: img, alt: item.name, loading: "lazy" }));
     else card.append(el("div", { className: "fallback", textContent: item.name }));
+    // "Exiled by <source>" badge — the permanent this card is exiled with / can
+    // be played from exile by (only set for the relevant exiles).
+    if (item.exiled_by) {
+      card.classList.add("has-exile-src");
+      card.append(el("div", {
+        className: "exile-src", textContent: item.exiled_by,
+        title: `Exiled with ${item.exiled_by} — playable / tied to its ability`,
+      }));
+    }
     if (edit.onMenu) {
       card.classList.add("editable");
       card.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); edit.onMenu(idx, item.name, e); };

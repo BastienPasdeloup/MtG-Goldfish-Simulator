@@ -1509,6 +1509,29 @@ class GameState:
                 view["toughness"] = self.effective_toughness(p)
         return view
 
+    def _exile_view(self) -> list[dict]:
+        """Each exiled card as {name, exiled_by?}. `exiled_by` names the source
+        that exiled it WHEN that link is still meaningful — the card is playable
+        from exile (`exile_playable`, source still on the battlefield) or is
+        associated with a permanent via `exiled_with`. Cards exiled with no live
+        source (a spell exiled and gone) carry no badge."""
+        source_by_id: dict[int, str] = {}
+        for uid, card in self.exile_playable:
+            perm = self.find_permanent(uid)
+            if perm is not None:
+                source_by_id[id(card)] = perm.name
+        for perm in self.battlefield:
+            for card in perm.exiled_with:
+                source_by_id.setdefault(id(card), perm.name)
+        out = []
+        for card in self.exile:
+            entry = {"name": card.name}
+            src = source_by_id.get(id(card))
+            if src:
+                entry["exiled_by"] = src
+            out.append(entry)
+        return out
+
     def snapshot(self) -> dict:
         def stack_item_view(item):
             if isinstance(item, StackAbility):
@@ -1537,7 +1560,7 @@ class GameState:
             "hand": [c.name for c in self.hand],
             "command_zone": [c.name for c in self.command_zone],
             "graveyard": [c.name for c in self.graveyard],
-            "exile": [c.name for c in self.exile],
+            "exile": self._exile_view(),
             "stack": [stack_item_view(c) for c in self.stack],
             "mana_pool": {k: v for k, v in self.mana_pool.amounts.items() if v},
             "battlefield": [self._perm_view(p) for p in self.battlefield],

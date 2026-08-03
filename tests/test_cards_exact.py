@@ -1388,3 +1388,44 @@ def test_exhume_reanimates_a_graveyard_creature():
     end = branches[0] if branches else state
     assert end.has_permanent_named("Griselbrand")
     assert "Griselbrand" not in end.graveyard_names()
+
+
+def test_exile_snapshot_names_the_exiling_source():
+    """snapshot()['exile'] tags each card with `exiled_by` when it's playable
+    from exile / exiled-with a live permanent; a plain exiled card has no tag."""
+    state = _state([])
+    hb = state.put_on_battlefield(card("Hoarding Broodlord"), fire_etb=False)
+    ponder = card("Ponder")
+    state.exile.append(ponder)
+    state.exile_playable.append((hb.uid, ponder))
+    state.exile.append(card("Duress"))                 # plain exile, no source
+    view = {e["name"]: e.get("exiled_by") for e in state.snapshot()["exile"]}
+    assert view["Ponder"] == "Hoarding Broodlord"
+    assert view["Duress"] is None
+
+
+def test_fixed_config_exile_linked_to_a_permanent_is_playable():
+    """A fixed-config exile entry {name, exiled_with} is set up in that
+    permanent's mechanism: added to exile_playable + its exiled_with, and shown
+    as castable-from-exile."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.actions import legal_actions
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                         card=card("Emet-Selch, Unsundered"))]
+    for n in ["Hoarding Broodlord", "Ponder", "Island", "Island", "Island", "Island"]:
+        entries.append(DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=card(n)))
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    fixed = {"turn": 4, "phase": "precombat_main",
+             "battlefield": ["Hoarding Broodlord", "Island", "Island", "Island", "Island"],
+             "exile": [{"name": "Ponder", "exiled_with": "Hoarding Broodlord"}]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    hb = next(p for p in v.battlefield if p.name == "Hoarding Broodlord")
+    assert [c.name for c in v.exile] == ["Ponder"]
+    assert any(c.name == "Ponder" for _, c in v.exile_playable)
+    assert any(c.name == "Ponder" for c in hb.exiled_with)
+    assert any(a.label == "cast Ponder from exile" for a in legal_actions(v))
+    # the badge is exposed in the snapshot
+    assert any(e.get("exiled_by") == "Hoarding Broodlord" for e in v.snapshot()["exile"])

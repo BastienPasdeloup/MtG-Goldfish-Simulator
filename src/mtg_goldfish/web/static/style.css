@@ -321,6 +321,18 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .pile-img img, .tile img { pointer-events: none; -webkit-user-drag: none; user-select: none; }
 .pile-img .fallback { padding: 4px; font-size: 9px; line-height: 1.1; color: var(--text); }
 .pile-img + .pile-img { margin-top: -83px; } /* reveal ~26px top strip of each */
+/* "Exiled by <source>" badge: sits in the visible top strip (cards overlap), so
+   it reads even for a stacked exile pile. Isolated so it paints above the card
+   below without bleeding into neighbours' layers. */
+.pile-img.has-exile-src { isolation: isolate; }
+.pile-img .exile-src {
+  position: absolute; top: 2px; left: 2px; right: 2px; z-index: 2;
+  font-size: 8px; line-height: 1.25; font-weight: 600; text-align: center;
+  padding: 1px 3px; border-radius: 4px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; color: #fff;
+  background: rgba(124, 92, 196, .92); border: 1px solid rgba(255,255,255,.25);
+  box-shadow: 0 1px 2px rgba(0,0,0,.55);
+}
 .pile-img:hover { z-index: 5; outline: 2px solid var(--accent); }
 .pile-empty { color: var(--muted); font-size: 12px; }
 /* Library card backs: an "unknown card" pinned at a depth (a run of N fuses to

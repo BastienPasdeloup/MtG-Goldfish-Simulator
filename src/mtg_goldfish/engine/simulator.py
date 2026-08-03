@@ -965,10 +965,28 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         card = take(name)
         if card is not None:
             variant.graveyard.append(card)
-    for name in fixed.get("exile", []):
+    # Map each battlefield permanent by the name shown in the editor, so an exile
+    # entry may declare it was "exiled with" that permanent.
+    placed_by_name = {}
+    for i, spec in enumerate(specs):
+        if placed[i] is None:
+            continue
+        nm = spec.get("name") if isinstance(spec, dict) else spec
+        placed_by_name.setdefault(nm, placed[i])
+    for entry in fixed.get("exile", []):
+        # Entry is either a bare name, or {"name", "exiled_with": <perm name>}.
+        name = entry if isinstance(entry, str) else entry.get("name")
         card = take(name)
-        if card is not None:
-            variant.exile.append(card)
+        if card is None:
+            continue
+        variant.exile.append(card)
+        host_name = None if isinstance(entry, str) else entry.get("exiled_with")
+        host = placed_by_name.get(host_name) if host_name else None
+        if host is not None:
+            # Link it to that permanent's mechanism: playable from exile (Hoarding
+            # Broodlord / Gwen Stacy) AND recorded in its `exiled_with` list.
+            variant.exile_playable.append((host.uid, card))
+            host.exiled_with.append(card)
 
     # Commanders "removed from any area" are shuffled into the deck: pull them
     # out of the command-zone pool and into the shuffled library remainder.
