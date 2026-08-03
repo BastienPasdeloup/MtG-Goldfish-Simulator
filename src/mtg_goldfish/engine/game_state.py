@@ -341,6 +341,10 @@ class GameState:
     # Teferi, Hero of Dominaria +1: untap up to this many lands at the beginning
     # of the next end step (applied in the CLEANUP/END_STEP step entry).
     untap_lands_end_step: int = 0
+    # Additional combat phases still owed this turn (Fear of Missing Out). When
+    # leaving END_COMBAT with this > 0, the turn loops back to BEGIN_COMBAT
+    # (decrementing) instead of advancing to the postcombat main phase.
+    extra_combats: int = 0
 
     # game-long bookkeeping
     cards_drawn: int = 0
@@ -431,6 +435,7 @@ class GameState:
             free_casts=[dict(g) for g in self.free_casts],
             cast_sorcery_as_flash=self.cast_sorcery_as_flash,
             untap_lands_end_step=self.untap_lands_end_step,
+            extra_combats=self.extra_combats,
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
             commander_cast_this_game=self.commander_cast_this_game,
@@ -615,6 +620,7 @@ class GameState:
         self.free_casts = []
         self.cast_sorcery_as_flash = False
         self.untap_lands_end_step = 0
+        self.extra_combats = 0
         for p in self.battlefield:
             p.turn_flags.clear()
 
@@ -894,6 +900,26 @@ class GameState:
             perm.summoning_sick = False
             self.attackers.append(perm.uid)
         return perm
+
+    def become_copy_until_eot(self, perm: Permanent, src_card: CardData) -> None:
+        """`perm` becomes a copy of `src_card` (a permanent card — e.g. one in a
+        graveyard) UNTIL END OF TURN: it takes on that card's name, types, P/T
+        and abilities (its `impl` is swapped in). Reverts at cleanup — the
+        `becomes` marker stashes the originals, and the CLEANUP step restores
+        them. Copiable values only (no counters/auras). Used by Shifting
+        Woodland's delirium ability. `perm` keeps its identity (not a token)."""
+        from ..cards import build_card
+
+        perm.becomes = {
+            "type_line": src_card.type_line,   # satisfies the type_line property
+            "orig_card": perm.card,            # restored at cleanup
+            "orig_impl": perm.impl,
+        }
+        # Name / P/T / abilities all come from the swapped card+impl (base_power
+        # falls through to the swapped card's printed P/T since `becomes` carries
+        # no power/toughness override).
+        perm.card = src_card.model_copy()
+        perm.impl = build_card(perm.card)
 
     def leaves_battlefield(self, perm: Permanent, to: str = "graveyard",
                            reason: str | None = None) -> None:

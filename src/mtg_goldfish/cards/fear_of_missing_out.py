@@ -45,4 +45,7 @@ class FearOfMissingOut(Card):
         if tgt is not None:
             tgt.tapped = False
             state.emit(f"Fear of Missing Out: delirium — untap {tgt.name}")
-        state.emit("Fear of Missing Out: delirium extra combat phase not modelled")
+        # After this combat phase, take an additional combat phase (the search
+        # loops END_COMBAT → BEGIN_COMBAT once via GameState.extra_combats).
+        state.extra_combats += 1
+        state.emit("Fear of Missing Out: delirium — additional combat phase this turn")

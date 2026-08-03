@@ -1111,3 +1111,173 @@ def test_mirrorpool_copies_target_creature_with_its_abilities():
                for b in branches)
     assert any(b.has_permanent_named("Forest") for b in branches)
     assert any(not b.has_permanent_named("Forest") for b in branches)
+
+
+def test_springheart_nantuko_landfall_copies_the_enchanted_creature():
+    """Landfall while bestowed on a creature BRANCHES: pay {1}{G} for a token
+    copy of that creature, or make the 1/1 Insect. Unattached → just the Insect.
+    A land entering during an atomic (non-branching) resolution must not crash."""
+    from mtg_goldfish.engine.actions import PlayLand
+
+    def setup(attached):
+        state = _state([])
+        state.phase = Phase.PRECOMBAT_MAIN
+        host = state.put_on_battlefield(card("Psychic Frog"))
+        host.summoning_sick = False
+        for _ in range(3):                       # mana lands down BEFORE attaching
+            f = state.put_on_battlefield(card("Forest"))
+            f.summoning_sick = False
+        sh = state.put_on_battlefield(card("Springheart Nantuko"))
+        sh.summoning_sick = False
+        if attached:
+            sh.attached_to = host.uid
+            sh.counters["bestowed"] = 1
+        state.hand = [card("Forest")]
+        state.lands_played_this_turn = 0
+        return state, host
+
+    # Attached: playing a land branches into copy-the-Frog vs 1/1 Insect.
+    state, host = setup(True)
+    branches = PlayLand("Forest").apply(state)
+    assert branches is not None and len(branches) == 2
+    assert any(sum(1 for p in b.battlefield if p.name == "Psychic Frog" and p.is_token) == 1
+               for b in branches)
+    assert any(b.permanents_named("Insect") for b in branches)
+
+    # Unattached: no landfall branch, just the 1/1 Insect.
+    state, host = setup(False)
+    branches = PlayLand("Forest").apply(state)
+    end = branches[0] if branches else state
+    assert len(end.permanents_named("Insect")) == 1
+    assert not any(p.is_token for p in end.permanents_named("Psychic Frog"))
+
+    # A land entering during a non-branching resolution must not raise.
+    state, host = setup(True)
+    state.put_on_battlefield(card("Forest"))     # fire_etb=True → settle_nonbranching
+    assert len(state.permanents_named("Insect")) == 1
+
+
+def test_shifting_woodland_delirium_becomes_a_graveyard_permanent_copy():
+    """Delirium — {2}{G}{G}: becomes a copy of target permanent card in your
+    graveyard until end of turn (full copy: name/types/P/T/abilities), reverting
+    to a land at cleanup. Gated on 4+ card types; only permanents are targetable."""
+    from mtg_goldfish.engine.simulator import _apply_step_entry
+
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    state.turn = 6
+    sw = state.put_on_battlefield(card("Shifting Woodland"))
+    sw.tapped = False
+    sw.summoning_sick = False
+    for _ in range(4):                       # {2}{G}{G} from other sources
+        f = state.put_on_battlefield(card("Forest"))
+        f.tapped = False
+        f.summoning_sick = False
+    # 4 card types in graveyard -> delirium on; a creature + a noncreature permanent
+    # + two nonpermanents (which must NOT be offered as copy targets).
+    for n in ["Psychic Frog", "Skullclamp", "Lightning Bolt", "Tropical Island"]:
+        state.graveyard.append(card(n))
+
+    acts = build_card(sw.card).battlefield_actions(state, sw)
+    labels = [a.label for a in acts]
+    assert any("Psychic Frog" in l for l in labels)          # creature permanent
+    assert any("Skullclamp" in l for l in labels)            # artifact permanent
+    assert not any("Lightning Bolt" in l for l in labels)    # instant — not a permanent
+
+    next(a for a in acts if "Psychic Frog" in a.label).apply(state)
+    live = state.find_permanent(sw.uid)
+    assert live.name == "Psychic Frog" and live.is_creature_now and not live.is_land
+    assert state.effective_power(live) == 1 and state.effective_toughness(live) == 2
+    assert not live.tapped and not live.summoning_sick        # untapped: can attack
+    assert build_card(live.card).mana_abilities(state) == []  # lost the land's {G}
+
+    # Cleanup reverts it to the land (name, type, and mana ability restored).
+    state.phase = Phase.CLEANUP
+    _apply_step_entry(state)
+    live = state.find_permanent(sw.uid)
+    assert live.name == "Shifting Woodland" and live.is_land and not live.is_creature_now
+    assert build_card(live.card).mana_abilities(state)        # {G} back
+
+
+def test_fear_of_missing_out_delirium_extra_combat_phase():
+    """Delirium — when FOMO attacks (first time), untap target creature AND take
+    an additional combat phase. The turn loops END_COMBAT → BEGIN_COMBAT once
+    (GameState.extra_combats), letting the untapped creature swing again."""
+    from mtg_goldfish.engine.actions import DeclareAttackers, combat_actions
+    from mtg_goldfish.engine.simulator import _apply_step_entry, _goto_next_phase
+
+    def run(delirium):
+        state = _state([])
+        state.turn = 6
+        state.phase = Phase.DECLARE_ATTACKERS
+        fomo = state.put_on_battlefield(card("Fear of Missing Out"))
+        fomo.summoning_sick = False
+        frog = state.put_on_battlefield(card("Psychic Frog"))   # 1/2
+        frog.summoning_sick = False
+        if delirium:                          # 4 card types in the graveyard
+            for n in ["Psychic Frog", "Lightning Bolt", "Skullclamp", "Tropical Island"]:
+                state.graveyard.append(card(n))
+        combats, start, guard = 0, state.opponent_life, 0
+        while state.phase != Phase.POSTCOMBAT_MAIN and guard < 40:
+            guard += 1
+            if state.phase == Phase.DECLARE_ATTACKERS and combat_actions(state):
+                DeclareAttackers().apply(state)
+                combats += 1
+                continue
+            branches = _apply_step_entry(state)
+            state = branches[0] if branches else state
+            _goto_next_phase(state)
+        return combats, start - state.opponent_life, state.extra_combats
+
+    combats, dmg, left = run(True)
+    assert combats == 2 and left == 0        # one extra combat, consumed
+    assert dmg == 4                          # FOMO(2)+Frog(1), then untapped Frog(1)
+
+    combats, dmg, left = run(False)
+    assert combats == 1 and dmg == 3         # no delirium: single combat, no untap
+
+
+class _DmgProp:
+    def __init__(self, pid, timing, phase, turn, fn):
+        self.id, self.timing, self.phase, self.turn = pid, timing, phase, turn
+        self.description = pid
+        self._fn = fn
+
+    def evaluate(self, state):
+        return self._fn(state)
+
+
+def test_fear_of_missing_out_extra_combat_reachable_by_the_search():
+    """End-to-end: through the real search, a damage threshold that a single
+    combat cannot reach IS reached when FOMO's delirium grants an extra combat
+    phase (the untapped attacker swings twice). Without delirium it is not."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine import SimulationConfig, run_simulation
+
+    gy = ["Psychic Frog", "Lightning Bolt", "Skullclamp", "Tropical Island"]  # 4 types
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                         card=card("Nick Fury, Agent of S.H.I.E.L.D."))]
+    for n in ["Fear of Missing Out"] + gy:
+        entries.append(DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=card(n)))
+    for _ in range(30):
+        entries.append(DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=card("Forest")))
+    deck = Deck(name="t", entries=entries)
+
+    # FOMO (2 power) + a 2/2 Bear token in play. One combat deals at most 4;
+    # with the extra combat the untapped Bear swings again for 6 total.
+    def fixed(with_delirium):
+        return {"turn": 5, "phase": "precombat_main",
+                "battlefield": ["Fear of Missing Out",
+                                {"name": "Bear", "token": True, "power": 2, "toughness": 2,
+                                 "type_line": "Token Creature — Bear"}],
+                "graveyard": gy if with_delirium else []}
+
+    prop = _DmgProp("dmg", "at", Phase.POSTCOMBAT_MAIN, 5, lambda s: s.opponent_life <= 15)
+
+    hit = run_simulation(deck, [prop], SimulationConfig(
+        num_games=1, timeout_per_game_s=8, fixed_config=fixed(True), parallel_workers=1))
+    assert hit.successes == 1                 # extra combat gets to 6 damage (opp 14)
+
+    miss = run_simulation(deck, [prop], SimulationConfig(
+        num_games=1, timeout_per_game_s=8, fixed_config=fixed(False), parallel_workers=1))
+    assert miss.successes == 0                # no delirium: single combat, opp 16 > 15

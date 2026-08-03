@@ -336,6 +336,11 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             # Man-land animation ends at cleanup — but a PERMANENT animation
             # (Ba Sing Se's earthbend) stays a creature.
             if perm.becomes is not None and not perm.becomes.get("permanent"):
+                # A temporary full copy (Shifting Woodland) restores its
+                # original card + impl; a plain man-land just drops `becomes`.
+                if "orig_card" in perm.becomes:
+                    perm.card = perm.becomes["orig_card"]
+                    perm.impl = perm.becomes["orig_impl"]
                 perm.becomes = None
             perm.damage = 0
         state.check_deaths()
@@ -350,6 +355,17 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
 
 def _goto_next_phase(state: GameState) -> None:
     state.mana_pool.clear()
+    # An additional combat phase (Fear of Missing Out): after END_COMBAT, loop
+    # back to BEGIN_COMBAT instead of moving on to the postcombat main phase.
+    # `attackers` was already cleared by the END_COMBAT step entry, so a fresh
+    # combat can be declared (with whatever creatures are untapped — e.g. FOMO's
+    # delirium untap target). The rank (turn, phase_index) dips back to combat
+    # for this turn; that never trips `max_rank` pruning (a strict > check) and
+    # property re-checks are sticky, so time-based timing stays correct.
+    if state.phase == Phase.END_COMBAT and state.extra_combats > 0:
+        state.extra_combats -= 1
+        state.phase = Phase.BEGIN_COMBAT
+        return
     idx = phase_index(state.phase)
     if idx + 1 < len(TURN_ORDER):
         state.phase = TURN_ORDER[idx + 1]
