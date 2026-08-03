@@ -344,6 +344,61 @@ def token_search(q: str = "") -> dict:
     return {"tokens": out}
 
 
+_CARD_SEARCH_CACHE: dict[str, list[dict]] = {}
+
+
+@app.get("/api/cards/search")
+def card_search(q: str = "") -> dict:
+    """Search Scryfall for ANY card by name, so a fixed-config "copy token" can be
+    made a copy of any card. Returns enough to rebuild it as a token copy (name,
+    type line, P/T, colours, oracle text, mana cost, image)."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"cards": []}
+    key = q.lower()
+    if key in _CARD_SEARCH_CACHE:
+        return {"cards": _CARD_SEARCH_CACHE[key]}
+
+    import httpx
+
+    from ..deck.scryfall import SCRYFALL_API, card_data_from_scryfall
+
+    out: list[dict] = []
+    try:
+        resp = httpx.get(
+            f"{SCRYFALL_API}/cards/search",
+            params={"q": q, "unique": "cards"},
+            headers={"User-Agent": "MtGGoldfishSimulator/0.1 (personal deck-testing tool)"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            seen: set[str] = set()
+            for raw in resp.json().get("data", []):
+                card = card_data_from_scryfall(raw)
+                if card.name in seen:
+                    continue
+                seen.add(card.name)
+                is_creature = "creature" in card.type_line.split("—")[0].lower()
+                out.append({
+                    "name": card.name,
+                    "type_line": card.type_line,
+                    "power": _int_or_none(card.power) if is_creature else None,
+                    "toughness": _int_or_none(card.toughness) if is_creature else None,
+                    "colors": list(card.colors or []),
+                    "oracle_text": card.oracle_text or "",
+                    "mana_cost": card.mana_cost or "",
+                    "cmc": card.cmc or 0,
+                    "keywords": list(card.keywords or []),
+                    "image": card.image,
+                })
+                if len(out) >= 40:
+                    break
+    except Exception:
+        out = []
+    _CARD_SEARCH_CACHE[key] = out
+    return {"cards": out}
+
+
 @app.get("/api/meta")
 def meta() -> dict:
     return {

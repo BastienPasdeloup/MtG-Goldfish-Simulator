@@ -1429,3 +1429,29 @@ def test_fixed_config_exile_linked_to_a_permanent_is_playable():
     assert any(a.label == "cast Ponder from exile" for a in legal_actions(v))
     # the badge is exposed in the snapshot
     assert any(e.get("exiled_by") == "Hoarding Broodlord" for e in v.snapshot()["exile"])
+
+
+def test_fixed_config_copy_token_is_a_real_copy():
+    """A fixed-config token spec with `copy_of` builds a token that's a real copy
+    of the named card — its P/T, keywords AND implementation (abilities)."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    g = card("Griselbrand")
+    base = new_game_from_deck(Deck(name="t", entries=[
+        DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                  card=card("Emet-Selch, Unsundered"))]))
+    fixed = {"turn": 4, "phase": "precombat_main", "battlefield": [{
+        "token": True, "copy_of": "Griselbrand", "name": "Griselbrand",
+        "type_line": g.type_line, "power": g.power, "toughness": g.toughness,
+        "colors": list(g.colors or []), "oracle_text": g.oracle_text,
+        "mana_cost": g.mana_cost, "cmc": g.cmc, "keywords": list(g.keywords or []),
+    }]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    tok = v.battlefield[0]
+    assert tok.is_token and tok.name == "Griselbrand"
+    assert v.effective_power(tok) == 7 and v.effective_toughness(tok) == 7
+    assert v.has_keyword(tok, "Flying") and v.has_keyword(tok, "Lifelink")
+    acts = build_card(tok.card).battlefield_actions(v, tok)
+    assert any("pay 7 life" in a.label for a in acts)   # Griselbrand's real ability

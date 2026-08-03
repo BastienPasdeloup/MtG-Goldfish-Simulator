@@ -1088,12 +1088,22 @@ const fcTokenLabel = (t) => {
 };
 
 function fcAddToken(spec) {
-  state.fixedConfig.battlefield.push({
+  const entry = {
     name: spec.name || "Token", token: true,
     power: spec.power ?? null, toughness: spec.toughness ?? null,
-    type_line: spec.type_line || "Token", text: spec.text || "", colors: spec.colors || [],
+    type_line: spec.type_line || "Token", text: spec.text || spec.oracle_text || "", colors: spec.colors || [],
     tapped: false, sick: false, counters: {}, granted: [], granted_eot: [], attacking: false, attached_to: null,
-  });
+  };
+  // A copy token: carry the copied card's data so the backend rebuilds a faithful
+  // token copy (it picks up the card's implementation by name).
+  if (spec.copy_of) {
+    entry.copy_of = spec.copy_of;
+    entry.oracle_text = spec.oracle_text || spec.text || "";
+    entry.mana_cost = spec.mana_cost || "";
+    entry.cmc = spec.cmc ?? 0;
+    entry.keywords = spec.keywords || [];
+  }
+  state.fixedConfig.battlefield.push(entry);
   renderConfigBuilder();
 }
 
@@ -1184,14 +1194,89 @@ function fcAddTokenPrompt() {
 }
 
 // Right-click menu on empty battlefield space: add a token (deck tokens +
-// previously-added custom tokens + a fresh "Add token…").
+// previously-added custom tokens + a fresh "Add token…") or a COPY token (a
+// token that's a copy of any chosen card).
 function fcBattlefieldMenu(e) {
   const all = [...(state.deckTokens || []), ...(state.customTokens || [])];
   const seen = new Set();
   const toks = all.filter((t) => { const k = fcTokenLabel(t); if (seen.has(k)) return false; seen.add(k); return true; })
     .map((t) => ({ label: fcTokenLabel(t), onClick: () => fcAddToken(t) }));
   toks.push({ sep: true }, { label: "Add token…", onClick: () => fcAddTokenPrompt() });
+  toks.push({ label: "Add copy token…", onClick: () => fcAddCopyTokenPrompt() });
   showContextMenu(e.clientX, e.clientY, [{ label: "Add token", submenu: toks }]);
+}
+
+// ---- copy token: a token that's a copy of any card the user picks -----------
+function fcCardModal() {
+  let ov = document.getElementById("fc-card-modal");
+  if (ov) return ov;
+  ov = el("div", { id: "fc-card-modal", className: "modal-overlay hidden" });
+  const input = el("input", { id: "fc-card-q", type: "text", autocomplete: "off",
+    placeholder: "Card to copy (e.g. Griselbrand, Grave Titan)…" });
+  const hint = el("div", { id: "fc-card-hint", className: "muted sub" });
+  const results = el("div", { id: "fc-card-results", className: "tok-results" });
+  ov.append(el("div", { className: "modal" },
+    el("div", { className: "modal-head" },
+      el("b", {}, "Add copy token — choose the card to copy"),
+      el("span", { className: "spacer" }),
+      el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
+        onclick: () => ov.classList.add("hidden") })),
+    el("div", { className: "modal-body" }, input, hint, results)));
+  ov.onclick = (e) => { if (e.target === ov) ov.classList.add("hidden"); };
+  document.body.append(ov);
+  let timer = null;
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => fcCardSearch(input.value), 250); };
+  input.onkeydown = (e) => { if (e.key === "Enter") { clearTimeout(timer); fcCardSearch(input.value); } };
+  return ov;
+}
+
+async function fcCardSearch(q) {
+  q = (q || "").trim();
+  const results = document.getElementById("fc-card-results");
+  const hint = document.getElementById("fc-card-hint");
+  results.replaceChildren();
+  if (q.length < 2) { hint.textContent = "Type at least 2 letters to search."; return; }
+  hint.textContent = "Searching…";
+  let cards = [];
+  try { cards = (await api("/api/cards/search?q=" + encodeURIComponent(q))).cards || []; }
+  catch (err) { hint.textContent = "Search failed: " + err.message; return; }
+  if ((document.getElementById("fc-card-q").value || "").trim() !== q) return;
+  hint.textContent = cards.length
+    ? `${cards.length} match${cards.length === 1 ? "" : "es"} — click one to copy it.`
+    : "No cards found.";
+  for (const spec of cards) results.append(fcCardCandidate(spec));
+}
+
+function fcCardCandidate(spec) {
+  const face = el("div", { className: "tok-cand-img" });
+  if (spec.image) face.append(el("img", { src: spec.image, alt: spec.name, loading: "lazy" }));
+  else {
+    face.classList.add("token-card");
+    face.append(el("div", { className: "tok-cand-name", textContent: spec.name }));
+    if (spec.power != null) face.append(el("div", { className: "tok-cand-pt", textContent: `${spec.power}/${spec.toughness}` }));
+  }
+  const wrap = el("div", { className: "tok-cand" }, face,
+    el("div", { className: "tok-cand-label", textContent: spec.name }));
+  wrap.onclick = () => fcPickCopyToken(spec);
+  return wrap;
+}
+
+function fcPickCopyToken(spec) {
+  // Register the art under the copied card's name so the token shows its face.
+  if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
+  fcAddToken({ ...spec, copy_of: spec.name });
+  const ov = document.getElementById("fc-card-modal");
+  if (ov) ov.classList.add("hidden");
+}
+
+function fcAddCopyTokenPrompt() {
+  const ov = fcCardModal();
+  ov.classList.remove("hidden");
+  const input = document.getElementById("fc-card-q");
+  input.value = "";
+  document.getElementById("fc-card-results").replaceChildren();
+  document.getElementById("fc-card-hint").textContent = "Type a card name to search.";
+  setTimeout(() => input.focus(), 30);
 }
 
 // Add a card to a zone (from the picker, via drag-and-drop). Non-battlefield
@@ -1284,14 +1369,30 @@ function fcChooseAttach(idx, hosts, x, y) {
   showContextMenu(x || 300, y || 300, items);
 }
 
+// Remove several battlefield entries at once, remapping every attachment index
+// (a card attached to a removed permanent becomes unattached).
+function fcRemoveBattlefieldIndices(indices) {
+  const bf = state.fixedConfig.battlefield;
+  const removed = new Set(indices);
+  const newIndex = {};
+  const next = [];
+  bf.forEach((b, i) => { if (!removed.has(i)) { newIndex[i] = next.length; next.push(b); } });
+  next.forEach((b) => {
+    if (b.attached_to == null) return;
+    b.attached_to = removed.has(b.attached_to) ? null : newIndex[b.attached_to];
+  });
+  state.fixedConfig.battlefield = next;
+}
+
 function fcRemove(zone, idx) {
   if (zone === "battlefield") {
-    state.fixedConfig.battlefield.splice(idx, 1);
-    // Fix up attachment indices after the splice.
-    state.fixedConfig.battlefield.forEach((b) => {
-      if (b.attached_to === idx) b.attached_to = null;
-      else if (b.attached_to != null && b.attached_to > idx) b.attached_to -= 1;
-    });
+    const bf = state.fixedConfig.battlefield;
+    // Auras enchanting the removed permanent go back to the deck (removed with
+    // it — an Aura can't exist unattached). Equipment stays on the battlefield,
+    // just unattached (its host index is in the removed set, so the remap nulls
+    // its attached_to).
+    const auras = bf.map((b, i) => i).filter((i) => bf[i].attached_to === idx && fcIsAura(bf[i].name));
+    fcRemoveBattlefieldIndices([idx, ...auras]);
   } else {
     state.fixedConfig[zone].splice(idx, 1);
   }
@@ -1496,17 +1597,21 @@ function fcPermMenu(p, e) {
     items.push({ label: "Add keyword", submenu: kwItems });
   }
 
-  // Attach — equipment onto a creature (or move/unattach it).
-  if (fcIsEquipment(it.name)) {
-    const hosts = fcValidHosts(idx, "equipment");
+  // Change target — an aura (any other permanent) or equipment (a creature) can
+  // be re-attached to a DIFFERENT valid target (or unattached). Lists the other
+  // valid hosts, not the current one.
+  if (fcIsAura(it.name) || fcIsEquipment(it.name)) {
+    const kind = fcIsEquipment(it.name) ? "equipment" : "aura";
+    const hosts = fcValidHosts(idx, kind).filter((h) => h !== it.attached_to);
     const sub = hosts.map((h) => ({
-      label: fcPerm(h).name, checked: it.attached_to === h,
+      label: fcPerm(h).name,
       onClick: () => { it.attached_to = h; renderConfigBuilder(); },
     }));
-    if (!sub.length) sub.push({ label: "(no creature in play)", onClick: () => {} });
+    if (!sub.length) sub.push({
+      label: kind === "equipment" ? "(no other creature)" : "(no other permanent)", disabled: true });
     if (it.attached_to != null) sub.push({ sep: true },
       { label: "Unattach", onClick: () => { it.attached_to = null; renderConfigBuilder(); } });
-    items.push({ label: "Attach to", submenu: sub });
+    items.push({ label: "Change target", submenu: sub });
   }
 
   items.push({ sep: true }, { label: "Remove from battlefield", onClick: () => fcRemove("battlefield", idx) });
@@ -2976,7 +3081,18 @@ function permTile(p, attachedByHost, edit = {}) {
   if (!attached.length) return host;
   const wrap = el("div", { className: "perm-stack" });
   attached.forEach((a, i) => {
-    const at = tile(a.name, { tapped: a.tapped, counters: a.counters });
+    // Attached cards (auras/equipment) are fully interactive in the editor —
+    // same click-to-tap / right-click menu / drag as any other permanent (the
+    // peeking corner receives events; hovering brings the tile fully to front).
+    const at = tile(a.name, {
+      tapped: a.tapped, counters: a.counters, granted: a.granted, sick: a.sick,
+      token: a.token, typeLine: a.type_line, text: a.text, colors: a.colors,
+      power: a.power, toughness: a.toughness, commander: a.commander,
+      editable: edit.editable,
+      onClick: edit.onClick ? () => edit.onClick(a) : null,
+      onMenu: edit.onMenu ? (e) => edit.onMenu(a, e) : null,
+      dragData: edit.drag ? edit.drag(a) : null,
+    });
     at.classList.add("attached");
     at.style.transform = `translate(${(i + 1) * 13}px, ${-(i + 1) * 11}px)` + (a.tapped ? " rotate(90deg) scale(.86)" : "");
     at.title = a.name + (a.is_aura ? " (enchanting " + p.name + ")" : " (equipping " + p.name + ")");

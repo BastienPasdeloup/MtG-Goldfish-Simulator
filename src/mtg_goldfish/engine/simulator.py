@@ -915,12 +915,32 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         name = spec.get("name") if isinstance(spec, dict) else spec
         is_token = isinstance(spec, dict) and spec.get("token")
         if is_token:
-            # A token: created fresh (not a deck card); make_token already puts
-            # it on the battlefield, so it is NOT appended again below.
-            perm = variant.make_token(
-                name, int(spec.get("power") or 0), int(spec.get("toughness") or 0),
-                spec.get("type_line") or "Token", text=spec.get("text") or "",
-                colors=spec.get("colors") or [])
+            copy_of = spec.get("copy_of")
+            if copy_of:
+                # A token that's a COPY of a real card: build its CardData from
+                # the spec so build_card() picks up that card's implementation by
+                # name (full copy with abilities for an implemented card; a
+                # vanilla body otherwise). put_on_battlefield marks it a token.
+                from ..deck.models import CardData
+                pw, tf = spec.get("power"), spec.get("toughness")
+                copied = CardData(
+                    name=copy_of, type_line=spec.get("type_line") or "Token",
+                    power=None if pw is None else str(pw),
+                    toughness=None if tf is None else str(tf),
+                    colors=list(spec.get("colors") or []),
+                    oracle_text=spec.get("oracle_text") or spec.get("text") or "",
+                    mana_cost=spec.get("mana_cost") or "",
+                    cmc=float(spec.get("cmc") or 0),
+                    keywords=list(spec.get("keywords") or []),
+                )
+                perm = variant.put_on_battlefield(copied, token=True, fire_etb=False)
+            else:
+                # A plain token: created fresh (not a deck card); make_token
+                # already puts it on the battlefield.
+                perm = variant.make_token(
+                    name, int(spec.get("power") or 0), int(spec.get("toughness") or 0),
+                    spec.get("type_line") or "Token", text=spec.get("text") or "",
+                    colors=spec.get("colors") or [])
         else:
             card = take(name)
             if card is None:

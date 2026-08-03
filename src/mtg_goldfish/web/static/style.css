@@ -401,6 +401,9 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .perm-stack { position: relative; flex: 0 0 auto; margin: 14px 16px 0 0; }
 .perm-stack .attached { position: absolute; top: 0; left: 0; z-index: 0; box-shadow: 0 0 0 1px var(--border); }
 .perm-stack .host { position: relative; z-index: 2; }
+/* Editor: hovering an attached card brings it fully to the front so its whole
+   face is clickable (tap / right-click / drag), not just the peeking corner. */
+.perm-stack .attached.editable:hover { z-index: 6; }
 .tiles.hand .tile, .tiles.small .tile { width: 58px; height: 81px; }
 .tiles.hand, .tiles.small { min-height: 81px; }
 .zone-inline { display: flex; gap: 1.2rem; flex-wrap: wrap; }
