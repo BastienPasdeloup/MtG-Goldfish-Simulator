@@ -121,6 +121,21 @@ class Card:
     #: Static: while on the battlefield, land cards may be played from the
     #: graveyard (Icetill Explorer).
     grants_gy_land_plays: ClassVar[bool] = False
+    #: Static: while on the battlefield, you may play lands AND cast spells from
+    #: your graveyard during your turn (Emet-Selch // Hades' back face).
+    grants_gy_play_all: ClassVar[bool] = False
+    #: Static: a card that would be put into your graveyard is exiled instead
+    #: (Emet-Selch // Hades; Yawgmoth's Will grants the same for a turn).
+    replaces_gy_with_exile: ClassVar[bool] = False
+
+    def grants_gy_play_all_perm(self, perm: "Permanent") -> bool:
+        """Per-permanent form of `grants_gy_play_all` (override when the static is
+        conditional, e.g. only on a transformed DFC back face)."""
+        return self.grants_gy_play_all
+
+    def replaces_gy_with_exile_perm(self, perm: "Permanent") -> bool:
+        """Per-permanent form of `replaces_gy_with_exile`."""
+        return self.replaces_gy_with_exile
     #: Static: creatures can't attack (Glacial Chasm).
     prevents_attacks: ClassVar[bool] = False
     #: If set, `on_phase` only fires at this phase (avoids the base

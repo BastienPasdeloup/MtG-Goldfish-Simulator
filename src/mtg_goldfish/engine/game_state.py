@@ -345,6 +345,12 @@ class GameState:
     # leaving END_COMBAT with this > 0, the turn loops back to BEGIN_COMBAT
     # (decrementing) instead of advancing to the postcombat main phase.
     extra_combats: int = 0
+    # "This turn, you may play lands and cast spells from your graveyard" and
+    # "if a card would be put into your graveyard this turn, exile it instead"
+    # (Yawgmoth's Will). Statics on permanents (Emet-Selch // Hades) grant the
+    # same via `grants_gy_play_all` / `replaces_gy_with_exile`. Reset each turn.
+    gy_play_all: bool = False
+    gy_exile_replace: bool = False
 
     # game-long bookkeeping
     cards_drawn: int = 0
@@ -436,6 +442,8 @@ class GameState:
             cast_sorcery_as_flash=self.cast_sorcery_as_flash,
             untap_lands_end_step=self.untap_lands_end_step,
             extra_combats=self.extra_combats,
+            gy_play_all=self.gy_play_all,
+            gy_exile_replace=self.gy_exile_replace,
             cards_drawn=self.cards_drawn,
             commander_cast_count=dict(self.commander_cast_count),
             commander_cast_this_game=self.commander_cast_this_game,
@@ -621,8 +629,22 @@ class GameState:
         self.cast_sorcery_as_flash = False
         self.untap_lands_end_step = 0
         self.extra_combats = 0
+        self.gy_play_all = False
+        self.gy_exile_replace = False
         for p in self.battlefield:
             p.turn_flags.clear()
+
+    def graveyard_plays_enabled(self) -> bool:
+        """You may play lands / cast spells from your graveyard this turn
+        (Yawgmoth's Will, or a static like Emet-Selch // Hades)."""
+        return self.gy_play_all or any(
+            p.impl.grants_gy_play_all_perm(p) for p in self.battlefield)
+
+    def exile_replaces_graveyard(self) -> bool:
+        """A card that would be put into your graveyard is exiled instead
+        (Yawgmoth's Will, Emet-Selch // Hades, Valgavoth for opponents)."""
+        return self.gy_exile_replace or any(
+            p.impl.replaces_gy_with_exile_perm(p) for p in self.battlefield)
 
     def mill(self, n: int) -> None:
         """Put the top n cards of the library into the graveyard."""
@@ -710,6 +732,12 @@ class GameState:
         self.push_triggered_abilities(perm.impl.equipped_died_stack_items(self, perm))
 
     def to_graveyard(self, card: CardData) -> None:
+        # Replacement: "if a card would be put into your graveyard, exile it
+        # instead" (Yawgmoth's Will / Emet-Selch // Hades). Prevents casting the
+        # same graveyard card twice (it leaves the graveyard for good).
+        if self.exile_replaces_graveyard():
+            self.exile.append(card)
+            return
         self.graveyard.append(card)
         self.gy_this_turn.append(card.name)
         self.graveyard_by_turn.setdefault(self.turn, []).append(card.name)

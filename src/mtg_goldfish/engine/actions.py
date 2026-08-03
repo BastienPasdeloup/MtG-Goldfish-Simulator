@@ -436,6 +436,29 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
         seen_gy.add(card.name)
         actions.extend(_impl(card).graveyard_actions(state))
 
+    # --- play/cast ANYTHING from the graveyard (Yawgmoth's Will, Emet-Selch //
+    #     Hades): during your turn you may play lands and cast spells from it ---
+    if state.graveyard_plays_enabled():
+        seen_gyall: set[str] = set()
+        for card in list(state.graveyard):
+            if card.name in seen_gyall:
+                continue
+            seen_gyall.add(card.name)
+            impl = _impl(card)
+            if _front_is_land(card):
+                if land_drop_ok:
+                    modes = impl.etb_modes(state)
+                    if modes:
+                        actions.extend(PlayLand(card.name, mode=m, zone="graveyard")
+                                       for m in modes)
+                    else:
+                        actions.append(PlayLand(card.name, zone="graveyard"))
+            else:
+                cost = impl.cast_cost(state)
+                if impl.is_castable(state) and can_afford(state, cost):
+                    actions.extend(_mark(_gy_cast_actions(state, card, cost),
+                                         _is_instant_speed(card)))
+
     # --- land plays from the graveyard (Icetill Explorer) ---
     if land_drop_ok and any(p.impl.grants_gy_land_plays for p in state.battlefield):
         seen_gyl: set[str] = set()
@@ -494,6 +517,25 @@ def _grant_matches(grant: dict, card) -> bool:
     if colors and not (set(colors) & set(card.colors)):
         return False
     return True
+
+
+def _gy_cast_actions(state: GameState, card, cost: ManaCost) -> list:
+    """Cast a card from the graveyard paying its cost (Yawgmoth's Will, Hades).
+    Uses the default resolution (permanent → battlefield, else on_resolve), so a
+    spell whose effect lives in a custom `cast_actions` (targeted removal) casts
+    as its plain on_resolve here — an accepted simplification for gy replay."""
+    from ..cards.base import CardAction
+
+    def fn(st: GameState):
+        c = _find_in_zone(st.graveyard, card.name)
+        if c is None or not begin_cast(st, c, cost, zone=st.graveyard):
+            return None
+        if c.is_permanent:
+            return resolve_to_battlefield(st, c) or None
+        resolve_to_graveyard(st, c)
+        return _impl(c).on_resolve(st) or None
+
+    return [CardAction(f"cast {card.name} from graveyard", fn)]
 
 
 def cast_without_paying(state: GameState, card, *, zone: list | None = None,

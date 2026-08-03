@@ -1281,3 +1281,110 @@ def test_fear_of_missing_out_extra_combat_reachable_by_the_search():
     miss = run_simulation(deck, [prop], SimulationConfig(
         num_games=1, timeout_per_game_s=8, fixed_config=fixed(False), parallel_workers=1))
     assert miss.successes == 0                # no delirium: single combat, opp 16 > 15
+
+
+# ---- Emet-Selch reanimator deck (event 87880) --------------------------------
+
+def test_saw_in_half_doubles_etb_and_halves_pt():
+    """Saw in Half destroys a creature and makes two half-P/T (round up) token
+    copies whose ETBs trigger — doubling Archon of Cruelty's drain."""
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    for _ in range(3):
+        s = state.put_on_battlefield(card("Swamp"))
+        s.tapped = False
+    archon = state.put_on_battlefield(card("Archon of Cruelty"))  # 6/6
+    archon.summoning_sick = False
+    state.library = [card("Island")] * 5
+    state.hand = [card("Saw in Half")]
+    opp0 = state.opponent_life
+    act = next(a for a in build_card(card("Saw in Half")).cast_actions(state)
+               if "Archon" in a.label)
+    branches = act.apply(state)
+    end = branches[0] if branches else state
+    copies = [p for p in end.battlefield if p.name == "Archon of Cruelty"]
+    assert len(copies) == 2
+    assert all(end.effective_power(p) == 3 and end.effective_toughness(p) == 3
+               and p.is_token for p in copies)          # 6/6 -> 3/3
+    assert "Archon of Cruelty" in end.graveyard_names()  # original binned
+    assert end.opponent_life == opp0 - 6                 # ETB drained twice
+
+
+def test_astral_dragon_copies_noncreature_as_flying_dragon():
+    """Astral Dragon makes two 3/3 flying Dragon copies of a noncreature permanent
+    that keep the original's other types/abilities (a copied Swamp still taps B)."""
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    state.put_on_battlefield(card("Swamp"))
+    ad = state.put_on_battlefield(card("Astral Dragon"), fire_etb=False)
+    branches = build_card(ad.card).on_etb(state, ad)
+    end = branches[0] if branches else state
+    toks = [p for p in end.battlefield if p.is_token]
+    assert len(toks) == 2
+    for t in toks:
+        assert end.effective_power(t) == 3 and end.effective_toughness(t) == 3
+        assert end.has_keyword(t, "Flying") and t.is_creature_now and t.is_land
+        assert build_card(t.card).mana_abilities(end)   # still taps for mana
+
+
+def test_hoarding_broodlord_exiles_a_playable_card():
+    from mtg_goldfish.engine.actions import legal_actions
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    for _ in range(3):
+        s = state.put_on_battlefield(card("Island"))
+        s.tapped = False
+        s.summoning_sick = False
+    state.library = [card("Ponder"), card("Brainstorm")]
+    hb = state.put_on_battlefield(card("Hoarding Broodlord"), fire_etb=False)
+    branches = build_card(hb.card).on_etb(state, hb)
+    assert branches and len(branches) == 2
+    end = branches[0]
+    assert len(end.exile_playable) == 1
+    assert any("from exile" in a.label for a in legal_actions(end))
+
+
+def test_yawgmoths_will_casts_from_graveyard_and_exiles():
+    from mtg_goldfish.engine.actions import legal_actions
+    state = _state([])
+    state.phase = Phase.PRECOMBAT_MAIN
+    for _ in range(4):
+        s = state.put_on_battlefield(card("Island"))
+        s.tapped = False
+        s.summoning_sick = False
+    state.graveyard = [card("Ponder"), card("Brainstorm")]
+    build_card(card("Yawgmoth's Will")).on_resolve(state)
+    assert state.gy_play_all and state.exile_replaces_graveyard()
+    assert sum("from graveyard" in a.label for a in legal_actions(state)) == 2
+    # a card put into the graveyard is exiled instead
+    state.hand = [card("Duress")]
+    state.discard(state.hand[0])
+    assert "Duress" not in state.graveyard_names()
+    assert any(c.name == "Duress" for c in state.exile)
+
+
+def test_emet_selch_transforms_and_grants_graveyard_play():
+    state = _state([])
+    emet = state.put_on_battlefield(card("Emet-Selch, Unsundered"), fire_etb=False)
+    assert not state.graveyard_plays_enabled()          # front face: 2/4, no static
+    assert state.effective_power(emet) == 2 and state.effective_toughness(emet) == 4
+    emet.transformed = True                             # Hades, Sorcerer of Eld
+    assert state.graveyard_plays_enabled() and state.exile_replaces_graveyard()
+    assert state.effective_power(emet) == 6 and state.effective_toughness(emet) == 6
+
+
+def test_tendrils_of_agony_storm_drain():
+    state = _state([])
+    state.spells_cast_this_turn = 5                     # 4 prior + Tendrils
+    opp0, life0 = state.opponent_life, state.life
+    build_card(card("Tendrils of Agony")).on_resolve(state)
+    assert state.opponent_life == opp0 - 10 and state.life == life0 + 10
+
+
+def test_exhume_reanimates_a_graveyard_creature():
+    state = _state([])
+    state.graveyard = [card("Griselbrand")]
+    branches = build_card(card("Exhume")).on_resolve(state)
+    end = branches[0] if branches else state
+    assert end.has_permanent_named("Griselbrand")
+    assert "Griselbrand" not in end.graveyard_names()

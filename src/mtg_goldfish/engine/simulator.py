@@ -312,6 +312,11 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             if perm.counters.get("end_step_sac"):
                 state.emit(f"{perm.name}: sacrifice at beginning of end step")
                 state.leaves_battlefield(perm, "graveyard", reason="sacrifice")
+            elif perm.counters.get("end_step_exile"):
+                # "Exile it at the beginning of the next end step" (Corpse Dance,
+                # Shallow Grave — temporary reanimation).
+                state.emit(f"{perm.name}: exile at beginning of end step")
+                state.leaves_battlefield(perm, "exile")
         # "At the beginning of the next end step, untap up to N lands" (Teferi,
         # Hero of Dominaria +1). Untap the tapped lands (up to N) so the mana is
         # available for the end-step instant-speed window / next turn.

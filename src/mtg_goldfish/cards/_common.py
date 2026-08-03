@@ -1018,6 +1018,195 @@ def tutor_to_battlefield_branches(
     return branch_over(state, [t.name for t in targets], fn)
 
 
+def discard_spell_actions(
+    self: Card, state: "GameState", *, pred: Callable, can_target_self: bool = True,
+    cost: ManaCost | None = None, extra_life: int = 0,
+) -> list[CardAction]:
+    """A hand-attack spell (Duress / Inquisition / Unmask / ...) against a phantom
+    opponent. Offers a no-op 'target opponent' line (they reveal no hand) and, if
+    `can_target_self` (the card says "target player", not "target opponent"), one
+    line per distinct OWN card matching `pred` — a self-discard, which is a real
+    graveyard-enabling play in this reanimator deck."""
+    from ..engine.actions import begin_cast, can_afford, resolve_to_graveyard
+
+    cost = cost if cost is not None else self.cast_cost(state)
+    if not can_afford(state, cost, extra_life=extra_life):
+        return []
+
+    def opp(st: "GameState"):
+        card = next((c for c in st.hand if c.name == self.card_name), None)
+        if card is None or not begin_cast(st, card, cost, extra_life=extra_life):
+            return None
+        resolve_to_graveyard(st, card)
+        st.note_crime()
+        st.emit(f"{self.card_name}: opponent reveals no hand — no effect")
+        return None
+
+    acts = [CardAction(f"cast {self.card_name} → opponent (no effect)", opp)]
+    if can_target_self:
+        seen = set()
+        for c in state.hand:
+            if c.name == self.card_name or c.name in seen or not pred(c):
+                continue
+            seen.add(c.name)
+
+            def make(name=c.name):
+                def fn(st: "GameState"):
+                    card = next((x for x in st.hand if x.name == self.card_name), None)
+                    if card is None or not begin_cast(st, card, cost, extra_life=extra_life):
+                        return None
+                    resolve_to_graveyard(st, card)
+                    victim = next((x for x in st.hand if x.name == name), None)
+                    if victim is not None:
+                        st.discard(victim)
+                    st.emit(f"{self.card_name}: target self — discard {name}")
+                    return None
+                return fn
+
+            acts.append(CardAction(f"cast {self.card_name} → self, discard {c.name}", make()))
+    return acts
+
+
+def discard_branches(
+    state: "GameState", n: int, *, source: str,
+) -> list["GameState"] | None:
+    """Branch over which `n` cards to discard from hand (deduped by the multiset
+    of names — identical cards are interchangeable). Returns branches, or None if
+    there is nothing to discard (n<=0 or empty hand)."""
+    from itertools import combinations
+
+    if n <= 0 or not state.hand:
+        return None
+    n = min(n, len(state.hand))
+    seen, uniq = set(), []
+    for combo in combinations(range(len(state.hand)), n):
+        key = tuple(sorted(state.hand[i].name for i in combo))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(combo)
+
+    def fn(st: "GameState", combo):
+        for card in [st.hand[i] for i in combo]:
+            st.discard(card)
+        st.emit(f"{source}: discard {n}")
+        return None
+
+    return branch_over(state, uniq, fn)
+
+
+def loot(
+    state: "GameState", draw_n: int, discard_n: int, *, source: str,
+) -> list["GameState"] | None:
+    """Draw `draw_n`, then discard `discard_n` (branching over the choice —
+    including cards just drawn). Returns branches (or None if no discard needed)."""
+    for _ in range(draw_n):
+        if state.library:
+            state.draw(1)
+    state.emit(f"{source}: draw {draw_n} ({len(state.hand)} in hand)")
+    return discard_branches(state, discard_n, source=source)
+
+
+def reanimate_branches(
+    state: "GameState", *, pred: Callable | None = None, tapped: bool | None = None,
+    marks: dict | None = None, note: str = "", from_zone: str = "graveyard",
+) -> list["GameState"] | None:
+    """Reanimation: branch over each distinct creature card in `from_zone`
+    (default your graveyard) matching `pred` (default: any creature), put it onto
+    the battlefield under your control — optionally `tapped` and/or with `marks`
+    counters — firing its ETB (which may itself branch). Returns the branches, or
+    None if nothing matches (caller keeps the un-branched state)."""
+    zone = getattr(state, from_zone)
+    pred = pred or (lambda c: c.is_creature)
+    names, seen = [], set()
+    for c in zone:
+        if c.name not in seen and pred(c):
+            seen.add(c.name)
+            names.append(c.name)
+    if not names:
+        return None
+
+    def fn(st: "GameState", name: str):
+        z = getattr(st, from_zone)
+        card = next((x for x in z if x.name == name), None)
+        if card is None:
+            return None
+        z.remove(card)
+        perm = st.put_on_battlefield(card, tapped=tapped, fire_etb=False,
+                                     announce=f"reanimate {name}{note}")
+        if marks:
+            perm.counters.update(marks)
+        st.queue_entry_triggers([perm])
+        return st.settle()
+
+    return branch_over(state, names, fn)
+
+
+def reanimation_aura_actions(
+    self: Card, state: "GameState", *, tapped: bool = False, note: str = "",
+) -> list[CardAction]:
+    """Cast a reanimation Aura (Animate Dead / Necromancy / Dance of the Dead):
+    one branch per distinct creature card in your graveyard. Pays the cost, puts
+    that creature onto the battlefield under your control (`tapped` if set; ETB
+    fires and may branch), and puts this Aura enchantment onto the battlefield
+    attached to it. Downsides (the small stat mod, and the "sacrifice it when the
+    Aura leaves" clause) are not modelled — the reanimated body is the point."""
+    from ..engine.actions import begin_cast, can_afford
+
+    cost = self.cast_cost(state)
+    if not can_afford(state, cost):
+        return []
+    names, seen = [], set()
+    for c in state.graveyard:
+        if c.is_creature and c.name not in seen:
+            seen.add(c.name)
+            names.append(c.name)
+
+    acts: list[CardAction] = []
+    for name in names:
+        def make(name=name):
+            def fn(st: "GameState"):
+                aura = next((c for c in st.hand if c.name == self.card_name), None)
+                if aura is None or not begin_cast(st, aura, cost):
+                    return None
+                if aura in st.stack:
+                    st.stack.remove(aura)
+                creature = next((c for c in st.graveyard if c.name == name), None)
+                if creature is None:                       # target gone: fizzle
+                    st.to_graveyard(aura)
+                    return None
+                st.graveyard.remove(creature)
+                perm = st.put_on_battlefield(
+                    creature, tapped=tapped, fire_etb=False,
+                    announce=f"{self.card_name}: reanimate {name}{note}")
+                aura_perm = st.put_on_battlefield(aura, fire_etb=False)
+                aura_perm.attached_to = perm.uid
+                st.queue_entry_triggers([perm])
+                return st.settle()
+            return fn
+
+        acts.append(CardAction(f"cast {self.card_name} → reanimate {name}", make()))
+    return acts
+
+
+def reanimate_top_creature(
+    state: "GameState", *, tapped: bool | None = None, note: str = "",
+) -> list["GameState"] | None:
+    """Return the TOP creature card of your graveyard to the battlefield (Corpse
+    Dance / Shallow Grave). Deterministic target (the topmost creature), but its
+    ETB may branch. Returns branches / None if there is no creature card."""
+    top = next((c for c in reversed(state.graveyard) if c.is_creature), None)
+    if top is None:
+        return None
+    state.graveyard.remove(top)
+    perm = state.put_on_battlefield(top, tapped=tapped, fire_etb=False,
+                                    announce=f"return {top.name} from graveyard{note}")
+    perm.summoning_sick = False              # these grant haste
+    perm.counters["end_step_exile"] = 1      # exiled at the next end step
+    state.queue_entry_triggers([perm])
+    return state.settle()
+
+
 def tutor_to_hand_branches(
     state: "GameState", pred: Callable, *, note: str = "",
 ) -> list["GameState"] | None:
