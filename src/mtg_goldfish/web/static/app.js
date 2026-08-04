@@ -282,7 +282,8 @@ async function loadSessionList() {
       el("th", { textContent: "Format" }),
       el("th", { textContent: "Created" }),
       el("th", { textContent: "Last run" }),
-      el("th", { className: "numc", textContent: "Runs" }));
+      el("th", { className: "numc", textContent: "Runs" }),
+      el("th", {}));
     const rows = sessions.map((s) => {
       const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
       if (s.commanders.length) {
@@ -294,18 +295,31 @@ async function loadSessionList() {
       } else {
         fmtCell.append(el("div", { className: "muted sub", textContent: "no commander" }));
       }
+      // Per-row delete — stops the row's open-on-click.
+      const delBtn = el("button", { className: "row-del", title: "Delete this session", textContent: "🗑" });
+      delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.name); };
       const tr = el("tr", { className: "session-row", title: "open this session",
                             onclick: () => openSession(s.id) },
         el("td", {}, el("b", { textContent: s.name })),
         fmtCell,
         el("td", { className: "muted nowrap", textContent: fmtDate(s.created_at).slice(0, 10) }),
         el("td", { className: "muted nowrap", textContent: s.last_run ? fmtDate(s.last_run).slice(0, 10) : "—" }),
-        el("td", { className: "numc", textContent: String(s.num_results) }));
+        el("td", { className: "numc", textContent: String(s.num_results) }),
+        el("td", { className: "numc" }, delBtn));
       return tr;
     });
     box.replaceChildren(el("table", { className: "sessions-table" },
       el("thead", {}, head), el("tbody", {}, ...rows)));
   } catch (e) { box.textContent = "Error: " + e.message; box.className = "err"; }
+}
+
+// Delete a session (and its saved runs) from the main list.
+async function deleteSession(id, name) {
+  if (!confirm(`Delete session "${name}"?\nThis permanently removes it and all its saved runs.`)) return;
+  try {
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
+    loadSessionList();
+  } catch (e) { alert("Delete failed: " + e.message); }
 }
 
 function homeStatus(msg, isErr) {

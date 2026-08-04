@@ -423,6 +423,14 @@ table.sessions-table .nowrap { white-space: nowrap; }
 table.sessions-table .sub { font-size: 12px; margin-top: .1rem; }
 table.sessions-table tbody tr.session-row { cursor: pointer; }
 table.sessions-table tbody tr.session-row:hover { background: var(--panel-2); }
+/* Per-row Delete: faint until you hover the row, red on hover of the button. */
+.row-del {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 6px;
+  opacity: .35; transition: opacity .12s, background .12s, border-color .12s;
+}
+tr.session-row:hover .row-del { opacity: .8; }
+.row-del:hover { opacity: 1; background: rgba(220, 70, 70, .18); border-color: rgba(220, 70, 70, .55); }
 .hidden { display: none; }
 .err { color: var(--bad); }
 
