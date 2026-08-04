@@ -539,7 +539,10 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
     # --- exile "you may play it" cards (Gwen Stacy) ---
     seen_ex: set[str] = set()
     for source_uid, card in list(state.exile_playable):
-        if state.find_permanent(source_uid) is None:
+        # A negative uid is a Fixed-config PHANTOM source (an exiler not on the
+        # battlefield, e.g. an opponent's Aang) — it never leaves, so the card
+        # stays playable. A real (positive) source must still be in play.
+        if source_uid >= 0 and state.find_permanent(source_uid) is None:
             continue  # source left; no longer playable
         if card.name in seen_ex:
             continue

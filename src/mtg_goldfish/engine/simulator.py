@@ -46,7 +46,7 @@ from .actions import (
     deal_combat_damage,
     legal_actions,
 )
-from .game_state import GameState, make_permanent, new_game_from_deck
+from .game_state import GameState, Permanent, make_permanent, new_game_from_deck
 from .phases import MAIN_PHASES, TURN_ORDER, Phase, phase_index
 
 #: Non-main steps that grant priority for instant-speed plays. Untap and
@@ -291,7 +291,42 @@ class _SearchContext:
 # --------------------------------------------------------------------------
 # Turn progression
 # --------------------------------------------------------------------------
+def _resolve_suspend(state: GameState) -> list[GameState] | None:
+    """At the beginning of the player's upkeep, remove a time counter from every
+    suspended card; a card whose last counter is removed is cast for free (its
+    impl's `on_suspend_resolve`, which may BRANCH — e.g. Profane Tutor's tutor).
+    Returns the resulting branch states, or None when nothing resolves (search
+    continues on the single unchanged state)."""
+    if not state.suspended:
+        return None
+    from ..cards.registry import build_card
+
+    ready, remaining = [], []
+    for entry in state.suspended:
+        entry["counters"] -= 1
+        state.emit(f"{entry['name']}: remove a time counter "
+                   f"({entry['counters']} remaining)")
+        (ready if entry["counters"] <= 0 else remaining).append(entry)
+    state.suspended = remaining
+    if not ready:
+        return None
+
+    branches = [state]
+    for entry in ready:
+        card = entry["card"]
+        nxt: list[GameState] = []
+        for b in branches:
+            if card in b.exile:
+                b.exile.remove(card)
+            b.emit(f"{entry['name']}: last time counter removed — cast it for free")
+            res = build_card(card).on_suspend_resolve(b)
+            nxt.extend([b] if res is None else res)
+        branches = nxt
+    return branches
+
+
 def _apply_step_entry(state: GameState) -> list[GameState] | None:
+    suspend_branches: list[GameState] | None = None
     if state.phase == Phase.UNTAP:
         state.turn += 1
         state.reset_turn_counters()
@@ -299,6 +334,8 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             perm.tapped = False
             perm.summoning_sick = False
         state.mana_pool.clear()
+    elif state.phase == Phase.UPKEEP:
+        suspend_branches = _resolve_suspend(state)
     elif state.phase == Phase.DRAW:
         skip = state.turn == 1 and state.on_the_play
         if not skip and state.library:
@@ -366,9 +403,13 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
     # "At the beginning of <phase>" triggers (upkeep, combat, end step...).
     # These may BRANCH (e.g. Emperor of Bones' begin-of-combat "exile up to one
     # target from a graveyard"): settle() then returns several branch states,
-    # which _advance hands back to the search frontier.
-    state.queue_phase_triggers(state.phase)
-    return state.settle()
+    # which _advance hands back to the search frontier. A suspend that resolved
+    # this upkeep may already have produced branches — queue the phase triggers on
+    # each and settle them together.
+    targets = suspend_branches if suspend_branches is not None else [state]
+    for b in targets:
+        b.queue_phase_triggers(b.phase)
+    return state.settle(suspend_branches)
 
 
 def _goto_next_phase(state: GameState) -> None:
@@ -898,15 +939,21 @@ def _fixed_opening_hand(
     return [(hand, lib, [])]
 
 
-def _make_face_down(perm, reason: str = "facedown") -> None:
+def _make_face_down(perm, reason: str = "facedown", *, power=None, toughness=None) -> None:
     """Turn a permanent face down: a 2/2 colourless nameless creature. `reason`
     (manifest / morph / megamorph / disguise / cloak / facedown) records HOW it
     was turned down and sets characteristics that differ — disguise and cloak
-    make it a 2/2 with ward {2}; the rest are a plain 2/2. Its printed
-    characteristics are hidden; `becomes` supplies the 2/2 body. (Its abilities
-    are not otherwise stripped — a display/body approximation.)"""
+    make it a 2/2 with ward {2}; the rest are a plain 2/2. An explicit
+    power/toughness override (Alter card > Set power/toughness) REPLACES the 2/2
+    body, and any +1/+1 counters still stack on top (via effective P/T). Its
+    printed characteristics are hidden; `becomes` supplies the body."""
     perm.face_down = True
-    perm.becomes = {"type_line": "Creature", "power": 2, "toughness": 2, "permanent": True}
+    perm.becomes = {
+        "type_line": "Creature",
+        "power": 2 if power is None else int(power),
+        "toughness": 2 if toughness is None else int(toughness),
+        "permanent": True,
+    }
     perm.color_override = []
     if reason in ("disguise", "cloak"):
         perm.extra_keywords.add("ward")
@@ -1025,7 +1072,8 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                     "permanent": not eot,
                 }
             if spec.get("face_down"):
-                _make_face_down(perm, spec.get("face_down"))
+                _make_face_down(perm, spec.get("face_down"),
+                                power=spec.get("set_power"), toughness=spec.get("set_toughness"))
             # "Set color" override (deck cards; tokens/added cards carry colour in
             # their built CardData). Recolour for BOTH gameplay and display; an EOT
             # override is cleared at cleanup.
@@ -1087,6 +1135,20 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
             continue
         variant.exile.append(card)
         host = placed_by_name.get(host_name) if host_name else None
+        if host is None and host_name:
+            # The chosen exiler is NOT on the battlefield (e.g. an opponent's Aang
+            # picked via "Exiled with > Other card…"). Build a PHANTOM source from
+            # its implementation (by name) so its exile mechanism still activates —
+            # airbend (Aang), playable-from-exile (Gwen/Hoarding/Inti), etc. The
+            # phantom gets a NEGATIVE uid so the "source still in play" check in
+            # actions treats it as permanently available (it never leaves).
+            from ..cards.registry import get_impl
+            from ..deck.models import CardData
+            impl_cls = get_impl(host_name)
+            if impl_cls is not None:
+                phantom = Permanent(card=CardData(name=host_name), impl=impl_cls(CardData(name=host_name)),
+                                    uid=-(len(variant.exile)))
+                host = phantom
         if host is not None:
             # Route it into THAT permanent's exile mechanism (Gwen/Hoarding/Inti →
             # playable from exile; Aang → recast for {2}; Leyline/Parallax → return

@@ -177,6 +177,8 @@ def card_view(deck: Deck) -> list[dict]:
             "faces": faces,
             "implemented": is_implemented(c.name),
             "is_land": c.is_land,
+            "power": _int_or_none(c.power),        # printed P/T (for altered-stat badges)
+            "toughness": _int_or_none(c.toughness),
             "loyalty": c.loyalty,  # for the Fixed-config editor (planeswalkers)
             "enters_counters": _initial_counters(c),  # counters it enters play with
             "counter_kinds": _counter_kinds(c),       # counter kinds it can carry

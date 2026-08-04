@@ -328,6 +328,14 @@ class Card:
     def on_resolve(self, state: "GameState") -> None:
         """Called when a non-permanent spell (instant/sorcery) resolves."""
 
+    def on_suspend_resolve(self, state: "GameState"):
+        """Called when this card's LAST time counter is removed (real suspend):
+        the card is cast for free. Return a list of branch states (if the free
+        cast branches) or None. The default runs the spell's `on_resolve` (a
+        nonpermanent tutor/effect); a permanent card should override to put
+        itself onto the battlefield. `state` no longer holds the card in exile."""
+        return self.on_resolve(state)
+
     def on_phase(self, state: "GameState", perm: "Permanent", phase) -> None:
         """Called at the beginning of each phase while on the battlefield
         (upkeep triggers, fading, ...)."""

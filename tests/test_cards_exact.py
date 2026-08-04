@@ -1552,6 +1552,80 @@ def test_fixed_config_face_down_reason_and_alter_eot():
     assert red.colors == ["R"] and red.color_override_eot is True
 
 
+def test_face_down_respects_pt_override():
+    """A face-down card is a 2/2 by default, but an explicit P/T override (Alter
+    card > Set power/toughness) replaces the 2/2 body, and +1/+1 counters still
+    stack on top."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=card("Emet-Selch, Unsundered")),
+               DeckEntry(quantity=2, board=DeckBoard.MAINBOARD, card=card("Sol Ring"))]
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    fixed = {"turn": 4, "phase": "precombat_main", "battlefield": [
+        {"name": "Sol Ring", "face_down": "morph", "set_power": 4, "set_toughness": 5},
+        {"name": "Sol Ring", "face_down": "manifest", "counters": {"+1/+1": 2}},
+    ]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    over, counter = v.battlefield
+    assert over.face_down and v.effective_power(over) == 4 and v.effective_toughness(over) == 5
+    assert counter.face_down and v.effective_power(counter) == 4  # 2/2 + two +1/+1
+
+
+def test_profane_tutor_real_suspend():
+    """Real suspend: casting Profane Tutor pays {1}{B} and exiles it with 2 time
+    counters; one is removed each upkeep, and the last removal casts it for free
+    (the tutor, which branches over library cards)."""
+    from mtg_goldfish.engine.game_state import GameState
+    from mtg_goldfish.engine.phases import Phase
+    from mtg_goldfish.engine.simulator import _resolve_suspend
+    from mtg_goldfish.cards.registry import build_card
+
+    g = GameState(); g.phase = Phase.PRECOMBAT_MAIN; g.turn = 3
+    for _ in range(2):
+        s = g.put_on_battlefield(card("Swamp")); s.summoning_sick = False
+    pt = card("Profane Tutor"); g.hand.append(pt)
+    for n in ["Sol Ring", "Dark Ritual"]:
+        g.library.append(card(n))
+    act = build_card(pt).cast_actions(g)[0]
+    act._fn(g)
+    assert not g.hand and pt in g.exile
+    assert g.suspended and g.suspended[0]["counters"] == 2
+    assert g.snapshot()["exile"][0]["suspend"] == 2      # time-counter badge
+    assert _resolve_suspend(g) is None and g.suspended[0]["counters"] == 1
+    branches = _resolve_suspend(g)                        # last counter -> resolve
+    assert branches is not None and len(branches) == 2   # one per tutorable card
+    for b in branches:
+        assert not b.suspended and pt not in b.exile
+        assert any(c.name in ("Sol Ring", "Dark Ritual") for c in b.hand)
+
+
+def test_fixed_config_exiled_with_phantom_source_activates_mechanism():
+    """"Exiled with > Other card…": an exiler NOT on the battlefield (an
+    opponent's Aang) still activates its mechanism via a phantom source — airbend
+    for Aang, playable-from-exile for Hoarding Broodlord."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=card("Emet-Selch, Unsundered"))]
+    for n in ["Dark Ritual", "Swamp"]:
+        entries.append(DeckEntry(quantity=6, board=DeckBoard.MAINBOARD, card=card(n)))
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+
+    def build(src):
+        fixed = {"turn": 3, "phase": "precombat_main",
+                 "battlefield": [{"name": "Swamp"} for _ in range(6)],
+                 "exile": [{"name": "Dark Ritual", "exiled_with": src}]}
+        return _build_fixed_variant(base, fixed, seed=1)
+
+    aang = build("Aang, Swift Savior")
+    assert any(c.name == "Dark Ritual" for c in aang.airbend_exile)  # airbend
+    brood = build("Hoarding Broodlord")
+    assert brood.exile_playable and brood.exile_playable[0][0] < 0   # phantom (negative uid)
+
+
 def test_fixed_config_added_card_into_play():
     """"Add card": an arbitrary (non-deck) card placed on the battlefield is built
     from its carried data as a real permanent with its implementation; a

@@ -366,6 +366,12 @@ class GameState:
     # — a matching hand spell may be cast for free, consuming the grant. Offered
     # by actions.legal_actions and cleared at the start of your next turn.
     free_casts: list = field(default_factory=list)
+    # Suspended cards (real suspend, not an immediate approximation). Each entry:
+    # {"card": CardData, "counters": int, "name": str}. The card sits in exile
+    # with N time counters; one is removed at the beginning of each of your
+    # upkeeps, and when the last is removed the card is cast for free (its impl's
+    # `on_suspend_resolve`). Persists across turns (NOT a per-turn counter).
+    suspended: list = field(default_factory=list)
     # Teferi, Time Raveler +1: until your next turn you may cast sorcery spells
     # as though they had flash (they become instant-speed in the search's
     # instant-speed windows). Cleared at your next untap.
@@ -473,6 +479,7 @@ class GameState:
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
             free_casts=[dict(g) for g in self.free_casts],
+            suspended=[dict(g) for g in self.suspended],
             cast_sorcery_as_flash=self.cast_sorcery_as_flash,
             untap_lands_end_step=self.untap_lands_end_step,
             extra_combats=self.extra_combats,
@@ -1588,12 +1595,16 @@ class GameState:
         for perm in self.battlefield:
             for card in perm.exiled_with:
                 source_by_id.setdefault(id(card), perm.name)
+        suspend_by_id = {id(e["card"]): e["counters"] for e in self.suspended}
         out = []
         for card in self.exile:
             entry = {"name": card.name}
             src = source_by_id.get(id(card))
             if src:
                 entry["exiled_by"] = src
+            n = suspend_by_id.get(id(card))
+            if n is not None:
+                entry["suspend"] = n  # time counters remaining
             out.append(entry)
         return out
 

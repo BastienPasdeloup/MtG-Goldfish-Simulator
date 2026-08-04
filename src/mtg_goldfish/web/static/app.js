@@ -1517,11 +1517,16 @@ function fcFrame() {
       counters: it.counters || {}, granted: [...(it.granted || []), ...(it.granted_eot || [])],
       is_lander: false, attached_to: it.attached_to,
     };
-    if (it.face_down) {  // manifest / morph — a 2/2 colourless nameless creature
+    if (it.face_down) {  // a 2/2 colourless nameless creature — alterations still apply
+      const hasPT = it.set_power != null && it.set_toughness != null;
+      const kws = [...(it.granted || []), ...(it.granted_eot || [])];
+      if (it.face_down === "disguise" || it.face_down === "cloak") kws.push("ward");
       return {
         ...common, name: "Face-down creature", token: false, commander: false,
         face_down: true, is_creature: true, is_land: false, is_aura: false,
-        power: 2, toughness: 2, attacking: !!it.attacking && combat,
+        power: hasPT ? it.set_power : 2, toughness: hasPT ? it.set_toughness : 2,
+        colors: it.set_colors || [], recolored: it.set_colors != null,
+        granted: kws, attacking: !!it.attacking && combat,
       };
     }
     if (it.token) {  // a token — composed tile (no card image), tinted by colour
@@ -1554,14 +1559,19 @@ function fcFrame() {
     // creature-subtype override (set_creature_types) and a colour override.
     const isCreature = face.is_creature || !!it.make_creature;
     const isLand = it.make_creature ? false : face.is_land;
-    const hasPT = it.set_power != null && it.set_toughness != null;
+    // Show a P/T badge whenever the stats are ALTERED (either stat set, or a
+    // noncreature made into a creature) — falling back to the printed value for
+    // an unset stat so a partial override still reads correctly.
+    const meta = fcCardMeta(it.name);
+    const altered = it.set_power != null || it.set_toughness != null || !!it.make_creature;
+    const showPT = isCreature && altered;
     return {
       ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
       attacking: !!it.attacking && combat && isCreature,
       is_land: isLand,
       is_creature: isCreature, is_aura: fcIsAura(it.name),
-      power: hasPT ? it.set_power : null,
-      toughness: hasPT ? it.set_toughness : null,
+      power: showPT ? (it.set_power ?? meta.power ?? 0) : null,
+      toughness: showPT ? (it.set_toughness ?? meta.toughness ?? 0) : null,
       colors: it.set_colors || undefined,
       recolored: it.set_colors != null,
     };
@@ -1715,17 +1725,22 @@ function fcToggleMakeCreature(it) {
   renderConfigBuilder();
 }
 
-// A "Set power/toughness" row with its own EOT toggle (kwrow). Clicking the row
-// prompts for the value; the EOT button toggles set_<stat>_eot.
+// A "Set power/toughness" row with its own EOT toggle (kwrow). CHECKING it prompts
+// for the value; UNCHECKING restores the printed value (clears the override) — no
+// prompt. (Tokens edit their native P/T, so there's nothing to "restore" — always
+// prompt.)
 function fcStatRow(idx, it, stat) {
   const skey = it.token ? stat : "set_" + stat;
   const ekey = "set_" + stat + "_eot";
-  const cap = stat[0].toUpperCase() + stat.slice(1);
+  const isSet = () => it[skey] != null;
   return { kwrow: {
     label: "Set " + stat,
-    checked: () => it[skey] != null,
+    checked: isSet,
     eot: () => !!it[ekey],
-    onToggle: () => fcSetStat(idx, stat),
+    onToggle: () => {
+      if (!it.token && isSet()) { it[skey] = null; it[ekey] = false; renderConfigBuilder(); }
+      else fcSetStat(idx, stat);
+    },
     onEot: () => { it[ekey] = !it[ekey]; renderConfigBuilder(); },
   } };
 }
@@ -1746,44 +1761,46 @@ function fcSetStat(idx, stat) {
 
 // Checkbox submenu of the five colours (tokens/added edit `colors`; deck cards a
 // `set_colors` override). Toggling keeps the submenu open (keepOpen).
+// Colour submenu — one kwrow per colour ("[✓] Red [EOT]"), exactly like the
+// keyword menu: the checkbox toggles membership, the EOT button toggles the
+// colour change's "until end of turn" flag (a single shared flag — the whole
+// override is one colour change). Tokens/added carry colour natively (no EOT).
 function fcColorSubmenu(idx) {
   const it = fcPerm(idx);
   const field = (it.token || it.added) ? "colors" : "set_colors";
+  const canEot = !(it.token || it.added);
   const cur = () => it[field] || [];
-  const rows = "WUBRG".split("").map((c) => ({
-    label: FC_COLOR_NAME[c] || c, checked: cur().includes(c), keepOpen: true,
-    onClick: () => {
+  return "WUBRG".split("").map((c) => ({ kwrow: {
+    label: FC_COLOR_NAME[c] || c,
+    checked: () => cur().includes(c),
+    eot: () => canEot && !!it.set_colors_eot,
+    onToggle: () => {
       const arr = it[field] = [...cur()];
       const j = arr.indexOf(c); if (j >= 0) arr.splice(j, 1); else arr.push(c);
       renderConfigBuilder();
-      return arr.includes(c);
     },
-  }));
-  // A single "until end of turn" toggle for the colour change (deck cards only —
-  // tokens/added cards carry their colour natively, no EOT).
-  if (!(it.token || it.added)) {
-    rows.push({ sep: true }, { label: "Until end of turn", checked: !!it.set_colors_eot, keepOpen: true,
-      onClick: () => { it.set_colors_eot = !it.set_colors_eot; renderConfigBuilder(); return !!it.set_colors_eot; } });
-  }
-  return rows;
+    onEot: () => { if (canEot) { it.set_colors_eot = !it.set_colors_eot; renderConfigBuilder(); } },
+  } }));
 }
 
-// Checkbox submenu of creature subtypes ("Set creature types" -> the words RIGHT
-// of the "—", stored in set_creature_types). Any other type can be typed in; a
-// single "until end of turn" toggle covers the whole change.
+// Creature-subtype submenu — one kwrow per type ("[✓] Zombie [EOT]") like the
+// keyword menu (checkbox = has the subtype, EOT = the change lasts until end of
+// turn, a single shared flag), plus an "Add type…" prompt for anything else.
 function fcCreatureTypeSubmenu(idx, it) {
   const cur = () => it.set_creature_types || fcCurrentCreatureTypes(it);
   const list = FC_CREATURE_TYPES.slice();
   cur().forEach((t) => { if (!list.includes(t)) list.push(t); });
-  const rows = list.map((t) => ({
-    label: t, checked: cur().includes(t), keepOpen: true,
-    onClick: () => {
+  const rows = list.map((t) => ({ kwrow: {
+    label: t,
+    checked: () => cur().includes(t),
+    eot: () => !!it.set_creature_types_eot,
+    onToggle: () => {
       const arr = it.set_creature_types = [...cur()];
       const j = arr.indexOf(t); if (j >= 0) arr.splice(j, 1); else arr.push(t);
       renderConfigBuilder();
-      return arr.includes(t);
     },
-  }));
+    onEot: () => { it.set_creature_types_eot = !it.set_creature_types_eot; renderConfigBuilder(); },
+  } }));
   rows.push({ sep: true }, { label: "Add type…", onClick: () => {
     const t = (prompt("Creature type to add (e.g. Zombie):", "") || "").trim();
     if (!t) return;
@@ -1791,8 +1808,6 @@ function fcCreatureTypeSubmenu(idx, it) {
     if (!arr.includes(t)) arr.push(t);
     renderConfigBuilder();
   } });
-  rows.push({ label: "Until end of turn", checked: !!it.set_creature_types_eot, keepOpen: true,
-    onClick: () => { it.set_creature_types_eot = !it.set_creature_types_eot; renderConfigBuilder(); return !!it.set_creature_types_eot; } });
   return rows;
 }
 
@@ -2053,12 +2068,16 @@ function fcZoneMenu(zone, idx, name, e) {
     const linked = entry && typeof entry === "object" ? entry.exiled_with : null;
     const exilers = [...new Set(state.cards.filter((c) => c.exiles).map((c) => c.name))].sort();
     if (linked && !exilers.includes(linked)) exilers.push(linked);  // keep an already-set link visible
-    if (exilers.length) {
-      items.push({ label: "Exiled with…", submenu: exilers.map((pn) => ({
-        label: pn + (pn === linked ? "  ✓" : ""),
-        onClick: () => fcSetExileSource(idx, pn),
-      })) });
-    }
+    const sub = exilers.map((pn) => ({
+      label: pn + (pn === linked ? "  ✓" : ""),
+      onClick: () => fcSetExileSource(idx, pn),
+    }));
+    // Final entry: ANY card (even one not in the deck — e.g. an opponent's Aang).
+    // Its exile mechanism is still activated by name (airbend, playable-from-exile, …).
+    sub.push({ sep: true }, { label: "Other card…", onClick: () => {
+      fcOpenCardSearch("Exiled with — choose the exiling card", (spec) => fcSetExileSource(idx, spec.name));
+    } });
+    items.push({ label: "Exiled with…", submenu: sub });
     if (linked) items.push({ label: `Clear link (${linked})`, onClick: () => fcSetExileSource(idx, null) });
   }
   if (fcIsCommander(name)) {
@@ -2189,9 +2208,27 @@ function buildMenu(items) {
       // Shown but not clickable (e.g. an add-unknown option with no room).
     } else if (it.submenu) {
       row.append(el("span", { className: "ctx-arrow", textContent: "▸" }));
-      let sub = null;
-      row.onmouseenter = () => { if (!sub) { sub = buildMenu(it.submenu); sub.classList.add("ctx-submenu"); row.append(sub); } };
-      row.onmouseleave = () => { if (sub) { sub.remove(); sub = null; } };
+      // Hover-intent: closing is DELAYED so moving the mouse diagonally from the
+      // parent row across the small gap into the submenu doesn't dismiss it
+      // (the classic disappearing-submenu bug). Entering the row or the submenu
+      // cancels a pending close.
+      let sub = null, closeTimer = null;
+      const cancelClose = () => { if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; } };
+      const scheduleClose = () => {
+        cancelClose();
+        closeTimer = setTimeout(() => { if (sub) { sub.remove(); sub = null; } closeTimer = null; }, 320);
+      };
+      row.onmouseenter = () => {
+        cancelClose();
+        if (!sub) {
+          sub = buildMenu(it.submenu);
+          sub.classList.add("ctx-submenu");
+          sub.onmouseenter = cancelClose;
+          sub.onmouseleave = scheduleClose;
+          row.append(sub);
+        }
+      };
+      row.onmouseleave = scheduleClose;
     } else if (it.keepOpen && it.onClick) {
       // A checkbox that toggles in place (menu stays open); onClick returns the
       // new checked state.
@@ -2430,6 +2467,11 @@ function onSimEvent(msg) {
     if (msg.run) appendLiveRun(msg.run); // populate the games table on the fly
   } else if (msg.type === "done") {
     $("run-btn").disabled = false; $("stop-btn").disabled = true;
+    // A game still shown as "running" (the ⏳ row with the Skip button) was
+    // abandoned when the run stopped — drop it so the table shows only games
+    // that actually completed.
+    const kept = state.vizRuns.filter((r) => !r.running);
+    if (kept.length !== state.vizRuns.length) { state.vizRuns = kept; renderRunsTable(); }
     // msg.result is LEAN — no per-game rows (each was already streamed live
     // via a progress event; resending them all could reach hundreds of MB and
     // crash the tab). The games table already shows everything: keep it, and
@@ -3305,6 +3347,8 @@ function normalizePileItem(raw) {
     // The card that exiled this one, when still relevant (playable from exile /
     // exiled "until" that permanent) — rendered as a badge on the exile pile.
     exiled_by: asName(raw?.exiled_by) || null,
+    // Time counters remaining on a suspended card (real suspend).
+    suspend: typeof raw?.suspend === "number" ? raw.suspend : null,
   };
 }
 
@@ -3344,6 +3388,13 @@ function pile(items, edit = {}) {
       card.append(el("div", {
         className: "exile-src", textContent: item.exiled_by,
         title: `Exiled with ${item.exiled_by} — set up in its exile mechanism`,
+      }));
+    }
+    // Suspended: a time-counter badge (⧗N) — cast for free when it hits 0.
+    if (item.suspend != null) {
+      card.append(el("div", {
+        className: "suspend-badge", textContent: "⧗" + item.suspend,
+        title: `Suspended — ${item.suspend} time counter${item.suspend === 1 ? "" : "s"} left`,
       }));
     }
     if (edit.onMenu) {
