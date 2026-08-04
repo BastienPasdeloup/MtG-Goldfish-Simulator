@@ -32,6 +32,9 @@ from .hub import HUB
 class RunHandle:
     def __init__(self) -> None:
         self.stop = threading.Event()
+        # Skip the CURRENT game (abandon it as a failure and move on). Cleared at
+        # the start of each game; set by the "skip" endpoint.
+        self.skip = threading.Event()
         self.thread: threading.Thread | None = None
 
 
@@ -48,6 +51,12 @@ class SimulationRunner:
         h = self._runs.get(session_id)
         if h:
             h.stop.set()
+
+    def skip(self, session_id: str) -> None:
+        """Abandon the game currently being searched (it becomes a failure)."""
+        h = self._runs.get(session_id)
+        if h:
+            h.skip.set()
 
     def _check_deck_implemented(self, session: Session) -> None:
         # Every card that can enter the game must have a real implementation;
@@ -234,6 +243,15 @@ class SimulationRunner:
                     },
                 )
 
+            def on_game_start(game_index: int, hand: list) -> None:
+                # A fresh game begins: clear any pending skip, and push a
+                # "running" row (with its opening hand) so the table shows it live.
+                handle.skip.clear()
+                HUB.broadcast_threadsafe(loop, session.id, {
+                    "type": "game_start", "result_id": result_id,
+                    "game_index": game_index, "hand": hand,
+                })
+
             sim_config = SimulationConfig(
                 num_games=config.num_games,
                 timeout_per_game_s=config.timeout_per_game_s,
@@ -256,6 +274,8 @@ class SimulationRunner:
                     sim_config,
                     on_game=on_game,
                     should_stop=handle.stop.is_set,
+                    should_skip=handle.skip.is_set,
+                    on_game_start=on_game_start,
                     game_indices=game_indices,
                     initial_stats=initial_stats,
                 )

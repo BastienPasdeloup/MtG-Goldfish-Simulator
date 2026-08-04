@@ -14,6 +14,7 @@ from .registry import register
 @register
 class GwenStacy(Card):
     card_name = "Gwen Stacy // Ghost-Spider"
+    exiles_cards = True
 
     def on_etb(self, state, permanent):
         if state.library:

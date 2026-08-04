@@ -13,6 +13,7 @@ from .registry import register
 @register
 class LeylineBinding(Card):
     card_name = "Leyline Binding"
+    exiles_cards = True
 
     def cast_cost(self, state):
         return ManaCost(generic=max(0, 5 - basic_types_in_play(state)), pips=(("W", 1),))

@@ -12,6 +12,7 @@ from .registry import register
 @register
 class SuperiorSpiderMan(Card):
     card_name = "Superior Spider-Man"
+    exiles_cards = True
 
     def link_exiled_card(self, state, perm, card):
         # Exiled with Superior Spider-Man is his Mind Swap copy source: he entered

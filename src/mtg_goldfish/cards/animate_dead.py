@@ -12,5 +12,10 @@ from .registry import register
 class AnimateDead(Card):
     card_name = "Animate Dead"
 
+    def equip_mod(self, state, perm):
+        # "Enchanted creature gets -1/-0" for as long as Animate Dead is attached
+        # (applied to the host's effective power via the attachment).
+        return (-1, 0)
+
     def cast_actions(self, state):
         return reanimation_aura_actions(self, state)

@@ -170,7 +170,10 @@ def begin_cast(
     # This is distinct from the card entering the battlefield — a spell can be
     # cast and then countered (never enters), and a permanent can enter without
     # being cast (fetched, reanimated, a token). `played_on`/`cast_on` read this.
-    state.note_event("cast", card.name, card=card,
+    # `storm` = spells cast this turn INCLUDING this one (storm_count was just
+    # bumped), so a property can ask "cast when the storm count was >= N" — the
+    # value AT cast time, which can't be reached AFTER it resolves.
+    state.note_event("cast", card.name, card=card, storm=state.storm_count,
                      is_creature=card.is_creature, is_land=card.is_land)
     state.emit(f"cast {card.name}{f' ({tag})' if tag else ''} (on the stack)")
     state.queue_cast_triggers(card)

@@ -13,6 +13,7 @@ from .registry import register
 @register
 class IntiSeneschalOfTheSun(Card):
     card_name = "Inti, Seneschal of the Sun"
+    exiles_cards = True
 
     def link_exiled_card(self, state, perm, card):
         # Exiled with Inti -> you may play it from exile.

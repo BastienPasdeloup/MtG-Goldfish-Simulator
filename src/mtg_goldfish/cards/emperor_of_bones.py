@@ -18,6 +18,7 @@ from .registry import register
 @register
 class EmperorOfBones(Card):
     card_name = "Emperor of Bones"
+    exiles_cards = True
     trigger_phase = Phase.BEGIN_COMBAT
 
     def on_phase(self, state, perm, phase):

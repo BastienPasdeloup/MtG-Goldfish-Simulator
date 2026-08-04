@@ -14,6 +14,7 @@ from .registry import register
 @register
 class ParallaxWave(Card):
     card_name = "Parallax Wave"
+    exiles_cards = True
 
     def enters_with_counters(self, state):
         return {"fade": 5}

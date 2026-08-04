@@ -295,9 +295,10 @@ async function loadSessionList() {
       } else {
         fmtCell.append(el("div", { className: "muted sub", textContent: "no commander" }));
       }
-      // Per-row delete — stops the row's open-on-click.
-      const delBtn = el("button", { className: "row-del", title: "Delete this session", textContent: "🗑" });
-      delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.name); };
+      // Per-row delete — same "danger" button as the deck page (text "Delete");
+      // stops the row's open-on-click.
+      const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
+      delBtn.onclick = (e) => { e.stopPropagation(); deleteSessionRow(s.id, s.name); };
       const tr = el("tr", { className: "session-row", title: "open this session",
                             onclick: () => openSession(s.id) },
         el("td", {}, el("b", { textContent: s.name })),
@@ -313,8 +314,9 @@ async function loadSessionList() {
   } catch (e) { box.textContent = "Error: " + e.message; box.className = "err"; }
 }
 
-// Delete a session (and its saved runs) from the main list.
-async function deleteSession(id, name) {
+// Delete a session (and its saved runs) from the main list. (Named distinctly
+// from the deck-page `deleteSession()` which deletes the OPEN session.)
+async function deleteSessionRow(id, name) {
   if (!confirm(`Delete session "${name}"?\nThis permanently removes it and all its saved runs.`)) return;
   try {
     await api(`/api/sessions/${id}`, { method: "DELETE" });
@@ -1004,7 +1006,7 @@ function fcUsage(name) {
   return fc.battlefield.filter((x) => x.name === name && !x.token && !x.added).length
     + fc.hand.filter((x) => x === name).length
     + fc.graveyard.filter((x) => x === name).length
-    + fc.exile.filter((x) => fcName(x) === name).length
+    + fc.exile.filter((x) => fcName(x) === name && !(x && x.added)).length
     + (fc.library || []).filter((x) => x === name).length;
 }
 
@@ -1233,8 +1235,9 @@ function fcBattlefieldMenu(e) {
   const seen = new Set();
   const toks = all.filter((t) => { const k = fcTokenLabel(t); if (seen.has(k)) return false; seen.add(k); return true; })
     .map((t) => ({ label: fcTokenLabel(t), onClick: () => fcAddToken(t) }));
+  // "Add token…" (custom) and "Add copy…" (a token copy of a chosen card) last.
   toks.push({ sep: true }, { label: "Add token…", onClick: () => fcAddTokenPrompt() });
-  toks.push({ label: "copy…", onClick: () => fcAddCopyTokenPrompt() });
+  toks.push({ label: "Add copy…", onClick: () => fcAddCopyTokenPrompt() });
   showContextMenu(e.clientX, e.clientY, [
     { label: "Add token", submenu: toks },
     { label: "Add card…", onClick: () => fcAddCardPrompt() },
@@ -1325,6 +1328,22 @@ function fcAddCardPrompt() {
   fcOpenCardSearch("Add card — put any card into play", (spec) => {
     if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
     fcAddCardToBattlefield(spec);
+  });
+}
+
+// Pick a card that was exiled WITH `permName` (any card, incl. non-deck) — added
+// as an exile entry carrying its data; the engine routes it into that permanent's
+// exile mechanism (Spider-Man copies it, Gwen makes it playable, etc.).
+function fcSetExiledCard(permName) {
+  fcOpenCardSearch(`Exiled with ${permName} — choose the card`, (spec) => {
+    if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
+    state.fixedConfig.exile.push({
+      name: spec.name, exiled_with: permName, added: true,
+      type_line: spec.type_line || "", power: spec.power ?? null, toughness: spec.toughness ?? null,
+      colors: spec.colors || [], oracle_text: spec.oracle_text || "",
+      mana_cost: spec.mana_cost || "", cmc: spec.cmc ?? 0, keywords: spec.keywords || [],
+    });
+    renderConfigBuilder();
   });
 }
 
@@ -1498,12 +1517,19 @@ function fcFrame() {
       counters: it.counters || {}, granted: [...(it.granted || []), ...(it.granted_eot || [])],
       is_lander: false, attached_to: it.attached_to,
     };
+    if (it.face_down) {  // manifest / morph — a 2/2 colourless nameless creature
+      return {
+        ...common, name: "Face-down creature", token: false, commander: false,
+        face_down: true, is_creature: true, is_land: false, is_aura: false,
+        power: 2, toughness: 2, attacking: !!it.attacking && combat,
+      };
+    }
     if (it.token) {  // a token — composed tile (no card image), tinted by colour
       const head = (it.type_line || "").split("—")[0].toLowerCase();
       const isCreature = head.includes("creature");
       return {
         ...common, name: it.name, token: true, type_line: it.type_line, text: it.text || "",
-        colors: it.colors || [],
+        colors: it.colors || [], copy: !!it.copy_of,
         power: isCreature ? (it.power ?? 0) : null, toughness: isCreature ? (it.toughness ?? 0) : null,
         is_land: head.includes("land"), is_creature: isCreature, commander: false,
         attacking: !!it.attacking && combat && isCreature,
@@ -1515,7 +1541,7 @@ function fcFrame() {
       const hasPT = it.set_power != null && it.set_toughness != null;
       return {
         ...common, name: it.name, token: false, commander: false,
-        type_line: it.type_line, colors: it.colors || [],
+        type_line: it.type_line, colors: it.colors || [], recolored: true,
         is_land: it.make_creature ? false : head.includes("land"),
         is_creature: isCreature, is_aura: (it.type_line || "").toLowerCase().includes("aura"),
         attacking: !!it.attacking && combat && isCreature,
@@ -1524,17 +1550,22 @@ function fcFrame() {
       };
     }
     const face = fcFace(it.name, it.transformed);  // active (front/back) face
-    // Editor P/T override / "make a creature": a made creature is shown in the
-    // nonland row with a P/T badge (set_power/set_toughness).
-    const isCreature = face.is_creature || !!it.make_creature;
+    // "Alter card": P/T override (set_power/set_toughness), make-a-creature or
+    // a full type override (set_types), and a colour override (set_colors).
+    const isCreature = it.set_types ? it.set_types.includes("Creature")
+      : (face.is_creature || !!it.make_creature);
+    const isLand = it.set_types ? it.set_types.includes("Land")
+      : (it.make_creature ? false : face.is_land);
     const hasPT = it.set_power != null && it.set_toughness != null;
     return {
       ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
       attacking: !!it.attacking && combat && isCreature,
-      is_land: it.make_creature ? false : face.is_land,
+      is_land: isLand,
       is_creature: isCreature, is_aura: fcIsAura(it.name),
       power: hasPT ? it.set_power : null,
       toughness: hasPT ? it.set_toughness : null,
+      colors: it.set_colors || undefined,
+      recolored: it.set_colors != null,
     };
   });
   const removed = fc.commander_removed || [];
@@ -1624,6 +1655,83 @@ function fcCounterKinds(it) {
 // Prompt for a custom power/toughness. `makeCreature` also turns a noncreature
 // permanent into a creature (adds the Creature type). Tokens edit their native
 // power/toughness/type_line; deck cards use set_power/set_toughness/make_creature.
+// The card types that can be toggled by "Alter card > Set types".
+const FC_CARD_TYPES = ["Creature", "Artifact", "Enchantment", "Land", "Planeswalker", "Battle"];
+
+// The "Alter card" submenu: P/T, creature-ness, colours (checkbox submenu),
+// types (checkbox submenu), and an "until end of turn" toggle for all of it.
+function fcAlterMenu(idx, it, creatureNow) {
+  const sub = [];
+  if (creatureNow) {
+    if (!it.token && it.make_creature) {
+      sub.push({ label: "Revert to noncreature", onClick: () => {
+        it.make_creature = false; it.set_power = null; it.set_toughness = null; renderConfigBuilder(); } });
+    }
+  } else {
+    sub.push({ label: "Make a creature (set P/T)…", onClick: () => fcPromptPT(idx, true) });
+  }
+  sub.push({ label: "Set power…", onClick: () => fcSetStat(idx, "power") });
+  sub.push({ label: "Set toughness…", onClick: () => fcSetStat(idx, "toughness") });
+  sub.push({ label: "Set colors", submenu: fcColorSubmenu(idx) });
+  sub.push({ label: "Set types", submenu: fcTypeSubmenu(idx) });
+  sub.push({ sep: true }, { label: "Until end of turn", checked: !!it.alter_eot, keepOpen: true,
+    onClick: () => { it.alter_eot = !it.alter_eot; renderConfigBuilder(); return !!it.alter_eot; } });
+  return sub;
+}
+
+// Prompt for a single stat (power / toughness). Tokens edit their native field;
+// deck / added cards use a set_power / set_toughness override.
+function fcSetStat(idx, stat) {
+  const it = fcPerm(idx); if (!it) return;
+  const key = stat, skey = "set_" + stat;
+  const cur = it.token ? (it[key] ?? 0) : (it[skey] ?? 0);
+  const s = prompt(stat[0].toUpperCase() + stat.slice(1) + ":", String(cur));
+  if (s === null) return;
+  const n = parseInt(s, 10);
+  if (Number.isNaN(n)) { alert("Enter a whole number."); return; }
+  if (it.token) it[key] = n; else it[skey] = n;
+  renderConfigBuilder();
+}
+
+// Checkbox submenu of the five colours (tokens/added edit `colors`; deck cards a
+// `set_colors` override). Toggling keeps the submenu open (keepOpen).
+function fcColorSubmenu(idx) {
+  const it = fcPerm(idx);
+  const field = (it.token || it.added) ? "colors" : "set_colors";
+  const cur = () => it[field] || [];
+  return "WUBRG".split("").map((c) => ({
+    label: FC_COLOR_NAME[c] || c, checked: cur().includes(c), keepOpen: true,
+    onClick: () => {
+      const arr = it[field] = [...cur()];
+      const j = arr.indexOf(c); if (j >= 0) arr.splice(j, 1); else arr.push(c);
+      renderConfigBuilder();
+      return arr.includes(c);
+    },
+  }));
+}
+
+// The permanent's current card types (left of the "—").
+function fcCurrentTypes(it) {
+  const head = ((it.token || it.added) ? (it.type_line || "")
+    : (fcCardMeta(it.name).type_line || "")).split("—")[0];
+  return FC_CARD_TYPES.filter((t) => head.includes(t));
+}
+
+// Checkbox submenu of the card types ("Set types" -> a `set_types` override).
+function fcTypeSubmenu(idx) {
+  const it = fcPerm(idx);
+  const cur = () => it.set_types || fcCurrentTypes(it);
+  return FC_CARD_TYPES.map((t) => ({
+    label: t, checked: cur().includes(t), keepOpen: true,
+    onClick: () => {
+      const arr = it.set_types = [...cur()];
+      const j = arr.indexOf(t); if (j >= 0) arr.splice(j, 1); else arr.push(t);
+      renderConfigBuilder();
+      return arr.includes(t);
+    },
+  }));
+}
+
 function fcPromptPT(idx, makeCreature) {
   const it = fcPerm(idx); if (!it) return;
   const curP = it.token ? (it.power ?? 0) : (it.set_power ?? 0);
@@ -1680,17 +1788,20 @@ function fcPermMenu(p, e) {
     });
   }
 
-  // Power/toughness — set custom P/T on any creature, or turn a NONcreature
-  // permanent into a creature with a chosen P/T (it then moves to the nonland row).
+  // Turn face down / up — manifest / morph (a 2/2 colourless nameless creature).
+  items.push({ label: it.face_down ? "Turn face up" : "Turn face down",
+    onClick: () => { it.face_down = !it.face_down; renderConfigBuilder(); } });
+
+  // Alter card — power/toughness, creature-ness, colours & types (checkboxes),
+  // optionally only until end of turn.
   const creatureNow = face.is_creature || !!it.make_creature;
-  if (creatureNow) {
-    items.push({ label: "Set power/toughness…", onClick: () => fcPromptPT(idx, false) });
-    if (!it.token && it.make_creature) {
-      items.push({ label: "Revert to noncreature", onClick: () => {
-        it.make_creature = false; it.set_power = null; it.set_toughness = null; renderConfigBuilder(); } });
-    }
-  } else {
-    items.push({ label: "Make a creature (set P/T)…", onClick: () => fcPromptPT(idx, true) });
+  items.push({ label: "Alter card", submenu: fcAlterMenu(idx, it, creatureNow) });
+
+  // Set exiled card — for cards that exile permanents (Superior Spider-Man,
+  // Gwen, Leyline, Aang, ...): pick ANY card (even a non-deck one, e.g. from an
+  // opponent's graveyard) and link it into this permanent's exile mechanism.
+  if (!it.token && fcCardMeta(it.name).exiles) {
+    items.push({ label: "Set exiled card…", onClick: () => fcSetExiledCard(it.name) });
   }
 
   // Counters — one "kind [−] N [+]" stepper per counter type this card uses
@@ -2254,7 +2365,9 @@ async function runSim() {
 }
 
 function onSimEvent(msg) {
-  if (msg.type === "progress") {
+  if (msg.type === "game_start") {
+    appendRunningRow(msg.game_index, msg.hand || []); // a "running" row (with its hand) + Skip
+  } else if (msg.type === "progress") {
     renderStats(msg.stats);
     if (msg.run) appendLiveRun(msg.run); // populate the games table on the fly
   } else if (msg.type === "done") {
@@ -2347,6 +2460,19 @@ function resetViz() {
   state.vizNav = null; // no board open — arrow keys do nothing
   $("viz-box").classList.add("hidden");
   $("viz-log").replaceChildren();
+}
+
+// A game has STARTED: show a "running" row (with its opening hand + a Skip
+// button) so the table appears immediately and the hand can be inspected.
+function appendRunningRow(gi, hand) {
+  const at = state.vizRuns.findIndex((r) => r._i === gi);
+  const row = { _i: gi, running: true, hand, frames: [], success: false, timed_out: false,
+                branches_explored: null, branches_considered: null };
+  if (at >= 0) { if (state.vizRuns[at].running) state.vizRuns[at] = row; }  // don't clobber a finished row
+  else state.vizRuns.push(row);
+  state.vizGames[gi] = [];
+  $("viz-box").classList.remove("hidden");
+  renderRunsTable();
 }
 
 // Append (or replace) a single game's row as it finishes, live.
@@ -2442,13 +2568,14 @@ function runsTable(runs) {
   const tbody = el("tbody");
   sorted.forEach((run) => {
     const i = run._i;
-    // Result: green tick / red cross, with a suffix when the search was cut.
-    const mark = run.success ? "✓" : "✗";
-    const cls = run.success ? "ok" : "ko";
-    let title = run.success ? "all properties satisfied"
+    // Result: ⏳ while running, else green tick / red cross (+ suffix when cut).
+    const mark = run.running ? "⏳" : (run.success ? "✓" : "✗");
+    const cls = run.running ? "running" : (run.success ? "ok" : "ko");
+    let title = run.running ? "searching this game…"
+      : run.success ? "all properties satisfied"
       : "no line satisfying all properties was found";
     let suffix = "";
-    if (run.timed_out) { suffix = " ⏱"; title += " — timed out before the search completed"; }
+    if (!run.running && run.timed_out) { suffix = " ⏱"; title += " — timed out before the search completed"; }
 
     const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the opening hand" });
     hoverGrid(handIcon, run.hand || []);
@@ -2466,6 +2593,17 @@ function runsTable(runs) {
     const nbugs = (run.bugs || []).length;
     const resultCell = el("td", { className: "cc status " + cls, title });
     resultCell.append(el("span", { textContent: mark + suffix }));
+    if (run.running) {
+      // Skip this game — abandon its search (counts as a failure), move on.
+      const skip = el("button", { className: "danger skip-btn", textContent: "Skip",
+        title: "abandon this game and move to the next (counts as a failure)" });
+      skip.onclick = (e) => {
+        e.stopPropagation();
+        skip.disabled = true; skip.textContent = "skipping…";
+        api(`/api/sessions/${state.session.id}/simulate/skip`, { method: "POST" }).catch(() => {});
+      };
+      resultCell.append(skip);
+    }
     if (nbugs) {
       const b = el("span", { className: "icon-btn bug-icon", textContent: "🐛",
         title: `${nbugs} bug${nbugs > 1 ? "s" : ""} hit during the search — click for details` });
@@ -2977,7 +3115,11 @@ function tile(name, opts = {}) {
   // A token uses its real Scryfall scan when we have one; otherwise a composed
   // face. Non-token cards use their card image.
   const img = state.imageMap[name];
-  if (opts.token && !img) {
+  if (opts.face_down) {
+    // Manifest / morph: a featureless card back (a 2/2 colourless creature).
+    t.classList.add("face-down-tile");
+    t.append(el("div", { className: "fd-face" }, el("div", { className: "fd-mark", textContent: "2/2" })));
+  } else if (opts.token && !img) {
     // No scan: compose a card face with name, type line, textbox and P/T,
     // tinted by the token's colour(s).
     t.classList.add("token-card");
@@ -2994,6 +3136,7 @@ function tile(name, opts = {}) {
   } else if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
   else t.append(el("div", { className: "fallback", textContent: name }));
   if (opts.commander) t.append(el("div", { className: "badge", textContent: "CMD" }));
+  if (opts.copy) t.append(el("div", { className: "badge copy", title: "a copy", textContent: "copy" }));
   // Variable P/T (a characteristic-defining ability, e.g. Barrowgoyf's */*):
   // the printed card gives no number, so the current values are always shown.
   if (!opts.token && opts.power != null && opts.toughness != null) {
@@ -3002,6 +3145,15 @@ function tile(name, opts = {}) {
       title: `current power/toughness: ${opts.power}/${opts.toughness}`,
       textContent: `${opts.power}/${opts.toughness}`,
     }));
+  }
+  // A recoloured permanent (Set color / a colour-changing effect): colour pips.
+  if (!opts.token && opts.recolored) {
+    const cols = opts.colors || [];
+    const pips = el("div", { className: "badge colors",
+      title: "colours: " + (cols.join("") || "colorless") });
+    (cols.length ? cols : ["C"]).forEach((c) =>
+      pips.append(el("span", { className: "cpip c-" + c })));
+    t.append(pips);
   }
   // Markers: render every counter kind present on the permanent, not just a
   // hardcoded few. +1/+1 and -1/-1 get P/T formatting, loyalty a shield, and
@@ -3231,6 +3383,7 @@ function energyPips(n) {
 function permTile(p, attachedByHost, edit = {}) {
   const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
     granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness, colors: p.colors,
+    recolored: p.recolored, face_down: p.face_down, copy: p.is_copy || p.copy,
     editable: edit.editable,
     onClick: edit.onClick ? () => edit.onClick(p) : null,
     onMenu: edit.onMenu ? (e) => edit.onMenu(p, e) : null,
@@ -3392,6 +3545,17 @@ function renderBoard(f, edit = {}) {
         el("span", { className: "fc-tax-name", textContent: "+" }),
         manaCostEl("{2}"), el("span", { className: "fc-tax-eq", textContent: "×" }), inp));
     });
+    cmdBox.append(tax);
+  } else if (f.commander_cast && Object.keys(f.commander_cast).length) {
+    // Replay: show the commander tax that has accrued ({2} × times cast).
+    const tax = el("div", { className: "fc-tax" });
+    for (const [name, count] of Object.entries(f.commander_cast)) {
+      if (!count) continue;
+      tax.append(el("div", { className: "fc-tax-row", title: `${name} — cast ${count}× (tax +{2}×${count})` },
+        el("span", { className: "fc-tax-name", textContent: name.split(",")[0].split(" // ")[0] + " " }),
+        el("span", { textContent: "+" }), manaCostEl("{2}"),
+        el("span", { className: "fc-tax-eq", textContent: "×" + count })));
+    }
     cmdBox.append(tax);
   }
   // Right column: command zone + (editor / config preview) library-top /

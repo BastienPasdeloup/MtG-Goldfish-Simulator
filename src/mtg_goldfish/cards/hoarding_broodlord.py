@@ -18,6 +18,7 @@ from .registry import register
 @register
 class HoardingBroodlord(Card):
     card_name = "Hoarding Broodlord"
+    exiles_cards = True
 
     def link_exiled_card(self, state, perm, card):
         # Exiled with Hoarding Broodlord -> you may play it from exile.

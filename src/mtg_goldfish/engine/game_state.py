@@ -125,7 +125,25 @@ class Permanent:
     # and base P/T: {"type_line": str, "power": int, "toughness": int}. Cleared
     # at cleanup. Granted keywords ride on `temp_keywords` as usual.
     becomes: dict | None = None
+    # An explicit colour override (Fixed-config "Set color", or a colour-changing
+    # effect): a list of "W"/"U"/"B"/"R"/"G" (empty = colourless). None = use the
+    # card's printed colours. Read via the `colors` property.
+    color_override: list | None = None
+    # Face-down (manifest / morph): a 2/2 colourless nameless creature. Its
+    # printed name/characteristics are hidden in the viewer; the 2/2 body comes
+    # from `becomes`. Turning it face up clears this + becomes + color_override.
+    face_down: bool = False
+    # This permanent is a COPY of another (token copy / Astral Dragon / Saw in
+    # Half / a Fixed-config copy token) — shown with a "copy" badge.
+    is_copy: bool = False
     uid: int = 0
+
+    @property
+    def colors(self) -> list:
+        """Current colours (the override if set, else the card's printed colours)."""
+        if self.color_override is not None:
+            return list(self.color_override)
+        return list(self.card.colors or [])
 
     # ---- face-aware views ---------------------------------------------------
     @property
@@ -192,6 +210,9 @@ class Permanent:
             exiled_with=list(self.exiled_with),
             chosen=self.chosen,
             becomes=dict(self.becomes) if self.becomes is not None else None,
+            color_override=list(self.color_override) if self.color_override is not None else None,
+            face_down=self.face_down,
+            is_copy=self.is_copy,
             uid=self.uid,
         )
 
@@ -640,6 +661,7 @@ class GameState:
         self.extra_combats = 0
         self.gy_play_all = False
         self.gy_exile_replace = False
+        self.storm_count = 0            # storm counts spells cast THIS turn
         self.opp_life_turn_start = self.opponent_life
         for p in self.battlefield:
             p.turn_flags.clear()
@@ -937,6 +959,7 @@ class GameState:
         perm = self.put_on_battlefield(
             source.card, token=True, fire_etb=fire_etb,
             announce=f"create a token copy of {source.name}")
+        perm.is_copy = True
         if tapped:
             perm.tapped = True
         if attacking:
@@ -1298,6 +1321,15 @@ class GameState:
         in_range = self._turn_range_pred(min_turn, max_turn)
         return bool(self.events_matching(kind="cast", name=name, turn=turn, pred=in_range))
 
+    def cast_at_storm(self, name: str, at_least: int, turn: int | None = None) -> bool:
+        """A spell named like `name` was CAST at a moment when the storm count
+        (spells cast this turn, including it) was >= `at_least`. This captures the
+        value AT CAST TIME — unlike `cast_on(name) and storm_count >= N`, which can
+        be satisfied by reaching the storm count AFTER the spell resolved."""
+        return bool(self.events_matching(
+            kind="cast", name=name, turn=turn,
+            pred=lambda e: e.get("storm", 0) >= at_least))
+
     def entered_battlefield(self, name: str, turn: int | None = None,
                             min_turn: int | None = None, max_turn: int | None = None,
                             token: bool | None = None, via_kind: str | None = None) -> bool:
@@ -1477,7 +1509,7 @@ class GameState:
     def _perm_view(self, p: Permanent) -> dict:
         """One battlefield permanent as the board viewer consumes it."""
         view = {
-            "name": p.name,
+            "name": "Face-down creature" if p.face_down else p.name,
             "uid": p.uid,
             "attached_to": p.attached_to,  # host uid for auras/equipment
             "is_aura": "aura" in p.type_line.lower(),
@@ -1514,14 +1546,28 @@ class GameState:
                 toughness=self.effective_toughness(p) if p.is_creature_now else None,
             )
         elif p.is_creature_now:
-            # Variable P/T (a characteristic-defining ability, e.g. Barrowgoyf's
-            # */*): the printed card gives no number, so the tile always shows
-            # the current values.
             impl = p.pt_impl or p.impl
+            # Show the current P/T on the tile when it is ALTERED from what the
+            # card art shows: a characteristic-defining ability (Barrowgoyf */*),
+            # an animation (`becomes` — an animated ritual/land), or any P/T
+            # modifier (counters / temp buffs / a fixed-config P/T override).
+            printed_p, printed_t = _pt(p.face.power), _pt(p.face.toughness)
+            eff_p, eff_t = self.effective_power(p), self.effective_toughness(p)
             if (impl.dynamic_power(self, p) is not None
-                    or impl.dynamic_toughness(self, p) is not None):
-                view["power"] = self.effective_power(p)
-                view["toughness"] = self.effective_toughness(p)
+                    or impl.dynamic_toughness(self, p) is not None
+                    or p.becomes is not None
+                    or eff_p != printed_p or eff_t != printed_t):
+                view["power"] = eff_p
+                view["toughness"] = eff_t
+        # A recoloured permanent (Fixed-config "Set color" / a colour-changing
+        # effect): ship the current colours so the tile can show them.
+        if not p.is_token and p.color_override is not None:
+            view["colors"] = p.colors
+            view["recolored"] = True
+        if p.face_down:
+            view["face_down"] = True
+        if p.is_copy:
+            view["is_copy"] = True
         return view
 
     def _exile_view(self) -> list[dict]:
@@ -1576,6 +1622,8 @@ class GameState:
             "command_zone": [c.name for c in self.command_zone],
             "graveyard": [c.name for c in self.graveyard],
             "exile": self._exile_view(),
+            # Commander tax: {name: times cast} — the recast tax is {2}×count.
+            "commander_cast": {n: c for n, c in self.commander_cast_count.items() if c},
             "stack": [stack_item_view(c) for c in self.stack],
             "mana_pool": {k: v for k, v in self.mana_pool.amounts.items() if v},
             "battlefield": [self._perm_view(p) for p in self.battlefield],

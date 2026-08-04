@@ -105,6 +105,11 @@ resolution actually did):
       #   "entered play between turns 2 and 4" -> entered_battlefield(name, min_turn=2, max_turn=4)
   state.spell_resolved(name: str, turn=None) -> bool   # cast AND resolved (not countered)
   state.trigger_resolved(source: str, turn=None) -> bool  # a triggered ability resolved
+  state.cast_at_storm(name: str, at_least: int, turn=None) -> bool
+      # X was cast WHEN the storm count (spells cast this turn, incl. it) was
+      # >= at_least — the value AT CAST TIME. Use this for "X is cast when the
+      # storm count is at least N"; do NOT write cast_on(name) and storm_count>=N
+      # (that also passes if the storm reaches N only AFTER X resolved).
 
   ==== the commander leaving play / the command zone ====
   In commander formats, when a commander LEAVES the battlefield (dies, is

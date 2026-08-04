@@ -37,6 +37,7 @@ from .registry import build_card, register
 @register
 class AangSwiftSavior(Card):
     card_name = "Aang, Swift Savior // Aang and La, Ocean's Fury"
+    exiles_cards = True
 
     def link_exiled_card(self, state, perm, card):
         # Airbent by Aang -> its owner may recast it for {2}.

@@ -12,6 +12,7 @@ from .registry import register
 @register
 class BomatCourier(Card):
     card_name = "Bomat Courier"
+    exiles_cards = True
 
     def on_attack(self, state, perm):
         if state.library:

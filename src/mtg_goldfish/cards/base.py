@@ -138,6 +138,9 @@ class Card:
         return self.replaces_gy_with_exile
     #: Static: creatures can't attack (Glacial Chasm).
     prevents_attacks: ClassVar[bool] = False
+    #: This card can exile cards/permanents — the Fixed-config editor offers a
+    #: "Set exiled card…" entry on it (routed by `link_exiled_card`).
+    exiles_cards: ClassVar[bool] = False
     #: If set, `on_phase` only fires at this phase (avoids the base
     #: "fires every phase" behaviour — see phase_stack_items). Cards that must
     #: react to several phases leave this None and gate inside on_phase.

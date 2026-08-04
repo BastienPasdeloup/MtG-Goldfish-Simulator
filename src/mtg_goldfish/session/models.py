@@ -50,14 +50,38 @@ class FixedBattlefieldCard(BaseModel):
     set_power: int | None = None
     set_toughness: int | None = None
     make_creature: bool = False
+    # A colour override (editor "Set color"): W/U/B/R/G list, [] = colourless,
+    # None = the card's printed colours. (For tokens / added cards the colour
+    # lives in `colors` instead — those are built from the spec.)
+    set_colors: list[str] | None = None
+    # A card-TYPE override (editor "Alter card > Set types"): the card types left
+    # of the "—" (e.g. ["Creature", "Artifact"]); None = the printed types.
+    set_types: list[str] | None = None
+    # Face-down (manifest / morph): a 2/2 colourless nameless creature until
+    # turned face up.
+    face_down: bool = False
+    # "Alter card" changes (P/T / types / make-creature) apply only until end of
+    # turn (the `becomes` animation is not permanent).
+    alter_eot: bool = False
 
 
 class FixedExileCard(BaseModel):
     """An exiled card that was exiled WITH a battlefield permanent (by name), so
     the engine sets it up in that permanent's mechanism (playable from exile /
-    recorded in its exiled_with)."""
+    recorded in its exiled_with). If `added` (the card is not in the deck — e.g.
+    a creature copied by Superior Spider-Man that came from an opponent's
+    graveyard), its data is carried in the fields below."""
     name: str
     exiled_with: str | None = None
+    added: bool = False
+    type_line: str = ""
+    power: int | None = None
+    toughness: int | None = None
+    colors: list[str] = Field(default_factory=list)
+    oracle_text: str = ""
+    mana_cost: str = ""
+    cmc: float = 0
+    keywords: list[str] = Field(default_factory=list)
 
 
 class FixedConfig(BaseModel):

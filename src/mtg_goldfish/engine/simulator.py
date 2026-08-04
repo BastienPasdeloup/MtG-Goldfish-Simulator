@@ -176,6 +176,7 @@ class _SearchContext:
         deadline: float,
         tree_cap: int | None = None,  # None = record the FULL explored tree
         should_stop: Callable[[], bool] | None = None,
+        should_skip: Callable[[], bool] | None = None,
         instant_speed: bool = False,
     ) -> None:
         self.properties = properties
@@ -185,6 +186,9 @@ class _SearchContext:
         # Cooperative cancellation: when this returns True the current game is
         # abandoned ASAP (checked in the search's hot path via budget_exceeded).
         self._should_stop = should_stop
+        # Per-game skip: abandon THIS game (counts as a failure), unlike stop
+        # which ends the whole run.
+        self._should_skip = should_skip
         self.stopped = False
         self.ever_satisfied: set[str] = set()  # any line, this game
         self.success_log: list[str] | None = None
@@ -251,6 +255,11 @@ class _SearchContext:
             return True
         if self._should_stop is not None and self._should_stop():
             self.stopped = True  # user cancelled — abandon the current game now
+            return True
+        if self._should_skip is not None and self._should_skip():
+            # Abandon THIS game (it becomes an unsuccessful result); the run
+            # continues with the next game. Marked as a timeout for the stats.
+            self.timed_out = True
             return True
         if time.monotonic() > self.deadline:
             self.timed_out = True
@@ -885,6 +894,15 @@ def _fixed_opening_hand(
     return [(hand, lib, [])]
 
 
+def _make_face_down(perm) -> None:
+    """Turn a permanent face down (manifest / morph): a 2/2 colourless nameless
+    creature. Its printed characteristics are hidden; `becomes` supplies the 2/2
+    body. (Its abilities are not stripped — a display/body approximation.)"""
+    perm.face_down = True
+    perm.becomes = {"type_line": "Creature", "power": 2, "toughness": 2, "permanent": True}
+    perm.color_override = []
+
+
 def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameState:
     """Build the starting state for a Fixed-config run: place named deck cards
     into the battlefield / hand / graveyard / exile, set life totals, mana pool,
@@ -943,6 +961,8 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                 keywords=list(spec.get("keywords") or []),
             )
             perm = variant.put_on_battlefield(built, token=bool(is_token), fire_etb=False)
+            if copy_of:
+                perm.is_copy = True
         else:
             card = take(name)
             if card is None:
@@ -970,23 +990,40 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                 perm.extra_keywords.add(str(kw).lower())
             for kw in (spec.get("granted_eot") or []):
                 perm.temp_keywords.add(str(kw).lower())
-            # Editor "Make a creature" / "Set power/toughness": override the base
-            # P/T and (if making a creature) add the Creature type, keeping the
-            # permanent's other types (via a permanent `becomes` animation).
+            # Editor "Alter card": override P/T, card types ("Set types"), and/or
+            # add the Creature type ("Make a creature"). All fold into a single
+            # permanent `becomes` animation (keeps the printed subtypes).
             sp, st_ = spec.get("set_power"), spec.get("set_toughness")
-            if spec.get("make_creature") or sp is not None or st_ is not None:
+            set_types = spec.get("set_types")
+            if (spec.get("make_creature") or sp is not None or st_ is not None
+                    or set_types is not None):
                 from ..cards._common import _creature_type_line
-                tl = perm.type_line
-                if spec.get("make_creature") and "creature" not in tl.split("—")[0].lower():
-                    tl = _creature_type_line(tl)
+                head, sep, tail = perm.type_line.partition("—")
+                if set_types is not None:                # replace the card types
+                    tl = " ".join(set_types) + (f" — {tail.strip()}" if sep and tail.strip() else "")
+                    if spec.get("make_creature") and "creature" not in tl.split("—")[0].lower():
+                        tl = _creature_type_line(tl)
+                elif spec.get("make_creature") and "creature" not in head.lower():
+                    tl = _creature_type_line(perm.type_line)
+                else:
+                    tl = perm.type_line
                 base_p = perm.base_power() if perm.is_creature_now else 0
                 base_t = perm.base_toughness() if perm.is_creature_now else 0
                 perm.becomes = {
                     "type_line": tl,
                     "power": int(sp) if sp is not None else base_p,
                     "toughness": int(st_) if st_ is not None else base_t,
-                    "permanent": True,
+                    # "Until end of turn" -> NOT permanent, so cleanup clears it.
+                    "permanent": not spec.get("alter_eot"),
                 }
+            if spec.get("face_down"):
+                _make_face_down(perm)
+            # "Set color" override (deck cards; tokens/added cards carry colour in
+            # their built CardData). Recolour for BOTH gameplay and display.
+            set_colors = spec.get("set_colors")
+            if set_colors is not None and not (spec.get("token") or spec.get("added")):
+                perm.color_override = list(set_colors)
+                perm.card = perm.card.model_copy(update={"colors": list(set_colors)})
         placed.append(perm)
     # Resolve attachments (auras/equipment) now that all permanents exist.
     for i, spec in enumerate(specs):
@@ -1013,13 +1050,32 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         nm = spec.get("name") if isinstance(spec, dict) else spec
         placed_by_name.setdefault(nm, placed[i])
     for entry in fixed.get("exile", []):
-        # Entry is either a bare name, or {"name", "exiled_with": <perm name>}.
-        name = entry if isinstance(entry, str) else entry.get("name")
-        card = take(name)
+        # Entry is either a bare name, or {"name", "exiled_with", ...}. An
+        # `added` exile entry carries its own card data (the exiled card is not
+        # in the deck — e.g. a creature Superior Spider-Man copied from an
+        # opponent's graveyard), so it is built from the spec rather than taken.
+        if isinstance(entry, str):
+            name, host_name, added = entry, None, False
+        else:
+            name, host_name, added = entry.get("name"), entry.get("exiled_with"), entry.get("added")
+        if added:
+            from ..deck.models import CardData
+            pw, tf = entry.get("power"), entry.get("toughness")
+            card = CardData(
+                name=name, type_line=entry.get("type_line") or "",
+                power=None if pw is None else str(pw),
+                toughness=None if tf is None else str(tf),
+                colors=list(entry.get("colors") or []),
+                oracle_text=entry.get("oracle_text") or "",
+                mana_cost=entry.get("mana_cost") or "",
+                cmc=float(entry.get("cmc") or 0),
+                keywords=list(entry.get("keywords") or []),
+            )
+        else:
+            card = take(name)
         if card is None:
             continue
         variant.exile.append(card)
-        host_name = None if isinstance(entry, str) else entry.get("exiled_with")
         host = placed_by_name.get(host_name) if host_name else None
         if host is not None:
             # Route it into THAT permanent's exile mechanism (Gwen/Hoarding/Inti →
@@ -1110,6 +1166,7 @@ def _seed_game(
     config: SimulationConfig,
     game_index: int,
     should_stop: Callable[[], bool] | None = None,
+    should_skip: Callable[[], bool] | None = None,
     deadline: float | None = None,
 ) -> tuple[_SearchContext, dict, list[tuple], list[tuple], list]:
     """Deterministically set up one game: the shuffled library, the search
@@ -1125,7 +1182,7 @@ def _seed_game(
     if deadline is None:
         deadline = time.monotonic() + config.timeout_per_game_s
     ctx = _SearchContext(properties, deadline, should_stop=should_stop,
-                         instant_speed=config.instant_speed)
+                         should_skip=should_skip, instant_speed=config.instant_speed)
     # Root of the recorded search tree: the game before any hand is kept.
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root
@@ -1237,9 +1294,17 @@ def simulate_game(
     config: SimulationConfig,
     game_index: int,
     should_stop: Callable[[], bool] | None = None,
+    should_skip: Callable[[], bool] | None = None,
+    on_game_start: Callable[[int, list], None] | None = None,
 ) -> GameOutcome:
     ctx, root, items, keep_nodes, shuffled = _seed_game(
-        base_state, properties, config, game_index, should_stop=should_stop)
+        base_state, properties, config, game_index,
+        should_stop=should_stop, should_skip=should_skip)
+    if on_game_start is not None:
+        # The opening hand is known once the game is seeded — report it so the
+        # results table can show a "running" row (with its hand) live.
+        hand = keep_nodes[0][1] if keep_nodes else []
+        on_game_start(game_index, list(hand))
     try:
         success = _search(items, ctx, config.search_mode)
     except Exception as exc:  # a crash in the search itself, not a single action
@@ -1425,6 +1490,8 @@ def _simulate_game_split(
     found_event,
     should_stop: Callable[[], bool] | None,
     on_tainted: Callable[[], None] | None = None,
+    should_skip: Callable[[], bool] | None = None,
+    on_game_start: Callable[[int, list], None] | None = None,
 ) -> GameOutcome | None:
     """One game, its tree explored in parallel. The master expands the search
     level by level until enough subtrees hang at some depth (or the search
@@ -1437,7 +1504,10 @@ def _simulate_game_split(
     from concurrent.futures import wait as futures_wait
 
     ctx, root, items, keep_nodes, shuffled = _seed_game(
-        base_state, properties, config, game_index, should_stop=should_stop)
+        base_state, properties, config, game_index,
+        should_stop=should_stop, should_skip=should_skip)
+    if on_game_start is not None:
+        on_game_start(game_index, list(keep_nodes[0][1] if keep_nodes else []))
 
     # Phase 1 — shallow expansion in this process: process everything above
     # the split depth, collecting the children AT it instead of exploring them.
@@ -1578,6 +1648,8 @@ def run_simulation(
     on_game: Callable[[GameOutcome, SimulationStats], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
     *,
+    should_skip: Callable[[], bool] | None = None,
+    on_game_start: Callable[[int, list], None] | None = None,
     game_indices: list[int] | None = None,
     initial_stats: dict | None = None,
 ) -> SimulationStats:
@@ -1636,10 +1708,13 @@ def run_simulation(
                     outcome = _simulate_game_split(
                         base_state, properties, config, i, pool, workers,
                         stop_event, found_event, should_stop,
-                        on_tainted=lambda: tainted.__setitem__(0, True))
+                        on_tainted=lambda: tainted.__setitem__(0, True),
+                        should_skip=should_skip, on_game_start=on_game_start)
                 else:
                     outcome = simulate_game(base_state, properties, config, i,
-                                            should_stop=should_stop)
+                                            should_stop=should_stop,
+                                            should_skip=should_skip,
+                                            on_game_start=on_game_start)
             except Exception as exc:  # keep the run alive; report the game as buggy
                 outcome = _buggy_outcome(i, exc)
             # A tainted pool has a wedged worker process holding a core hostage:

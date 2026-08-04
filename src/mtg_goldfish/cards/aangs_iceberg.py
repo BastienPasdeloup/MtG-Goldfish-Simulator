@@ -12,6 +12,7 @@ from .registry import register
 @register
 class AangsIceberg(Card):
     card_name = "Aang's Iceberg"
+    exiles_cards = True
 
     def on_etb(self, state, permanent):
         options = [("none", None)]

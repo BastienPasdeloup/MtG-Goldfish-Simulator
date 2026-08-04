@@ -71,6 +71,10 @@ and puts N cards into your hand", "Atraxa's ETB puts at least 3 cards to hand", 
 off the top) and do NOT use len(state.hand) / cards_in_hand() (that counts ALL \
 cards in hand, including ones already there). For Atraxa specifically the ETB is \
 a TRIGGERED ability: cards_put_in_hand_by(state.commander_name(), via_kind="triggered") >= 3.
+- "X is cast WHEN the storm count is at least N" / "cast X as the Nth spell" -> \
+state.cast_at_storm('X', N). Do NOT write `cast_on('X') and state.storm_count >= N` \
+— that is satisfiable by reaching storm N AFTER X resolved; cast_at_storm captures \
+the storm value at the moment of casting.
 - Opponent life: "the opponent lost at least N life this turn" / "deal N damage \
 to the opponent this turn" -> state.opponent_life_lost_this_turn() >= N. For their \
 CURRENT total ("opponent at N or less", "opponent is dead") -> state.opponent_life \

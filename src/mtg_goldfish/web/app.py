@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__, __version_base__
-from ..cards import is_implemented, load_all_cards
+from ..cards import build_card, is_implemented, load_all_cards
 from ..config import CONFIG
 from ..deck import MoxfieldError, MTGTop8Error, ScryfallError, import_deck
 from ..deck.models import Deck
@@ -180,6 +180,7 @@ def card_view(deck: Deck) -> list[dict]:
             "loyalty": c.loyalty,  # for the Fixed-config editor (planeswalkers)
             "enters_counters": _initial_counters(c),  # counters it enters play with
             "counter_kinds": _counter_kinds(c),       # counter kinds it can carry
+            "exiles": build_card(c).exiles_cards,     # offers "Set exiled card…"
         }
     return list(agg.values())
 
@@ -872,6 +873,14 @@ async def resume_simulation(session_id: str, result_id: str) -> dict:
 @app.post("/api/sessions/{session_id}/simulate/stop")
 def stop_simulation(session_id: str) -> dict:
     runner.stop(session_id)
+    return {"ok": True}
+
+
+@app.post("/api/sessions/{session_id}/simulate/skip")
+def skip_game(session_id: str) -> dict:
+    """Abandon the game currently being searched — it becomes a failure and the
+    run moves on to the next game."""
+    runner.skip(session_id)
     return {"ok": True}
 
 

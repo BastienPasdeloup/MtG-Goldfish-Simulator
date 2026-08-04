@@ -1486,7 +1486,8 @@ def test_fixed_config_model_accepts_exile_objects_and_copy_tokens():
         "exile": [{"name": "Summon: Bahamut", "exiled_with": "Superior Spider-Man"}, "Duress"],
     })
     dumped = fc.model_dump()
-    assert dumped["exile"][0] == {"name": "Summon: Bahamut", "exiled_with": "Superior Spider-Man"}
+    assert dumped["exile"][0]["name"] == "Summon: Bahamut"
+    assert dumped["exile"][0]["exiled_with"] == "Superior Spider-Man"
     assert dumped["exile"][1] == "Duress"
     assert dumped["battlefield"][1]["copy_of"] == "Griselbrand"
     assert dumped["battlefield"][2]["make_creature"] and dumped["battlefield"][2]["set_power"] == 5
@@ -1591,3 +1592,33 @@ def test_fixed_config_exiled_with_routes_to_source_mechanism():
     v = build("Aang, Swift Savior // Aang and La, Ocean's Fury", "Psychic Frog")
     badge = next(e for e in v.snapshot()["exile"] if e["name"] == "Psychic Frog")
     assert badge.get("exiled_by") == "Aang, Swift Savior"
+
+
+def test_replay_shows_altered_pt_and_color():
+    """A permanent altered from its printed card (animated / P/T set / recoloured)
+    ships its current P/T and colours in the snapshot so the tile can show them;
+    an unmodified creature does not (it relies on the card art)."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck, GameState
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    base = new_game_from_deck(Deck(name="t", entries=[DeckEntry(
+        quantity=1, board=DeckBoard.COMMANDER, card=card("Emet-Selch, Unsundered"))]))
+    for n in ["Wishclaw Talisman", "Psychic Frog"]:
+        base.library.append(card(n))
+    fixed = {"turn": 4, "phase": "precombat_main", "battlefield": [
+        {"name": "Wishclaw Talisman", "make_creature": True, "set_power": 4,
+         "set_toughness": 4, "set_colors": ["R"]},
+        {"name": "Psychic Frog", "set_power": 7, "set_toughness": 7},
+    ]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    views = {pv["name"]: pv for pv in v.snapshot()["battlefield"]}
+    w = views["Wishclaw Talisman"]
+    assert w["is_creature"] and w["power"] == 4 and w["toughness"] == 4
+    assert w["recolored"] and w["colors"] == ["R"]
+    assert views["Psychic Frog"]["power"] == 7          # set-P/T shown
+
+    # an unmodified creature ships no P/T (tile uses the card art)
+    g = GameState()
+    g.put_on_battlefield(card("Psychic Frog"))
+    assert "power" not in g.snapshot()["battlefield"][0]

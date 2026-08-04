@@ -55,6 +55,7 @@ class AstralDragon(Card):
                 t.becomes = {"type_line": _dragonize(t.type_line), "power": 3,
                              "toughness": 3, "permanent": True}
                 t.extra_keywords.add("flying")
+                t.is_copy = True
                 toks.append(t)
             st.queue_entry_triggers(toks)
             return st.settle()
