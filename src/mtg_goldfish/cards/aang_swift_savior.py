@@ -38,6 +38,10 @@ from .registry import build_card, register
 class AangSwiftSavior(Card):
     card_name = "Aang, Swift Savior // Aang and La, Ocean's Fury"
 
+    def link_exiled_card(self, state, perm, card):
+        # Airbent by Aang -> its owner may recast it for {2}.
+        state.airbend_exile.append(card)
+
     def battlefield_actions(self, state, perm):
         # Waterbend {8}: Transform (front face only — the helper returns nothing
         # once transformed).

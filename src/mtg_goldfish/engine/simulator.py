@@ -914,33 +914,35 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     for spec in specs:
         name = spec.get("name") if isinstance(spec, dict) else spec
         is_token = isinstance(spec, dict) and spec.get("token")
-        if is_token:
-            copy_of = spec.get("copy_of")
-            if copy_of:
-                # A token that's a COPY of a real card: build its CardData from
-                # the spec so build_card() picks up that card's implementation by
-                # name (full copy with abilities for an implemented card; a
-                # vanilla body otherwise). put_on_battlefield marks it a token.
-                from ..deck.models import CardData
-                pw, tf = spec.get("power"), spec.get("toughness")
-                copied = CardData(
-                    name=copy_of, type_line=spec.get("type_line") or "Token",
-                    power=None if pw is None else str(pw),
-                    toughness=None if tf is None else str(tf),
-                    colors=list(spec.get("colors") or []),
-                    oracle_text=spec.get("oracle_text") or spec.get("text") or "",
-                    mana_cost=spec.get("mana_cost") or "",
-                    cmc=float(spec.get("cmc") or 0),
-                    keywords=list(spec.get("keywords") or []),
-                )
-                perm = variant.put_on_battlefield(copied, token=True, fire_etb=False)
-            else:
-                # A plain token: created fresh (not a deck card); make_token
-                # already puts it on the battlefield.
-                perm = variant.make_token(
-                    name, int(spec.get("power") or 0), int(spec.get("toughness") or 0),
-                    spec.get("type_line") or "Token", text=spec.get("text") or "",
-                    colors=spec.get("colors") or [])
+        copy_of = spec.get("copy_of") if isinstance(spec, dict) else None
+        added = spec.get("added") if isinstance(spec, dict) else None
+        if is_token and not copy_of:
+            # A plain token: created fresh (not a deck card); make_token already
+            # puts it on the battlefield.
+            perm = variant.make_token(
+                name, int(spec.get("power") or 0), int(spec.get("toughness") or 0),
+                spec.get("type_line") or "Token", text=spec.get("text") or "",
+                colors=spec.get("colors") or [])
+        elif copy_of or added:
+            # Build the permanent from the card data carried in the spec, so
+            # build_card() picks up that card's implementation BY NAME (full copy
+            # with abilities for an implemented card; a vanilla body otherwise).
+            # A COPY token (is_token) or an ADDED arbitrary card (not a deck card,
+            # nontoken — may even be a nonpermanent, placed for sandbox testing).
+            from ..deck.models import CardData
+            pw, tf = spec.get("power"), spec.get("toughness")
+            built = CardData(
+                name=copy_of or name,
+                type_line=spec.get("type_line") or ("Token" if is_token else ""),
+                power=None if pw is None else str(pw),
+                toughness=None if tf is None else str(tf),
+                colors=list(spec.get("colors") or []),
+                oracle_text=spec.get("oracle_text") or spec.get("text") or "",
+                mana_cost=spec.get("mana_cost") or "",
+                cmc=float(spec.get("cmc") or 0),
+                keywords=list(spec.get("keywords") or []),
+            )
+            perm = variant.put_on_battlefield(built, token=bool(is_token), fire_etb=False)
         else:
             card = take(name)
             if card is None:
@@ -968,6 +970,23 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                 perm.extra_keywords.add(str(kw).lower())
             for kw in (spec.get("granted_eot") or []):
                 perm.temp_keywords.add(str(kw).lower())
+            # Editor "Make a creature" / "Set power/toughness": override the base
+            # P/T and (if making a creature) add the Creature type, keeping the
+            # permanent's other types (via a permanent `becomes` animation).
+            sp, st_ = spec.get("set_power"), spec.get("set_toughness")
+            if spec.get("make_creature") or sp is not None or st_ is not None:
+                from ..cards._common import _creature_type_line
+                tl = perm.type_line
+                if spec.get("make_creature") and "creature" not in tl.split("—")[0].lower():
+                    tl = _creature_type_line(tl)
+                base_p = perm.base_power() if perm.is_creature_now else 0
+                base_t = perm.base_toughness() if perm.is_creature_now else 0
+                perm.becomes = {
+                    "type_line": tl,
+                    "power": int(sp) if sp is not None else base_p,
+                    "toughness": int(st_) if st_ is not None else base_t,
+                    "permanent": True,
+                }
         placed.append(perm)
     # Resolve attachments (auras/equipment) now that all permanents exist.
     for i, spec in enumerate(specs):
@@ -1003,10 +1022,12 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
         host_name = None if isinstance(entry, str) else entry.get("exiled_with")
         host = placed_by_name.get(host_name) if host_name else None
         if host is not None:
-            # Link it to that permanent's mechanism: playable from exile (Hoarding
-            # Broodlord / Gwen Stacy) AND recorded in its `exiled_with` list.
-            variant.exile_playable.append((host.uid, card))
-            host.exiled_with.append(card)
+            # Route it into THAT permanent's exile mechanism (Gwen/Hoarding/Inti →
+            # playable from exile; Aang → recast for {2}; Leyline/Parallax → return
+            # when it leaves; Superior Spider-Man → he becomes a copy; default →
+            # recorded in its exiled_with).
+            host.impl.link_exiled_card(variant, host, card)
+            variant.exile_source[id(card)] = host.name  # names the exile-zone badge
 
     # Commanders "removed from any area" are shuffled into the deck: pull them
     # out of the command-zone pool and into the shuffled library remainder.
@@ -1046,6 +1067,7 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
 
     variant.life = int(fixed.get("life", 20))
     variant.opponent_life = int(fixed.get("opponent_life", 20))
+    variant.opp_life_turn_start = variant.opponent_life  # nothing lost yet this turn
     variant.storm_count = int(fixed.get("storm_count", 0))
     variant.energy = int(fixed.get("energy", 0))
     for sym, n in (fixed.get("mana_pool") or {}).items():

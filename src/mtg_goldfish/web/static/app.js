@@ -124,7 +124,15 @@ async function api(path, opts) {
   });
   if (!res.ok) {
     let detail = res.statusText;
-    try { detail = (await res.json()).detail || detail; } catch {}
+    try {
+      const d = (await res.json()).detail;
+      // FastAPI: a 400 has a string detail; a 422 validation error has a LIST of
+      // {loc,msg,type} objects. Render either as readable text (never "[object
+      // Object]").
+      if (typeof d === "string") detail = d;
+      else if (Array.isArray(d)) detail = d.map((e) => e.msg || JSON.stringify(e)).join("; ");
+      else if (d) detail = JSON.stringify(d);
+    } catch {}
     throw new Error(detail);
   }
   return res.status === 204 ? null : res.json();
@@ -977,7 +985,9 @@ const fcName = (x) => (x && typeof x === "object" ? x.name : x);
 
 function fcUsage(name) {
   const fc = state.fixedConfig;
-  return fc.battlefield.filter((x) => x.name === name).length
+  // Tokens and ADDED arbitrary cards are not deck cards — they don't consume the
+  // deck's copy of `name`.
+  return fc.battlefield.filter((x) => x.name === name && !x.token && !x.added).length
     + fc.hand.filter((x) => x === name).length
     + fc.graveyard.filter((x) => x === name).length
     + fc.exile.filter((x) => fcName(x) === name).length
@@ -1009,16 +1019,20 @@ function fcFace(name, transformed) {
   };
 }
 
-// Whether a card of `name` may legally exist in `zone`.
+// Whether a card of `name` may be placed in `zone`. The battlefield accepts ANY
+// card — a nonpermanent is allowed for scenario testing (with a warning on
+// placement), just like an aura with no host.
 function fcCanPlace(name, zone) {
-  if (zone === "battlefield") {
-    const t = fcTypeHead(name);
-    // A DFC whose back face is a permanent (an MDFC land) can enter too.
-    const ok = (h) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"].some((k) => h.includes(k));
-    return ok(t) || (fcIsDfc(name) && ok((fcFaces(name)[1].type_line || "").split("—")[0].toLowerCase()));
-  }
+  if (zone === "battlefield") return true;
   if (zone === "command") return fcIsCommander(name);
   return ["hand", "graveyard", "exile", "library"].includes(zone);
+}
+
+// Whether `name` (a deck card) is a permanent that can normally exist in play.
+function fcIsPermanentType(name) {
+  const ok = (h) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"].some((k) => h.includes(k));
+  return ok(fcTypeHead(name))
+    || (fcIsDfc(name) && ok((fcFaces(name)[1].type_line || "").split("—")[0].toLowerCase()));
 }
 
 // Which face indices (0/1) of `name` are permanents that can be on the
@@ -1051,9 +1065,13 @@ function fcPushPermanent(name, transformed = false) {
   return state.fixedConfig.battlefield.length - 1;
 }
 
-// Finish placing a battlefield permanent: (aura) pick a host to enchant.
+// Finish placing a battlefield permanent: warn for a nonpermanent, then (aura)
+// pick a host to enchant.
 function fcAfterPlace(idx, name, x, y) {
   renderConfigBuilder();
+  if (!fcIsPermanentType(name)) {
+    alert(`${name} is not a permanent — placed on the battlefield anyway (unusual, for scenario testing).`);
+  }
   if (fcIsAura(name)) {
     const hosts = fcValidHosts(idx, "aura");
     if (!hosts.length) alert(`${name} has no permanent to enchant — added unattached.`);
@@ -1194,30 +1212,34 @@ function fcAddTokenPrompt() {
 }
 
 // Right-click menu on empty battlefield space: add a token (deck tokens +
-// previously-added custom tokens + a fresh "Add token…") or a COPY token (a
-// token that's a copy of any chosen card).
+// custom tokens + "Add token…" + "copy…" a card as a token), or "Add card…" to
+// put ANY card (deck or not, even a nonpermanent) directly into play.
 function fcBattlefieldMenu(e) {
   const all = [...(state.deckTokens || []), ...(state.customTokens || [])];
   const seen = new Set();
   const toks = all.filter((t) => { const k = fcTokenLabel(t); if (seen.has(k)) return false; seen.add(k); return true; })
     .map((t) => ({ label: fcTokenLabel(t), onClick: () => fcAddToken(t) }));
   toks.push({ sep: true }, { label: "Add token…", onClick: () => fcAddTokenPrompt() });
-  toks.push({ label: "Add copy token…", onClick: () => fcAddCopyTokenPrompt() });
-  showContextMenu(e.clientX, e.clientY, [{ label: "Add token", submenu: toks }]);
+  toks.push({ label: "copy…", onClick: () => fcAddCopyTokenPrompt() });
+  showContextMenu(e.clientX, e.clientY, [
+    { label: "Add token", submenu: toks },
+    { label: "Add card…", onClick: () => fcAddCardPrompt() },
+  ]);
 }
 
-// ---- copy token: a token that's a copy of any card the user picks -----------
+// ---- a shared "search any card" modal, used to pick a card to copy (as a
+// token) or to add directly into play. `state.fcCardPick(spec)` handles the pick.
 function fcCardModal() {
   let ov = document.getElementById("fc-card-modal");
   if (ov) return ov;
   ov = el("div", { id: "fc-card-modal", className: "modal-overlay hidden" });
   const input = el("input", { id: "fc-card-q", type: "text", autocomplete: "off",
-    placeholder: "Card to copy (e.g. Griselbrand, Grave Titan)…" });
+    placeholder: "Card name (e.g. Griselbrand, Grave Titan)…" });
   const hint = el("div", { id: "fc-card-hint", className: "muted sub" });
   const results = el("div", { id: "fc-card-results", className: "tok-results" });
   ov.append(el("div", { className: "modal" },
     el("div", { className: "modal-head" },
-      el("b", {}, "Add copy token — choose the card to copy"),
+      el("b", { id: "fc-card-title" }, "Choose a card"),
       el("span", { className: "spacer" }),
       el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
         onclick: () => ov.classList.add("hidden") })),
@@ -1242,7 +1264,7 @@ async function fcCardSearch(q) {
   catch (err) { hint.textContent = "Search failed: " + err.message; return; }
   if ((document.getElementById("fc-card-q").value || "").trim() !== q) return;
   hint.textContent = cards.length
-    ? `${cards.length} match${cards.length === 1 ? "" : "es"} — click one to copy it.`
+    ? `${cards.length} match${cards.length === 1 ? "" : "es"} — click one.`
     : "No cards found.";
   for (const spec of cards) results.append(fcCardCandidate(spec));
 }
@@ -1257,26 +1279,60 @@ function fcCardCandidate(spec) {
   }
   const wrap = el("div", { className: "tok-cand" }, face,
     el("div", { className: "tok-cand-label", textContent: spec.name }));
-  wrap.onclick = () => fcPickCopyToken(spec);
+  wrap.onclick = () => { if (state.fcCardPick) state.fcCardPick(spec); };
   return wrap;
 }
 
-function fcPickCopyToken(spec) {
-  // Register the art under the copied card's name so the token shows its face.
-  if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
-  fcAddToken({ ...spec, copy_of: spec.name });
-  const ov = document.getElementById("fc-card-modal");
-  if (ov) ov.classList.add("hidden");
-}
-
-function fcAddCopyTokenPrompt() {
+// Open the card search with a title + a pick handler.
+function fcOpenCardSearch(title, onPick) {
+  state.fcCardPick = (spec) => {
+    onPick(spec);
+    const ov = document.getElementById("fc-card-modal");
+    if (ov) ov.classList.add("hidden");
+  };
   const ov = fcCardModal();
   ov.classList.remove("hidden");
+  document.getElementById("fc-card-title").textContent = title;
   const input = document.getElementById("fc-card-q");
   input.value = "";
   document.getElementById("fc-card-results").replaceChildren();
   document.getElementById("fc-card-hint").textContent = "Type a card name to search.";
   setTimeout(() => input.focus(), 30);
+}
+
+function fcAddCopyTokenPrompt() {
+  fcOpenCardSearch("Add token — copy of a card", (spec) => {
+    if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
+    fcAddToken({ ...spec, copy_of: spec.name });
+  });
+}
+
+function fcAddCardPrompt() {
+  fcOpenCardSearch("Add card — put any card into play", (spec) => {
+    if (spec.image && !state.imageMap[spec.name]) state.imageMap[spec.name] = spec.image;
+    fcAddCardToBattlefield(spec);
+  });
+}
+
+// Put an arbitrary (non-deck) card directly onto the battlefield as a real
+// permanent. A NONpermanent is allowed with a warning (sandbox testing).
+function fcAddCardToBattlefield(spec) {
+  const head = (spec.type_line || "").split("—")[0].toLowerCase();
+  const isPermanent = ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"].some((k) => head.includes(k));
+  if (!isPermanent) {
+    alert(`${spec.name} is not a permanent — added to the battlefield anyway (unusual, for scenario testing).`);
+  }
+  const isCreature = head.includes("creature");
+  state.fixedConfig.battlefield.push({
+    name: spec.name, token: false, added: true,
+    type_line: spec.type_line || "", oracle_text: spec.oracle_text || "",
+    mana_cost: spec.mana_cost || "", cmc: spec.cmc ?? 0, keywords: spec.keywords || [],
+    colors: spec.colors || [],
+    power: isCreature ? (spec.power ?? null) : null,
+    toughness: isCreature ? (spec.toughness ?? null) : null,
+    tapped: false, sick: false, counters: {}, granted: [], granted_eot: [], attacking: false, attached_to: null,
+  });
+  renderConfigBuilder();
 }
 
 // Add a card to a zone (from the picker, via drag-and-drop). Non-battlefield
@@ -1384,6 +1440,23 @@ function fcRemoveBattlefieldIndices(indices) {
   state.fixedConfig.battlefield = next;
 }
 
+// Called on dragend of any fixed-config card. If the card was NOT dropped on a
+// zone (state.fcDropped stays false), it was dragged out of every area, so we
+// remove it — the same as right-click "Remove". Returns true if it removed the
+// card (so the pile reorder handler knows to skip). Commanders are exempt (they
+// belong in the command zone; use "Shuffle to library" instead).
+function fcHandleDragEnd() {
+  const d = state.fcDrag;
+  const dropped = state.fcDropped;
+  state.fcDrag = null;
+  state.fcDropped = false;
+  if (d && !dropped && d.from && d.from !== "command") {
+    fcRemove(d.from, d.idx);
+    return true;
+  }
+  return false;
+}
+
 function fcRemove(zone, idx) {
   if (zone === "battlefield") {
     const bf = state.fixedConfig.battlefield;
@@ -1422,11 +1495,32 @@ function fcFrame() {
         attacking: !!it.attacking && combat && isCreature,
       };
     }
+    if (it.added) {  // an arbitrary added card — its characteristics live in the spec
+      const head = (it.type_line || "").split("—")[0].toLowerCase();
+      const isCreature = head.includes("creature") || !!it.make_creature;
+      const hasPT = it.set_power != null && it.set_toughness != null;
+      return {
+        ...common, name: it.name, token: false, commander: false,
+        type_line: it.type_line, colors: it.colors || [],
+        is_land: it.make_creature ? false : head.includes("land"),
+        is_creature: isCreature, is_aura: (it.type_line || "").toLowerCase().includes("aura"),
+        attacking: !!it.attacking && combat && isCreature,
+        power: hasPT ? it.set_power : (isCreature ? (it.power ?? null) : null),
+        toughness: hasPT ? it.set_toughness : (isCreature ? (it.toughness ?? null) : null),
+      };
+    }
     const face = fcFace(it.name, it.transformed);  // active (front/back) face
+    // Editor P/T override / "make a creature": a made creature is shown in the
+    // nonland row with a P/T badge (set_power/set_toughness).
+    const isCreature = face.is_creature || !!it.make_creature;
+    const hasPT = it.set_power != null && it.set_toughness != null;
     return {
       ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
-      attacking: !!it.attacking && combat && face.is_creature,
-      is_land: face.is_land, is_creature: face.is_creature, is_aura: fcIsAura(it.name),
+      attacking: !!it.attacking && combat && isCreature,
+      is_land: it.make_creature ? false : face.is_land,
+      is_creature: isCreature, is_aura: fcIsAura(it.name),
+      power: hasPT ? it.set_power : null,
+      toughness: hasPT ? it.set_toughness : null,
     };
   });
   const removed = fc.commander_removed || [];
@@ -1513,6 +1607,32 @@ function fcCounterKinds(it) {
 
 // Right-click menu on a battlefield permanent — entries are gated by the
 // card's type and the current phase (game-rules-valid actions only).
+// Prompt for a custom power/toughness. `makeCreature` also turns a noncreature
+// permanent into a creature (adds the Creature type). Tokens edit their native
+// power/toughness/type_line; deck cards use set_power/set_toughness/make_creature.
+function fcPromptPT(idx, makeCreature) {
+  const it = fcPerm(idx); if (!it) return;
+  const curP = it.token ? (it.power ?? 0) : (it.set_power ?? 0);
+  const curT = it.token ? (it.toughness ?? 0) : (it.set_toughness ?? 0);
+  const p = prompt("Power:", String(curP)); if (p === null) return;
+  const t = prompt("Toughness:", String(curT)); if (t === null) return;
+  const pw = parseInt(p, 10), tf = parseInt(t, 10);
+  if (Number.isNaN(pw) || Number.isNaN(tf)) { alert("Enter whole numbers."); return; }
+  if (it.token) {
+    it.power = pw; it.toughness = tf;
+    if (makeCreature) {
+      const parts = (it.type_line || "Token").split("—");
+      if (!parts[0].toLowerCase().includes("creature")) {
+        it.type_line = (parts[0].trim() + " Creature" + (parts[1] ? " — " + parts[1].trim() : "")).trim();
+      }
+    }
+  } else {
+    it.set_power = pw; it.set_toughness = tf;
+    if (makeCreature) it.make_creature = true;
+  }
+  renderConfigBuilder();
+}
+
 function fcPermMenu(p, e) {
   const idx = p._idx;
   const it = fcPerm(idx); if (!it) return;
@@ -1544,6 +1664,19 @@ function fcPermMenu(p, e) {
       label: it.attacking ? "Remove from combat" : "Declare as attacker",
       onClick: () => { it.attacking = !it.attacking; if (it.attacking) it.tapped = true; renderConfigBuilder(); },
     });
+  }
+
+  // Power/toughness — set custom P/T on any creature, or turn a NONcreature
+  // permanent into a creature with a chosen P/T (it then moves to the nonland row).
+  const creatureNow = face.is_creature || !!it.make_creature;
+  if (creatureNow) {
+    items.push({ label: "Set power/toughness…", onClick: () => fcPromptPT(idx, false) });
+    if (!it.token && it.make_creature) {
+      items.push({ label: "Revert to noncreature", onClick: () => {
+        it.make_creature = false; it.set_power = null; it.set_toughness = null; renderConfigBuilder(); } });
+    }
+  } else {
+    items.push({ label: "Make a creature (set P/T)…", onClick: () => fcPromptPT(idx, true) });
   }
 
   // Counters — one "kind [−] N [+]" stepper per counter type this card uses
@@ -1942,6 +2075,7 @@ function renderConfigBuilder() {
     node.ondrop = (ev) => {
       ev.preventDefault();
       node.classList.remove("drop-hover");
+      state.fcDropped = true;  // landed on a real zone -> do NOT remove-on-dragend
       const raw = ev.dataTransfer.getData("text/plain");
       if (!raw) return;
       let data = null;
@@ -2903,7 +3037,12 @@ function tile(name, opts = {}) {
     if (opts.onMenu) t.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); opts.onMenu(e); };
     if (opts.dragData) {
       t.draggable = true;
-      t.ondragstart = (e) => { e.dataTransfer.setData("text/plain", JSON.stringify(opts.dragData)); e.dataTransfer.effectAllowed = "move"; hideHover(); };
+      t.ondragstart = (e) => {
+        e.dataTransfer.setData("text/plain", JSON.stringify(opts.dragData));
+        e.dataTransfer.effectAllowed = "move"; hideHover();
+        state.fcDrag = opts.dragData; state.fcDropped = false;
+      };
+      t.ondragend = () => fcHandleDragEnd();  // dropped outside all zones -> remove
     }
   }
   return t;
@@ -2980,7 +3119,7 @@ function pile(items, edit = {}) {
       card.classList.add("has-exile-src");
       card.append(el("div", {
         className: "exile-src", textContent: item.exiled_by,
-        title: `Exiled with ${item.exiled_by} — playable / tied to its ability`,
+        title: `Exiled with ${item.exiled_by} — set up in its exile mechanism`,
       }));
     }
     if (edit.onMenu) {
@@ -2991,8 +3130,10 @@ function pile(items, edit = {}) {
       card.dataset.idx = idx;
       card.draggable = true;
       card.ondragstart = (e) => {
-        e.dataTransfer.setData("text/plain", JSON.stringify({ move: true, from: edit.dragZone, idx, name: item.name }));
+        const dd = { move: true, from: edit.dragZone, idx, name: item.name };
+        e.dataTransfer.setData("text/plain", JSON.stringify(dd));
         e.dataTransfer.effectAllowed = "move"; hideHover();
+        state.fcDrag = dd; state.fcDropped = false;
         // Live in-zone sort: fade the dragged card and spread the pile out so
         // the order is visible while dragging. BOTH must be deferred to a
         // timeout: spreading the pile (`.sorting`) reflows and MOVES the dragged
@@ -3007,7 +3148,10 @@ function pile(items, edit = {}) {
       card.ondragend = () => {
         wrap.classList.remove("sorting");
         card.classList.remove("dragging");
-        if (state.fcSort && state.fcSort.zone === edit.dragZone && card.parentNode) {
+        // Dropped outside every zone -> removed (skip the in-zone reorder then,
+        // since fcRemove already re-rendered).
+        const removed = fcHandleDragEnd();
+        if (!removed && state.fcSort && state.fcSort.zone === edit.dragZone && card.parentNode) {
           fcCommitPileOrder(edit.dragZone, card.parentNode);
         }
         state.fcSort = null;

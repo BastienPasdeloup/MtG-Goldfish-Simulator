@@ -90,6 +90,8 @@ class ParallaxWave(Card):
 
     def on_leave(self, state, permanent):
         for card in permanent.exiled_with:
+            if card in state.exile:   # a Fixed-config-linked card is in the exile zone
+                state.exile.remove(card)
             state.put_on_battlefield(card)
             state.emit(f"Parallax Wave leaves: {card.name} returns to the battlefield")
         permanent.exiled_with.clear()

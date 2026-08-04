@@ -1422,10 +1422,10 @@ def test_fixed_config_exile_linked_to_a_permanent_is_playable():
              "battlefield": ["Hoarding Broodlord", "Island", "Island", "Island", "Island"],
              "exile": [{"name": "Ponder", "exiled_with": "Hoarding Broodlord"}]}
     v = _build_fixed_variant(base, fixed, seed=1)
-    hb = next(p for p in v.battlefield if p.name == "Hoarding Broodlord")
     assert [c.name for c in v.exile] == ["Ponder"]
+    # Hoarding Broodlord's mechanism is "you may play it from exile" -> routed to
+    # exile_playable (NOT the generic exiled_with).
     assert any(c.name == "Ponder" for _, c in v.exile_playable)
-    assert any(c.name == "Ponder" for c in hb.exiled_with)
     assert any(a.label == "cast Ponder from exile" for a in legal_actions(v))
     # the badge is exposed in the snapshot
     assert any(e.get("exiled_by") == "Hoarding Broodlord" for e in v.snapshot()["exile"])
@@ -1455,3 +1455,139 @@ def test_fixed_config_copy_token_is_a_real_copy():
     assert v.has_keyword(tok, "Flying") and v.has_keyword(tok, "Lifelink")
     acts = build_card(tok.card).battlefield_actions(v, tok)
     assert any("pay 7 life" in a.label for a in acts)   # Griselbrand's real ability
+
+
+def test_opponent_life_lost_this_turn():
+    """opponent_life_lost_this_turn() = life the opponent lost since turn start;
+    resets each turn; a fixed-config start begins at 0."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    assert g.opponent_life_lost_this_turn() == 0
+    g.damage_opponent(3)
+    g.opponent_life -= 1               # a drain
+    assert g.opponent_life_lost_this_turn() == 4
+    g.reset_turn_counters()            # new turn -> baseline resets
+    assert g.opponent_life_lost_this_turn() == 0
+
+
+def test_fixed_config_model_accepts_exile_objects_and_copy_tokens():
+    """Regression: FixedConfig must validate exile entries that are {name,
+    exiled_with} objects (the 'Cannot start: [object Object]' 422) and carry the
+    copy-token / make-creature fields on battlefield entries."""
+    from mtg_goldfish.session.models import FixedConfig
+    fc = FixedConfig.model_validate({
+        "battlefield": [
+            {"name": "Superior Spider-Man", "counters": {"lore": 1}},
+            {"name": "Griselbrand", "token": True, "copy_of": "Griselbrand",
+             "keywords": ["Flying"], "make_creature": False},
+            {"name": "Wishclaw Talisman", "make_creature": True,
+             "set_power": 5, "set_toughness": 5},
+        ],
+        "exile": [{"name": "Summon: Bahamut", "exiled_with": "Superior Spider-Man"}, "Duress"],
+    })
+    dumped = fc.model_dump()
+    assert dumped["exile"][0] == {"name": "Summon: Bahamut", "exiled_with": "Superior Spider-Man"}
+    assert dumped["exile"][1] == "Duress"
+    assert dumped["battlefield"][1]["copy_of"] == "Griselbrand"
+    assert dumped["battlefield"][2]["make_creature"] and dumped["battlefield"][2]["set_power"] == 5
+
+
+def test_fixed_config_make_creature_and_set_pt():
+    """Editor "Make a creature" / "Set power/toughness": a noncreature permanent
+    becomes a creature (keeping its other types) with the chosen P/T; an existing
+    creature's P/T is overridden."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                         card=card("Emet-Selch, Unsundered"))]
+    for n in ["Wishclaw Talisman", "Psychic Frog"]:
+        entries.append(DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=card(n)))
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    fixed = {"turn": 4, "phase": "precombat_main", "battlefield": [
+        {"name": "Wishclaw Talisman", "make_creature": True, "set_power": 5, "set_toughness": 5},
+        {"name": "Psychic Frog", "set_power": 9, "set_toughness": 9},
+    ]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    w = next(p for p in v.battlefield if p.name == "Wishclaw Talisman")
+    f = next(p for p in v.battlefield if p.name == "Psychic Frog")
+    assert w.is_creature_now and "artifact" in w.type_line.lower()   # still an artifact
+    assert v.effective_power(w) == 5 and v.effective_toughness(w) == 5
+    assert v.effective_power(f) == 9 and v.effective_toughness(f) == 9
+
+
+def test_fixed_config_added_card_into_play():
+    """"Add card": an arbitrary (non-deck) card placed on the battlefield is built
+    from its carried data as a real permanent with its implementation; a
+    nonpermanent is placed too (sandbox) without crashing."""
+    from mtg_goldfish.session.models import FixedConfig
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    base = new_game_from_deck(Deck(name="t", entries=[DeckEntry(
+        quantity=1, board=DeckBoard.COMMANDER, card=card("Emet-Selch, Unsundered"))]))
+    gt, lb = card("Grave Titan"), card("Lightning Bolt")
+    fc = FixedConfig.model_validate({"turn": 4, "phase": "precombat_main", "battlefield": [
+        {"name": "Grave Titan", "added": True, "type_line": gt.type_line,
+         "power": gt.power, "toughness": gt.toughness, "colors": list(gt.colors or []),
+         "oracle_text": gt.oracle_text, "keywords": list(gt.keywords or [])},
+        {"name": "Lightning Bolt", "added": True, "type_line": lb.type_line},
+    ]})
+    v = _build_fixed_variant(base, fc.model_dump(), seed=1)
+    titan = next(p for p in v.battlefield if p.name == "Grave Titan")
+    bolt = next(p for p in v.battlefield if p.name == "Lightning Bolt")
+    assert not titan.is_token and v.effective_power(titan) == 6
+    assert v.has_keyword(titan, "Deathtouch")
+    assert not bolt.is_creature_now and not bolt.is_land   # a nonpermanent, placed anyway
+
+
+def test_fixed_config_exiled_with_routes_to_source_mechanism():
+    """"Exiled with X" routes the card into X's OWN exile mechanism, not a blanket
+    "playable from exile": Gwen -> playable, Aang -> airbend (recast {2}),
+    Leyline -> returns when it leaves, Superior Spider-Man -> he copies it."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.actions import legal_actions
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    def build(src, exiled):
+        entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                             card=card("Nick Fury, Agent of S.H.I.E.L.D."))]
+        for n in {src, exiled, "Island"}:
+            entries.append(DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=card(n)))
+        base = new_game_from_deck(Deck(name="t", entries=entries))
+        fixed = {"turn": 5, "phase": "precombat_main",
+                 "battlefield": [{"name": src}] + [{"name": "Island"} for _ in range(6)],
+                 "exile": [{"name": exiled, "exiled_with": src}]}
+        return _build_fixed_variant(base, fixed, seed=1)
+
+    # Gwen Stacy -> playable from exile
+    v = build("Gwen Stacy // Ghost-Spider", "Ponder")
+    assert any(c.name == "Ponder" for _, c in v.exile_playable)
+    assert any("from exile" in a.label for a in legal_actions(v))
+
+    # Aang -> airbend (recast for {2}); NOT exile_playable
+    v = build("Aang, Swift Savior // Aang and La, Ocean's Fury", "Psychic Frog")
+    assert any(c.name == "Psychic Frog" for c in v.airbend_exile) and not v.exile_playable
+
+    # Leyline Binding -> returns to the battlefield when Leyline leaves
+    v = build("Leyline Binding", "Grave Titan")
+    ley = next(p for p in v.battlefield if p.name == "Leyline Binding")
+    assert not any("from exile" in a.label for a in legal_actions(v))   # not playable
+    v.leaves_battlefield(ley, "graveyard"); v.settle()
+    assert v.has_permanent_named("Grave Titan")                          # returned
+    assert not any(c.name == "Grave Titan" for c in v.exile)             # left exile
+
+    # Superior Spider-Man -> he becomes a copy (adopts abilities, stays a 4/4)
+    v = build("Superior Spider-Man", "Griselbrand")
+    sm = next(p for p in v.battlefield if p.name == "Superior Spider-Man")
+    assert v.effective_power(sm) == 4 and sm.name == "Superior Spider-Man"
+    assert any("pay 7 life" in a.label for a in sm.impl.battlefield_actions(v, sm))
+
+    # the exile badge names the source even for airbend (via exile_source), using
+    # the permanent's face name.
+    v = build("Aang, Swift Savior // Aang and La, Ocean's Fury", "Psychic Frog")
+    badge = next(e for e in v.snapshot()["exile"] if e["name"] == "Psychic Frog")
+    assert badge.get("exiled_by") == "Aang, Swift Savior"

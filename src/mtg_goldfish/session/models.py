@@ -34,6 +34,30 @@ class FixedBattlefieldCard(BaseModel):
     # Index (within `battlefield`) of the permanent this one is attached to
     # (auras enchanting / equipment equipping it); None = unattached.
     attached_to: int | None = None
+    # A COPY token: the name of the card it copies. The remaining fields carry
+    # that card's data so the engine rebuilds a faithful token copy (picking up
+    # the card's implementation by name).
+    copy_of: str | None = None
+    # An ARBITRARY card added into play (not from the deck; may be a nonpermanent
+    # placed for sandbox testing). Its data is carried in the fields below.
+    added: bool = False
+    oracle_text: str = ""
+    mana_cost: str = ""
+    cmc: float = 0
+    keywords: list[str] = Field(default_factory=list)
+    # An explicit P/T override, and/or turning a noncreature permanent into a
+    # creature (editor: "Make a creature" / "Set power/toughness").
+    set_power: int | None = None
+    set_toughness: int | None = None
+    make_creature: bool = False
+
+
+class FixedExileCard(BaseModel):
+    """An exiled card that was exiled WITH a battlefield permanent (by name), so
+    the engine sets it up in that permanent's mechanism (playable from exile /
+    recorded in its exiled_with)."""
+    name: str
+    exiled_with: str | None = None
 
 
 class FixedConfig(BaseModel):
@@ -44,7 +68,8 @@ class FixedConfig(BaseModel):
     battlefield: list[FixedBattlefieldCard] = Field(default_factory=list)
     hand: list[str] = Field(default_factory=list)
     graveyard: list[str] = Field(default_factory=list)
-    exile: list[str] = Field(default_factory=list)
+    # Each exile entry is either a bare card name or {name, exiled_with}.
+    exile: list[str | FixedExileCard] = Field(default_factory=list)
     # Explicit top of the library (in order, top first). The remaining deck
     # cards are shuffled in below.
     library: list[str] = Field(default_factory=list)

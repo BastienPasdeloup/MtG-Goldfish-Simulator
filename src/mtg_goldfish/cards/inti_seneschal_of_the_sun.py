@@ -14,6 +14,10 @@ from .registry import register
 class IntiSeneschalOfTheSun(Card):
     card_name = "Inti, Seneschal of the Sun"
 
+    def link_exiled_card(self, state, perm, card):
+        # Exiled with Inti -> you may play it from exile.
+        state.exile_playable.append((perm.uid, card))
+
     def on_you_attack(self, state, perm):
         attackers = [p for p in state.battlefield
                      if p.uid in state.attackers and p.is_creature_now]

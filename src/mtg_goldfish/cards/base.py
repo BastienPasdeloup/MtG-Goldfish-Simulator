@@ -308,6 +308,18 @@ class Card:
     def on_leave(self, state: "GameState", permanent: "Permanent") -> None:
         """Called when this permanent leaves the battlefield."""
 
+    def link_exiled_card(self, state: "GameState", perm: "Permanent", card) -> None:
+        """Associate an already-exiled `card` with THIS permanent's exile
+        mechanism (used by the Fixed-config editor's "exiled with X"). Override to
+        route it into the right bucket:
+          * "you may play it from exile" -> state.exile_playable.append((perm.uid, card))
+          * "recast for {2}" (airbend)   -> state.airbend_exile.append(card)
+          * "enters as a copy of it"     -> adopt its characteristics on `perm`
+        The default records it in `perm.exiled_with` (a generic association that a
+        card with an "exiled cards return when I leave" / "reanimate them" clause,
+        e.g. Parallax Wave / Leyline Binding / Emperor of Bones, acts on)."""
+        perm.exiled_with.append(card)
+
     def on_resolve(self, state: "GameState") -> None:
         """Called when a non-permanent spell (instant/sorcery) resolves."""
 

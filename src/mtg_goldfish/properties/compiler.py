@@ -71,6 +71,10 @@ and puts N cards into your hand", "Atraxa's ETB puts at least 3 cards to hand", 
 off the top) and do NOT use len(state.hand) / cards_in_hand() (that counts ALL \
 cards in hand, including ones already there). For Atraxa specifically the ETB is \
 a TRIGGERED ability: cards_put_in_hand_by(state.commander_name(), via_kind="triggered") >= 3.
+- Opponent life: "the opponent lost at least N life this turn" / "deal N damage \
+to the opponent this turn" -> state.opponent_life_lost_this_turn() >= N. For their \
+CURRENT total ("opponent at N or less", "opponent is dead") -> state.opponent_life \
+<= N (0 = dead). state.life is always YOUR life, never the opponent's.
 - Commander leaving play / the command zone: "the commander leaves play / dies / \
 is exiled" -> commander_left_play(...); "the commander leaves play AND returns \
 to the command zone" (or just "returns to the command zone") -> \

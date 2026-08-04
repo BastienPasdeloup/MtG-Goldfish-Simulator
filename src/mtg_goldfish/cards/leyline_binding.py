@@ -20,3 +20,13 @@ class LeylineBinding(Card):
     def on_etb(self, state, permanent):
         state.emit("Leyline Binding: no opponent permanent to exile (trigger fizzles)")
         return None
+
+    def on_leave(self, state, permanent):
+        # "Exile until Leyline Binding leaves the battlefield" — the exiled card(s)
+        # (set up in a Fixed-config scenario via link_exiled_card) return to play.
+        for card in permanent.exiled_with:
+            if card in state.exile:
+                state.exile.remove(card)
+            state.put_on_battlefield(card)
+            state.emit(f"Leyline Binding leaves: {card.name} returns to the battlefield")
+        permanent.exiled_with.clear()

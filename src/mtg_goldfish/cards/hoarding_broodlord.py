@@ -19,6 +19,10 @@ from .registry import register
 class HoardingBroodlord(Card):
     card_name = "Hoarding Broodlord"
 
+    def link_exiled_card(self, state, perm, card):
+        # Exiled with Hoarding Broodlord -> you may play it from exile.
+        state.exile_playable.append((perm.uid, card))
+
     def on_etb(self, state, permanent):
         cands = state.search_library(lambda c: True)
         names = sorted({c.name for c in cands})

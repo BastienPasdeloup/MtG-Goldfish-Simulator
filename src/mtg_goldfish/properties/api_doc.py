@@ -217,10 +217,16 @@ Per-turn tallies (reset each turn):
   state.lands_played_this_turn -> int
   state.cards_drawn_this_turn -> int
   state.storm_count -> int
+  state.opponent_life_lost_this_turn() -> int   # life the opponent lost THIS turn
+                                                # (combat + burn + drain, net loss)
+
+Life totals:
+  state.life -> int                 # YOUR life
+  state.opponent_life -> int        # the (phantom) opponent's current life; starts
+                                    # at 20. It only goes DOWN in a goldfish.
 
 Game-long:
   state.cards_drawn -> int          # total cards drawn this game
-  state.life -> int
   state.turn -> int
   state.energy -> int               # energy counters currently in the pool
 

@@ -23,6 +23,10 @@ class GwenStacy(Card):
             state.emit(f"Gwen Stacy: exile {card.name} — playable while she remains")
         return None
 
+    def link_exiled_card(self, state, perm, card):
+        # Exiled with Gwen -> you may play it from exile while she remains.
+        state.exile_playable.append((perm.uid, card))
+
     def battlefield_actions(self, state, perm):
         return transform_actions(
             state, perm,

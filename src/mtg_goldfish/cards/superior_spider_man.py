@@ -13,6 +13,19 @@ from .registry import register
 class SuperiorSpiderMan(Card):
     card_name = "Superior Spider-Man"
 
+    def link_exiled_card(self, state, perm, card):
+        # Exiled with Superior Spider-Man is his Mind Swap copy source: he entered
+        # as a copy of that creature. Per the card he KEEPS his 4/4 body and name,
+        # so we adopt the copied creature's ABILITIES (swap the impl) while his
+        # printed card — P/T, name, types — stays, keeping board queries exact.
+        from .registry import build_card
+
+        perm.exiled_with.append(card)          # the copy source (also drives the badge)
+        if card.is_creature:
+            perm.impl = build_card(card)
+            state.emit(f"Superior Spider-Man: copy of {card.name} "
+                       "(gains its abilities; stays a 4/4 Superior Spider-Man)")
+
     def cast_actions(self, state):
         from ..engine.actions import begin_cast, can_afford, resolve_to_battlefield
 

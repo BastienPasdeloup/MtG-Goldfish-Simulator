@@ -283,6 +283,10 @@ class GameState:
     # unlike exile_playable). Any face of a modal card that has a mana cost may
     # be cast this way. The card objects also live in `exile` (zone display).
     airbend_exile: list[CardData] = field(default_factory=list)
+    # id(card) -> name of the permanent it was "exiled with" (Fixed-config setup),
+    # so the exile-zone badge names the source regardless of which mechanism the
+    # card was routed into (playable / airbend / return-on-leave / copy).
+    exile_source: dict = field(default_factory=dict)
     # For a spell cast as a non-front face (e.g. an airbended modal card's back
     # side): id(card) -> face index, so the board viewer shows the face actually
     # being cast on the stack (not the default front). Cleared when the card
@@ -292,6 +296,9 @@ class GameState:
     mana_pool: ManaPool = field(default_factory=ManaPool)
     life: int = 20
     opponent_life: int = 20   # phantom opponent for combat damage / Bolt etc.
+    # The opponent's life at the START of the current turn, so a property can ask
+    # "opponent lost >= N life this turn" (opponent_life_lost_this_turn()).
+    opp_life_turn_start: int = 20
 
     turn: int = 0
     phase: Phase = Phase.UNTAP
@@ -414,10 +421,12 @@ class GameState:
             stack=list(self.stack),
             exile_playable=list(self.exile_playable),
             airbend_exile=list(self.airbend_exile),
+            exile_source=dict(self.exile_source),
             stack_face=dict(self.stack_face),
             mana_pool=self.mana_pool.copy(),
             life=self.life,
             opponent_life=self.opponent_life,
+            opp_life_turn_start=self.opp_life_turn_start,
             turn=self.turn,
             phase=self.phase,
             on_the_play=self.on_the_play,
@@ -631,8 +640,14 @@ class GameState:
         self.extra_combats = 0
         self.gy_play_all = False
         self.gy_exile_replace = False
+        self.opp_life_turn_start = self.opponent_life
         for p in self.battlefield:
             p.turn_flags.clear()
+
+    def opponent_life_lost_this_turn(self) -> int:
+        """How much life the opponent has lost since the start of this turn
+        (combat damage, burn, drain, ...). Zero if they didn't lose any."""
+        return max(0, self.opp_life_turn_start - self.opponent_life)
 
     def graveyard_plays_enabled(self) -> bool:
         """You may play lands / cast spells from your graveyard this turn
@@ -1515,7 +1530,7 @@ class GameState:
         from exile (`exile_playable`, source still on the battlefield) or is
         associated with a permanent via `exiled_with`. Cards exiled with no live
         source (a spell exiled and gone) carry no badge."""
-        source_by_id: dict[int, str] = {}
+        source_by_id: dict[int, str] = dict(self.exile_source)  # Fixed-config links
         for uid, card in self.exile_playable:
             perm = self.find_permanent(uid)
             if perm is not None:
