@@ -19,6 +19,7 @@ from .registry import register
 class HoardingBroodlord(Card):
     card_name = "Hoarding Broodlord"
     exiles_cards = True
+    grants_exile_convoke = True   # "Spells you cast from exile have convoke."
 
     def link_exiled_card(self, state, perm, card):
         # Exiled with Hoarding Broodlord -> you may play it from exile.

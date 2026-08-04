@@ -129,6 +129,9 @@ class Permanent:
     # effect): a list of "W"/"U"/"B"/"R"/"G" (empty = colourless). None = use the
     # card's printed colours. Read via the `colors` property.
     color_override: list | None = None
+    # A colour override that lasts only until end of turn (Fixed-config "Set
+    # color" with per-entry EOT) — cleared at cleanup along with temp P/T.
+    color_override_eot: bool = False
     # Face-down (manifest / morph): a 2/2 colourless nameless creature. Its
     # printed name/characteristics are hidden in the viewer; the 2/2 body comes
     # from `becomes`. Turning it face up clears this + becomes + color_override.
@@ -211,6 +214,7 @@ class Permanent:
             chosen=self.chosen,
             becomes=dict(self.becomes) if self.becomes is not None else None,
             color_override=list(self.color_override) if self.color_override is not None else None,
+            color_override_eot=self.color_override_eot,
             face_down=self.face_down,
             is_copy=self.is_copy,
             uid=self.uid,

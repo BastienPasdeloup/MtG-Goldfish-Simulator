@@ -1518,6 +1518,40 @@ def test_fixed_config_make_creature_and_set_pt():
     assert v.effective_power(f) == 9 and v.effective_toughness(f) == 9
 
 
+def test_fixed_config_face_down_reason_and_alter_eot():
+    """Face-down reasons: manifest/morph are a plain 2/2 colourless creature,
+    disguise/cloak add ward {2}. Per-entry "until end of turn" makes the shared
+    P/T-and-type `becomes` temporary; a colour override records its EOT flag."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER,
+                         card=card("Emet-Selch, Unsundered"))]
+    for n in ["Sol Ring", "Llanowar Elves", "Wishclaw Talisman"]:
+        entries.append(DeckEntry(quantity=2, board=DeckBoard.MAINBOARD, card=card(n)))
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    fixed = {"turn": 4, "phase": "precombat_main", "battlefield": [
+        {"name": "Sol Ring", "face_down": "disguise"},
+        {"name": "Llanowar Elves", "set_power": 5, "set_power_eot": True},
+        {"name": "Wishclaw Talisman", "make_creature": True, "make_creature_eot": True,
+         "set_creature_types": ["Zombie", "Wizard"]},
+        {"name": "Sol Ring", "set_colors": ["R"], "set_colors_eot": True},
+    ]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    disg, elf, wish, red = v.battlefield
+    # Disguise: a 2/2 colourless creature with ward.
+    assert disg.face_down and v.effective_power(disg) == 2 and v.effective_toughness(disg) == 2
+    assert v.has_keyword(disg, "ward") and disg.colors == []
+    # EOT power override -> the animation is not permanent (cleanup will drop it).
+    assert v.effective_power(elf) == 5 and elf.becomes.get("permanent") is False
+    # Make-a-creature (0/0) with subtypes, marked EOT -> non-permanent becomes.
+    assert wish.is_creature_now and "Zombie Wizard" in wish.type_line
+    assert wish.becomes.get("permanent") is False
+    # EOT colour override records its flag (cleared at cleanup by the engine).
+    assert red.colors == ["R"] and red.color_override_eot is True
+
+
 def test_fixed_config_added_card_into_play():
     """"Add card": an arbitrary (non-deck) card placed on the battlefield is built
     from its carried data as a real permanent with its implementation; a

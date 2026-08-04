@@ -1550,12 +1550,10 @@ function fcFrame() {
       };
     }
     const face = fcFace(it.name, it.transformed);  // active (front/back) face
-    // "Alter card": P/T override (set_power/set_toughness), make-a-creature or
-    // a full type override (set_types), and a colour override (set_colors).
-    const isCreature = it.set_types ? it.set_types.includes("Creature")
-      : (face.is_creature || !!it.make_creature);
-    const isLand = it.set_types ? it.set_types.includes("Land")
-      : (it.make_creature ? false : face.is_land);
+    // "Alter card": P/T override (set_power/set_toughness), make-a-creature, a
+    // creature-subtype override (set_creature_types) and a colour override.
+    const isCreature = face.is_creature || !!it.make_creature;
+    const isLand = it.make_creature ? false : face.is_land;
     const hasPT = it.set_power != null && it.set_toughness != null;
     return {
       ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
@@ -1652,31 +1650,84 @@ function fcCounterKinds(it) {
 
 // Right-click menu on a battlefield permanent — entries are gated by the
 // card's type and the current phase (game-rules-valid actions only).
-// Prompt for a custom power/toughness. `makeCreature` also turns a noncreature
-// permanent into a creature (adds the Creature type). Tokens edit their native
-// power/toughness/type_line; deck cards use set_power/set_toughness/make_creature.
-// The card types that can be toggled by "Alter card > Set types".
-const FC_CARD_TYPES = ["Creature", "Artifact", "Enchantment", "Land", "Planeswalker", "Battle"];
+// The reasons a permanent can be turned face down. All become a 2/2 colourless
+// nameless creature; disguise / cloak additionally have ward {2}. The value is
+// stored in `face_down` (empty = face up).
+const FC_FACE_DOWN_REASONS = [
+  ["manifest", "Manifest (2/2)"],
+  ["morph", "Morph (2/2)"],
+  ["megamorph", "Megamorph (2/2)"],
+  ["disguise", "Disguise (2/2, ward {2})"],
+  ["cloak", "Cloak (2/2, ward {2})"],
+  ["facedown", "Face down (2/2)"],
+];
 
-// The "Alter card" submenu: P/T, creature-ness, colours (checkbox submenu),
-// types (checkbox submenu), and an "until end of turn" toggle for all of it.
+// A short list of common creature subtypes offered by "Set creature types"
+// (any other can be typed in via "Add type…").
+const FC_CREATURE_TYPES = ["Zombie", "Human", "Elf", "Goblin", "Dragon", "Angel",
+  "Demon", "Beast", "Wizard", "Warrior", "Soldier", "Vampire", "Spirit"];
+
+// The "Alter card" submenu. Each change has its OWN "until end of turn" toggle
+// (like the Add-keyword menu): power / toughness (creatures only), make-a-creature
+// (0/0, noncreatures only), creature subtypes (creatures only) and colours.
 function fcAlterMenu(idx, it, creatureNow) {
   const sub = [];
   if (creatureNow) {
+    // Power / toughness only make sense once it IS a creature.
+    sub.push(fcStatRow(idx, it, "power"));
+    sub.push(fcStatRow(idx, it, "toughness"));
+    sub.push({ label: "Set creature types", submenu: fcCreatureTypeSubmenu(idx, it) });
     if (!it.token && it.make_creature) {
       sub.push({ label: "Revert to noncreature", onClick: () => {
-        it.make_creature = false; it.set_power = null; it.set_toughness = null; renderConfigBuilder(); } });
+        it.make_creature = false; it.make_creature_eot = false;
+        it.set_power = null; it.set_toughness = null;
+        it.set_power_eot = false; it.set_toughness_eot = false; renderConfigBuilder(); } });
     }
   } else {
-    sub.push({ label: "Make a creature (set P/T)…", onClick: () => fcPromptPT(idx, true) });
+    // Make a creature: a 0/0 (no prompt), with its own EOT toggle.
+    sub.push({ kwrow: {
+      label: "Make a creature (0/0)",
+      checked: () => it.token ? (it.type_line || "").toLowerCase().includes("creature") : !!it.make_creature,
+      eot: () => !!it.make_creature_eot,
+      onToggle: () => fcToggleMakeCreature(it),
+      onEot: () => { it.make_creature_eot = !it.make_creature_eot; renderConfigBuilder(); },
+    } });
   }
-  sub.push({ label: "Set power…", onClick: () => fcSetStat(idx, "power") });
-  sub.push({ label: "Set toughness…", onClick: () => fcSetStat(idx, "toughness") });
   sub.push({ label: "Set colors", submenu: fcColorSubmenu(idx) });
-  sub.push({ label: "Set types", submenu: fcTypeSubmenu(idx) });
-  sub.push({ sep: true }, { label: "Until end of turn", checked: !!it.alter_eot, keepOpen: true,
-    onClick: () => { it.alter_eot = !it.alter_eot; renderConfigBuilder(); return !!it.alter_eot; } });
   return sub;
+}
+
+// Toggle a noncreature into a 0/0 creature (deck cards: make_creature; tokens:
+// edit the type line + native P/T).
+function fcToggleMakeCreature(it) {
+  if (it.token) {
+    const [head, tail] = (it.type_line || "Token").split("—");
+    if (head.toLowerCase().includes("creature")) {
+      it.type_line = head.replace(/creature/ig, "").replace(/\s+/g, " ").trim() + (tail ? " — " + tail.trim() : "");
+    } else {
+      it.type_line = (head.trim() + " Creature" + (tail ? " — " + tail.trim() : "")).trim();
+      it.power = 0; it.toughness = 0;
+    }
+  } else {
+    it.make_creature = !it.make_creature;
+    if (it.make_creature) { it.set_power = 0; it.set_toughness = 0; }
+  }
+  renderConfigBuilder();
+}
+
+// A "Set power/toughness" row with its own EOT toggle (kwrow). Clicking the row
+// prompts for the value; the EOT button toggles set_<stat>_eot.
+function fcStatRow(idx, it, stat) {
+  const skey = it.token ? stat : "set_" + stat;
+  const ekey = "set_" + stat + "_eot";
+  const cap = stat[0].toUpperCase() + stat.slice(1);
+  return { kwrow: {
+    label: "Set " + stat,
+    checked: () => it[skey] != null,
+    eot: () => !!it[ekey],
+    onToggle: () => fcSetStat(idx, stat),
+    onEot: () => { it[ekey] = !it[ekey]; renderConfigBuilder(); },
+  } };
 }
 
 // Prompt for a single stat (power / toughness). Tokens edit their native field;
@@ -1699,7 +1750,7 @@ function fcColorSubmenu(idx) {
   const it = fcPerm(idx);
   const field = (it.token || it.added) ? "colors" : "set_colors";
   const cur = () => it[field] || [];
-  return "WUBRG".split("").map((c) => ({
+  const rows = "WUBRG".split("").map((c) => ({
     label: FC_COLOR_NAME[c] || c, checked: cur().includes(c), keepOpen: true,
     onClick: () => {
       const arr = it[field] = [...cur()];
@@ -1708,51 +1759,48 @@ function fcColorSubmenu(idx) {
       return arr.includes(c);
     },
   }));
+  // A single "until end of turn" toggle for the colour change (deck cards only —
+  // tokens/added cards carry their colour natively, no EOT).
+  if (!(it.token || it.added)) {
+    rows.push({ sep: true }, { label: "Until end of turn", checked: !!it.set_colors_eot, keepOpen: true,
+      onClick: () => { it.set_colors_eot = !it.set_colors_eot; renderConfigBuilder(); return !!it.set_colors_eot; } });
+  }
+  return rows;
 }
 
-// The permanent's current card types (left of the "—").
-function fcCurrentTypes(it) {
-  const head = ((it.token || it.added) ? (it.type_line || "")
-    : (fcCardMeta(it.name).type_line || "")).split("—")[0];
-  return FC_CARD_TYPES.filter((t) => head.includes(t));
-}
-
-// Checkbox submenu of the card types ("Set types" -> a `set_types` override).
-function fcTypeSubmenu(idx) {
-  const it = fcPerm(idx);
-  const cur = () => it.set_types || fcCurrentTypes(it);
-  return FC_CARD_TYPES.map((t) => ({
+// Checkbox submenu of creature subtypes ("Set creature types" -> the words RIGHT
+// of the "—", stored in set_creature_types). Any other type can be typed in; a
+// single "until end of turn" toggle covers the whole change.
+function fcCreatureTypeSubmenu(idx, it) {
+  const cur = () => it.set_creature_types || fcCurrentCreatureTypes(it);
+  const list = FC_CREATURE_TYPES.slice();
+  cur().forEach((t) => { if (!list.includes(t)) list.push(t); });
+  const rows = list.map((t) => ({
     label: t, checked: cur().includes(t), keepOpen: true,
     onClick: () => {
-      const arr = it.set_types = [...cur()];
+      const arr = it.set_creature_types = [...cur()];
       const j = arr.indexOf(t); if (j >= 0) arr.splice(j, 1); else arr.push(t);
       renderConfigBuilder();
       return arr.includes(t);
     },
   }));
+  rows.push({ sep: true }, { label: "Add type…", onClick: () => {
+    const t = (prompt("Creature type to add (e.g. Zombie):", "") || "").trim();
+    if (!t) return;
+    const arr = it.set_creature_types = [...cur()];
+    if (!arr.includes(t)) arr.push(t);
+    renderConfigBuilder();
+  } });
+  rows.push({ label: "Until end of turn", checked: !!it.set_creature_types_eot, keepOpen: true,
+    onClick: () => { it.set_creature_types_eot = !it.set_creature_types_eot; renderConfigBuilder(); return !!it.set_creature_types_eot; } });
+  return rows;
 }
 
-function fcPromptPT(idx, makeCreature) {
-  const it = fcPerm(idx); if (!it) return;
-  const curP = it.token ? (it.power ?? 0) : (it.set_power ?? 0);
-  const curT = it.token ? (it.toughness ?? 0) : (it.set_toughness ?? 0);
-  const p = prompt("Power:", String(curP)); if (p === null) return;
-  const t = prompt("Toughness:", String(curT)); if (t === null) return;
-  const pw = parseInt(p, 10), tf = parseInt(t, 10);
-  if (Number.isNaN(pw) || Number.isNaN(tf)) { alert("Enter whole numbers."); return; }
-  if (it.token) {
-    it.power = pw; it.toughness = tf;
-    if (makeCreature) {
-      const parts = (it.type_line || "Token").split("—");
-      if (!parts[0].toLowerCase().includes("creature")) {
-        it.type_line = (parts[0].trim() + " Creature" + (parts[1] ? " — " + parts[1].trim() : "")).trim();
-      }
-    }
-  } else {
-    it.set_power = pw; it.set_toughness = tf;
-    if (makeCreature) it.make_creature = true;
-  }
-  renderConfigBuilder();
+// The permanent's current creature subtypes (words RIGHT of the "—").
+function fcCurrentCreatureTypes(it) {
+  const tl = (it.token || it.added) ? (it.type_line || "") : (fcCardMeta(it.name).type_line || "");
+  const tail = tl.split("—")[1] || "";
+  return tail.trim().split(/\s+/).filter(Boolean);
 }
 
 function fcPermMenu(p, e) {
@@ -1788,12 +1836,19 @@ function fcPermMenu(p, e) {
     });
   }
 
-  // Turn face down / up — manifest / morph (a 2/2 colourless nameless creature).
-  items.push({ label: it.face_down ? "Turn face up" : "Turn face down",
-    onClick: () => { it.face_down = !it.face_down; renderConfigBuilder(); } });
+  // Turn face down — a 2/2 colourless nameless creature. Different REASONS set
+  // slightly different characteristics (disguise / cloak are 2/2 with ward {2}),
+  // so it's a submenu; already-face-down shows a single "Turn face up".
+  if (it.face_down) {
+    items.push({ label: `Turn face up (was ${it.face_down})`,
+      onClick: () => { it.face_down = ""; renderConfigBuilder(); } });
+  } else {
+    items.push({ label: "Turn face down", submenu: FC_FACE_DOWN_REASONS.map(([val, lbl]) => ({
+      label: lbl, onClick: () => { it.face_down = val; renderConfigBuilder(); } })) });
+  }
 
-  // Alter card — power/toughness, creature-ness, colours & types (checkboxes),
-  // optionally only until end of turn.
+  // Alter card — power/toughness, creature-ness, colours & creature types,
+  // each with its own "until end of turn" toggle.
   const creatureNow = face.is_creature || !!it.make_creature;
   items.push({ label: "Alter card", submenu: fcAlterMenu(idx, it, creatureNow) });
 
@@ -1989,14 +2044,17 @@ function fcZoneMenu(zone, idx, name, e) {
   if (zone === "library") return fcLibraryMenu(idx, e);
   const items = [{ label: `Remove ${name} from ${zone}`, onClick: () => fcRemove(zone, idx) }];
   if (zone === "exile") {
-    // Link this exiled card to a permanent on the battlefield, so the game sets
-    // it up in that card's mechanism (playable from exile / exiled with it).
+    // Link this exiled card to a card that EXILES cards — chosen from all such
+    // cards in the DECK (not just those in play). If the named exiler is also on
+    // the battlefield the engine wires up its exile mechanism (playable from
+    // exile); otherwise the link just records the attribution badge.
     const fc = state.fixedConfig;
     const entry = fc.exile[idx];
     const linked = entry && typeof entry === "object" ? entry.exiled_with : null;
-    const perms = [...new Set(fc.battlefield.map((b) => b.name))];
-    if (perms.length) {
-      items.push({ label: "Exiled with…", submenu: perms.map((pn) => ({
+    const exilers = [...new Set(state.cards.filter((c) => c.exiles).map((c) => c.name))].sort();
+    if (linked && !exilers.includes(linked)) exilers.push(linked);  // keep an already-set link visible
+    if (exilers.length) {
+      items.push({ label: "Exiled with…", submenu: exilers.map((pn) => ({
         label: pn + (pn === linked ? "  ✓" : ""),
         onClick: () => fcSetExileSource(idx, pn),
       })) });
@@ -3116,9 +3174,9 @@ function tile(name, opts = {}) {
   // face. Non-token cards use their card image.
   const img = state.imageMap[name];
   if (opts.face_down) {
-    // Manifest / morph: a featureless card back (a 2/2 colourless creature).
+    // Face down: the SAME card back used for unknown library cards.
     t.classList.add("face-down-tile");
-    t.append(el("div", { className: "fd-face" }, el("div", { className: "fd-mark", textContent: "2/2" })));
+    t.append(el("div", { className: "fd-face" }));
   } else if (opts.token && !img) {
     // No scan: compose a card face with name, type line, textbox and P/T,
     // tinted by the token's colour(s).

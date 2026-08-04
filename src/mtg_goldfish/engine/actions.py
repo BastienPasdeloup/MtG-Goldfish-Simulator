@@ -147,16 +147,76 @@ def can_afford(state: GameState, cost: ManaCost, extra_life: int = 0,
 
 
 # --------------------------------------------------------------------------
+# Convoke — tap untapped creatures to pay {1} or a matching-colour pip. We tap
+# the MINIMUM number of creatures needed to make the rest of the cost affordable
+# with mana (so a spell you can already pay for taps none), which is always a
+# safe payment option.
+# --------------------------------------------------------------------------
+def _convoke_reduce_once(cost: ManaCost, creature) -> tuple[ManaCost, bool]:
+    pips = dict(cost.pips)
+    for color in (creature.card.colors or []):
+        if pips.get(color, 0) > 0:
+            pips[color] -= 1
+            return ManaCost(generic=cost.generic,
+                            pips=tuple((c, n) for c, n in pips.items() if n > 0)), True
+    if cost.generic > 0:
+        return ManaCost(generic=cost.generic - 1, pips=cost.pips), True
+    return cost, False
+
+
+def _convoke_plan(state: GameState, cost: ManaCost, exclude_uids):
+    creatures = [c for c in state.battlefield if c.is_creature_now and not c.tapped
+                 and c.uid not in (exclude_uids or set())]
+    used, reduced = [], cost
+    while not can_afford(state, reduced, exclude_uids=exclude_uids) and creatures:
+        best = None
+        for cr in creatures:
+            new, helped = _convoke_reduce_once(reduced, cr)
+            if helped:
+                best = (cr, new)
+                if new.pips != reduced.pips:  # prefer reducing a coloured pip
+                    break
+        if best is None:
+            break
+        cr, reduced = best
+        used.append(cr)
+        creatures.remove(cr)
+    if not can_afford(state, reduced, exclude_uids=exclude_uids):
+        return None
+    return used, reduced
+
+
+def can_afford_with_convoke(state, cost, extra_life=0, exclude_uids=None):
+    if extra_life and state.life <= extra_life:
+        return False
+    return _convoke_plan(state, cost, exclude_uids) is not None
+
+
+def pay_cost_with_convoke(state, cost, extra_life=0, exclude_uids=None):
+    plan = _convoke_plan(state, cost, exclude_uids)
+    if plan is None:
+        return False
+    used, reduced = plan
+    for cr in used:
+        cr.tapped = True
+        state.emit(f"convoke: tap {cr.name}")
+    return pay_cost(state, reduced, extra_life=extra_life, exclude_uids=exclude_uids)
+
+
+# --------------------------------------------------------------------------
 # Casting helpers (used by generic actions AND by card implementations)
 # --------------------------------------------------------------------------
 def begin_cast(
     state: GameState, card, cost: ManaCost, *,
-    zone: list | None = None, extra_life: int = 0, tag: str = "",
+    zone: list | None = None, extra_life: int = 0, tag: str = "", convoke: bool = False,
 ) -> bool:
     """Pay the cost, move the card from `zone` (default: hand) to the stack,
-    bump the cast counters, and fire cast triggers. Returns False if unpaid."""
+    bump the cast counters, and fire cast triggers. Returns False if unpaid.
+    `convoke` lets untapped creatures pay part of the cost (Hoarding Broodlord;
+    spells cast from exile under it)."""
     zone = state.hand if zone is None else zone
-    if not pay_cost(state, cost, extra_life=extra_life):
+    pay = pay_cost_with_convoke if convoke else pay_cost
+    if not pay(state, cost, extra_life=extra_life):
         return False
     zone.remove(card)
     state.stack.append(card)
@@ -606,6 +666,8 @@ def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]
 
     impl = _impl(card)
     out: list[Action] = []
+    # "Spells you cast from exile have convoke" (Hoarding Broodlord).
+    convoke = any(p.impl.grants_exile_convoke for p in state.battlefield)
 
     def make_play(c):
         def fn(st: GameState):
@@ -625,7 +687,9 @@ def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]
                 st.queue_entry_triggers([perm])
                 st.emit(f"play {c.name} from exile")
                 return None
-            if not begin_cast(st, c, _impl(c).cast_cost(st), zone=_ExileZone(st, entry), tag="from exile"):
+            cvk = any(p.impl.grants_exile_convoke for p in st.battlefield)
+            if not begin_cast(st, c, _impl(c).cast_cost(st), zone=_ExileZone(st, entry),
+                              tag="from exile", convoke=cvk):
                 return None
             if c.is_permanent:
                 return resolve_to_battlefield(st, c) or None
@@ -633,10 +697,12 @@ def _exile_play_actions(state: GameState, source_uid: int, card) -> list[Action]
             return _impl(c).on_resolve(st) or None
         return fn
 
+    affordable = (can_afford_with_convoke(state, impl.cast_cost(state)) if convoke
+                  else can_afford(state, impl.cast_cost(state)))
     if impl.is_land:
         if state.lands_played_this_turn < 1:
             out.append(CardAction(f"play {card.name} from exile", make_play(card)))
-    elif impl.is_castable(state) and can_afford(state, impl.cast_cost(state)):
+    elif impl.is_castable(state) and affordable:
         out.append(CardAction(f"cast {card.name} from exile", make_play(card)))
     return out
 

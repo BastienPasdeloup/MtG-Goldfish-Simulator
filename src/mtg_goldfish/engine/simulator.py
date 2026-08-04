@@ -347,6 +347,10 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             perm.temp_power = 0
             perm.temp_toughness = 0
             perm.temp_keywords.clear()
+            # An until-end-of-turn colour override ends now.
+            if perm.color_override_eot:
+                perm.color_override = None
+                perm.color_override_eot = False
             # Man-land animation ends at cleanup — but a PERMANENT animation
             # (Ba Sing Se's earthbend) stays a creature.
             if perm.becomes is not None and not perm.becomes.get("permanent"):
@@ -894,13 +898,18 @@ def _fixed_opening_hand(
     return [(hand, lib, [])]
 
 
-def _make_face_down(perm) -> None:
-    """Turn a permanent face down (manifest / morph): a 2/2 colourless nameless
-    creature. Its printed characteristics are hidden; `becomes` supplies the 2/2
-    body. (Its abilities are not stripped — a display/body approximation.)"""
+def _make_face_down(perm, reason: str = "facedown") -> None:
+    """Turn a permanent face down: a 2/2 colourless nameless creature. `reason`
+    (manifest / morph / megamorph / disguise / cloak / facedown) records HOW it
+    was turned down and sets characteristics that differ — disguise and cloak
+    make it a 2/2 with ward {2}; the rest are a plain 2/2. Its printed
+    characteristics are hidden; `becomes` supplies the 2/2 body. (Its abilities
+    are not otherwise stripped — a display/body approximation.)"""
     perm.face_down = True
     perm.becomes = {"type_line": "Creature", "power": 2, "toughness": 2, "permanent": True}
     perm.color_override = []
+    if reason in ("disguise", "cloak"):
+        perm.extra_keywords.add("ward")
 
 
 def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameState:
@@ -990,39 +999,40 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                 perm.extra_keywords.add(str(kw).lower())
             for kw in (spec.get("granted_eot") or []):
                 perm.temp_keywords.add(str(kw).lower())
-            # Editor "Alter card": override P/T, card types ("Set types"), and/or
-            # add the Creature type ("Make a creature"). All fold into a single
-            # permanent `becomes` animation (keeps the printed subtypes).
+            # Editor "Alter card": override P/T, creature subtypes ("Set creature
+            # types") and/or add the Creature card type ("Make a creature"). These
+            # fold into a single `becomes` animation. Each contributing change has
+            # its own "until end of turn" flag; the animation is temporary if ANY
+            # of them is EOT (they share one `becomes`), permanent otherwise.
             sp, st_ = spec.get("set_power"), spec.get("set_toughness")
-            set_types = spec.get("set_types")
-            if (spec.get("make_creature") or sp is not None or st_ is not None
-                    or set_types is not None):
-                from ..cards._common import _creature_type_line
-                head, sep, tail = perm.type_line.partition("—")
-                if set_types is not None:                # replace the card types
-                    tl = " ".join(set_types) + (f" — {tail.strip()}" if sep and tail.strip() else "")
-                    if spec.get("make_creature") and "creature" not in tl.split("—")[0].lower():
-                        tl = _creature_type_line(tl)
-                elif spec.get("make_creature") and "creature" not in head.lower():
-                    tl = _creature_type_line(perm.type_line)
-                else:
-                    tl = perm.type_line
+            set_ctypes = spec.get("set_creature_types")
+            mk = spec.get("make_creature")
+            if (mk or sp is not None or st_ is not None or set_ctypes is not None):
+                head, _sep, tail = perm.type_line.partition("—")
+                left = head.strip()
+                if mk and "creature" not in left.lower():
+                    left = (left + " Creature").strip()
+                right = " ".join(set_ctypes) if set_ctypes is not None else tail.strip()
+                tl = left + (f" — {right}" if right else "")
                 base_p = perm.base_power() if perm.is_creature_now else 0
                 base_t = perm.base_toughness() if perm.is_creature_now else 0
+                eot = bool(spec.get("make_creature_eot") or spec.get("set_creature_types_eot")
+                           or spec.get("set_power_eot") or spec.get("set_toughness_eot"))
                 perm.becomes = {
                     "type_line": tl,
                     "power": int(sp) if sp is not None else base_p,
                     "toughness": int(st_) if st_ is not None else base_t,
-                    # "Until end of turn" -> NOT permanent, so cleanup clears it.
-                    "permanent": not spec.get("alter_eot"),
+                    "permanent": not eot,
                 }
             if spec.get("face_down"):
-                _make_face_down(perm)
+                _make_face_down(perm, spec.get("face_down"))
             # "Set color" override (deck cards; tokens/added cards carry colour in
-            # their built CardData). Recolour for BOTH gameplay and display.
+            # their built CardData). Recolour for BOTH gameplay and display; an EOT
+            # override is cleared at cleanup.
             set_colors = spec.get("set_colors")
             if set_colors is not None and not (spec.get("token") or spec.get("added")):
                 perm.color_override = list(set_colors)
+                perm.color_override_eot = bool(spec.get("set_colors_eot"))
                 perm.card = perm.card.model_copy(update={"colors": list(set_colors)})
         placed.append(perm)
     # Resolve attachments (auras/equipment) now that all permanents exist.
@@ -1552,6 +1562,15 @@ def _simulate_game_split(
             # delay. Signal them to wind down; the caller kills the pool next.
             stop_event.set()
             return None
+        if should_skip and should_skip():
+            # Skip THIS game: abandon it instantly as an unsuccessful (timed-out)
+            # result and move to the next. Wind the workers down NOW by setting
+            # `found_event` (they treat it as "solved, stop searching") — it is
+            # cleared at the start of the next game, so the pool stays usable.
+            found_event.set()
+            ctx.timed_out = True
+            return _assemble_outcome(ctx, root, keep_nodes, shuffled, config,
+                                     game_index, False)
         if now >= hard_deadline:
             tainted = True
             if on_tainted is not None:

@@ -141,6 +141,8 @@ class Card:
     #: This card can exile cards/permanents — the Fixed-config editor offers a
     #: "Set exiled card…" entry on it (routed by `link_exiled_card`).
     exiles_cards: ClassVar[bool] = False
+    #: Static: spells you cast FROM EXILE have convoke (Hoarding Broodlord).
+    grants_exile_convoke: ClassVar[bool] = False
     #: If set, `on_phase` only fires at this phase (avoids the base
     #: "fires every phase" behaviour — see phase_stack_items). Cards that must
     #: react to several phases leave this None and gate inside on_phase.

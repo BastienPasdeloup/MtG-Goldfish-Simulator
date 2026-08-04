@@ -54,15 +54,18 @@ class FixedBattlefieldCard(BaseModel):
     # None = the card's printed colours. (For tokens / added cards the colour
     # lives in `colors` instead — those are built from the spec.)
     set_colors: list[str] | None = None
-    # A card-TYPE override (editor "Alter card > Set types"): the card types left
-    # of the "—" (e.g. ["Creature", "Artifact"]); None = the printed types.
-    set_types: list[str] | None = None
-    # Face-down (manifest / morph): a 2/2 colourless nameless creature until
-    # turned face up.
-    face_down: bool = False
-    # "Alter card" changes (P/T / types / make-creature) apply only until end of
-    # turn (the `becomes` animation is not permanent).
-    alter_eot: bool = False
+    # A creature-TYPE (subtype) override (editor "Alter card > Set creature
+    # types"): the words RIGHT of the "—" (e.g. ["Zombie", "Wizard"]).
+    set_creature_types: list[str] | None = None
+    # Face-down: how it was turned face down (manifest / morph / disguise / cloak
+    # / a plain 2/2), which sets its characteristics. Empty = not face down.
+    face_down: str = ""
+    # Per-entry "until end of turn" flags for the Alter-card changes.
+    set_power_eot: bool = False
+    set_toughness_eot: bool = False
+    make_creature_eot: bool = False
+    set_creature_types_eot: bool = False
+    set_colors_eot: bool = False
 
 
 class FixedExileCard(BaseModel):
