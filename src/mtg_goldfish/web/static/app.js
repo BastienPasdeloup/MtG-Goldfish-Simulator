@@ -2113,13 +2113,35 @@ function fcKeywordSubmenu(idx, it) {
   const isEot = (kw) => it.granted_eot.includes(kw) || it.removed_keywords_eot.includes(kw);
   const universe = [...new Set([...printed, ...it.granted, ...it.granted_eot,
     ...it.removed_keywords, ...it.removed_keywords_eot])].sort((a, b) => a.localeCompare(b));
-  const rows = universe.map((kw) => ({ kwrow: {
-    label: kw,
-    checked: () => has(kw),
-    eot: () => isEot(kw),
-    onToggle: () => toggle(kw),
-    onEot: () => toggleEot(kw),
-  } }));
+  // Replace the keyword `old` with `neu` wherever it lives (granted / granted_eot
+  // / removed …) — used by the per-row number stepper to change "ward 2" → "ward 3".
+  const replaceKw = (arrs, old, neu) => arrs.forEach((a) => {
+    const j = a.indexOf(old); if (j >= 0) a[j] = neu;
+  });
+  const rows = universe.map((kw0) => {
+    const base = fcKeywordBase(kw0);
+    const numbered = FC_NUMBERED_KEYWORDS.includes(base);
+    let key = kw0;  // this row's CURRENT full keyword (mutated by the stepper)
+    const kwrow = {
+      label: numbered ? base : kw0,          // numbered rows label with the base; value in the stepper
+      checked: () => has(key),
+      eot: () => isEot(key),
+      onToggle: () => toggle(key),
+      onEot: () => toggleEot(key),
+    };
+    if (numbered) {
+      const val = () => { const m = /\s(\d+)$/.exec(key); return m ? parseInt(m[1], 10) : 1; };
+      const setVal = (n) => {
+        n = Math.max(1, n);
+        const neu = `${base} ${n}`;
+        replaceKw([it.granted, it.granted_eot, it.removed_keywords, it.removed_keywords_eot], key, neu);
+        key = neu;
+        renderConfigBuilder();  // update the board badge (the open menu updates in place)
+      };
+      kwrow.num = { get: val, dec: () => setVal(val() - 1), inc: () => setVal(val() + 1) };
+    }
+    return { kwrow };
+  });
   const addKw = (full) => {
     drop(it.removed_keywords, full); drop(it.removed_keywords_eot, full);
     if (!printed.includes(full) && !inAny(full)) it.granted.push(full);
@@ -2131,10 +2153,9 @@ function fcKeywordSubmenu(idx, it) {
       const param = FC_KEYWORD_PARAMS[fcKeywordBase(kw)];
       const hasParam = /\s/.test(kw);  // already typed "ward 2" / "protection from red"
       if (param && !hasParam) {
-        // Second step IN THE SAME WINDOW: pick the keyword's parameter.
-        if (param.number) fcStrNumberStep(`${kw} — value`, 1, (n) => { addKw(`${kw} ${n}`); });
-        else if (param.from) fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); });
-        return true;  // keep the picker open for the parameter step
+        if (param.number) { addKw(`${kw} 1`); return; }  // add with default 1 — adjust via the per-row −/+
+        // A "from …" parameter (protection) is a CHOICE — pick it in the same window.
+        if (param.from) { fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); }); return true; }
       }
       addKw(kw);
     }) });
@@ -2516,9 +2537,26 @@ function buildMenu(items) {
       const k = it.kwrow;
       const chk = el("span", { className: "ctx-check", textContent: k.checked() ? "✓" : "" });
       const eot = el("button", { className: "ctx-eot" + (k.eot() ? " on" : ""), title: "until end of turn", textContent: "EOT" });
-      const row = el("div", { className: "ctx-item ctx-kwrow" }, chk,
-        el("span", { className: "ctx-label", textContent: k.label }), eot);
-      const sync = () => { chk.textContent = k.checked() ? "✓" : ""; eot.classList.toggle("on", k.eot()); };
+      const parts = [chk, el("span", { className: "ctx-label", textContent: k.label })];
+      // A parameterised keyword (ward N, rampage N, annihilator N…) shows a
+      // per-row −/+ stepper for its value.
+      let numVal = null;
+      const sync = () => {
+        chk.textContent = k.checked() ? "✓" : "";
+        eot.classList.toggle("on", k.eot());
+        if (numVal) numVal.textContent = String(k.num.get());
+      };
+      if (k.num) {
+        numVal = el("b", { className: "ctx-val", textContent: String(k.num.get()) });
+        const stepBtn = (sym, fn) => {
+          const b = el("button", { className: "ctx-step", textContent: sym });
+          b.onclick = (ev) => { ev.stopPropagation(); fn(); sync(); };
+          return b;
+        };
+        parts.push(stepBtn("−", k.num.dec), numVal, stepBtn("+", k.num.inc));
+      }
+      parts.push(eot);
+      const row = el("div", { className: "ctx-item ctx-kwrow" }, ...parts);
       row.onclick = (ev) => { ev.stopPropagation(); k.onToggle(); sync(); };
       eot.onclick = (ev) => { ev.stopPropagation(); k.onEot(); sync(); };
       menu.append(row);
