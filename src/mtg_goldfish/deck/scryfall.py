@@ -135,6 +135,39 @@ class ScryfallClient:
         except Exception:
             return None
 
+    def _oldest_raw(self, client: "httpx.Client", name: str) -> dict | None:
+        """The EARLIEST paper printing of `name` (so images use the first
+        published art). Oracle text on Scryfall is the current wording for every
+        printing, so only the art/set differs. Returns None if the exact-name
+        prints search finds nothing (caller falls back to /cards/named)."""
+        try:
+            resp = client.get(f"{SCRYFALL_API}/cards/search", params={
+                "q": f'!"{name}" game:paper', "unique": "prints",
+                "order": "released", "dir": "asc"})
+            if resp.status_code == 200:
+                data = resp.json().get("data") or []
+                if data:
+                    return data[0]
+        except Exception:  # noqa: BLE001 - best-effort; fall back below
+            pass
+        return None
+
+    def _fetch_raw(self, client: "httpx.Client", name: str) -> dict | None:
+        """Resolve `name` to a raw Scryfall card, preferring the earliest paper
+        printing, then falling back to /cards/named (exact → fuzzy → front face)."""
+        raw = self._oldest_raw(client, name)
+        if raw is not None:
+            return raw
+        resp = client.get(f"{SCRYFALL_API}/cards/named", params={"exact": name})
+        if resp.status_code != 200:
+            resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": name})
+        if resp.status_code != 200 and "//" in name:
+            # Double-faced cards: exact/fuzzy on the full "Front // Back" name
+            # often fails; the front face resolves.
+            front = name.split("//")[0].strip()
+            resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": front})
+        return resp.json() if resp.status_code == 200 else None
+
     def get_named(self, name: str, refresh: bool = False) -> CardData:
         """Resolve a single card by (fuzzy-tolerant) exact name. `refresh` skips
         the cache read (used to repopulate cards fetched before a schema change,
@@ -143,26 +176,22 @@ class ScryfallClient:
         if cached:
             return cached
         with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=20) as client:
-            resp = client.get(f"{SCRYFALL_API}/cards/named", params={"exact": name})
-            if resp.status_code != 200:
-                resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": name})
-            if resp.status_code != 200 and "//" in name:
-                # Double-faced cards: exact/fuzzy on the full "Front // Back"
-                # name often fails; the front face resolves.
-                front = name.split("//")[0].strip()
-                resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": front})
-            if resp.status_code != 200:
-                raise ScryfallError(f"Scryfall lookup failed for {name!r}: {resp.status_code}")
-            card = card_data_from_scryfall(resp.json())
+            raw = self._fetch_raw(client, name)
+            if raw is None:
+                raise ScryfallError(f"Scryfall lookup failed for {name!r}")
+            card = card_data_from_scryfall(raw)
             self._write_cache(card)
             time.sleep(self.throttle_s)
             return card
 
     def get_collection(self, names: list[str]) -> dict[str, CardData]:
-        """Resolve many cards, batching uncached names through /cards/collection.
-
-        Returns a mapping keyed by the *requested* name. Names Scryfall cannot
-        resolve are simply absent from the result.
+        """Resolve many cards. Uncached names are fetched ONE AT A TIME so each
+        can use its EARLIEST paper printing (first-published art — the batch
+        /cards/collection endpoint can't order by release). Slower on the very
+        first import of a deck; every load after is served from the on-disk cache.
+        Names that fall through the per-card path are batch-resolved so a fetch
+        failure never drops a card. Result is keyed by the *requested* name;
+        unresolvable names are simply absent.
         """
         result: dict[str, CardData] = {}
         missing: list[str] = []
@@ -177,27 +206,32 @@ class ScryfallClient:
             return result
 
         with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=30) as client:
-            for start in range(0, len(missing), _COLLECTION_BATCH):
-                batch = missing[start : start + _COLLECTION_BATCH]
+            still_missing: list[str] = []
+            for name in missing:
+                raw = self._fetch_raw(client, name)
+                if raw is None:
+                    still_missing.append(name)
+                    continue
+                card = card_data_from_scryfall(raw)
+                self._write_cache(card)
+                result[name] = card
+                time.sleep(self.throttle_s)
+
+            # Fallback: anything the per-card path couldn't resolve, batch-resolve
+            # (default printing) so no card is silently dropped.
+            for start in range(0, len(still_missing), _COLLECTION_BATCH):
+                batch = still_missing[start : start + _COLLECTION_BATCH]
                 payload = {"identifiers": [{"name": n} for n in batch]}
                 resp = client.post(f"{SCRYFALL_API}/cards/collection", json=payload)
                 if resp.status_code != 200:
-                    raise ScryfallError(
-                        f"Scryfall collection request failed: {resp.status_code}"
-                    )
-                body = resp.json()
-                # Match returned cards back to requested names (case-insensitive).
+                    continue
                 requested = {n.lower(): n for n in batch}
-                for raw in body.get("data", []):
+                for raw in resp.json().get("data", []):
                     card = card_data_from_scryfall(raw)
                     self._write_cache(card)
-                    key = requested.get(card.name.lower())
-                    if key is None:
-                        # Fuzzy/alias: fall back to matching any requested substring.
-                        key = next(
-                            (orig for low, orig in requested.items() if low in card.name.lower()),
-                            card.name,
-                        )
+                    key = requested.get(card.name.lower()) or next(
+                        (orig for low, orig in requested.items() if low in card.name.lower()),
+                        card.name)
                     result[key] = card
                 time.sleep(self.throttle_s)
         return result

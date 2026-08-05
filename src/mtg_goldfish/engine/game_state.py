@@ -344,6 +344,10 @@ class GameState:
     # being cast on the stack (not the default front). Cleared when the card
     # leaves the stack; keyed by id() (card objects live the whole game).
     stack_face: dict[int, int] = field(default_factory=dict)
+    # id(card) -> the name of what a spell/ability on the stack TARGETS, so the
+    # replay's stack shows "→ target". Set at cast time (begin_cast target=…);
+    # keyed by id() like stack_face.
+    stack_targets: dict[int, str] = field(default_factory=dict)
 
     mana_pool: ManaPool = field(default_factory=ManaPool)
     life: int = 20
@@ -482,6 +486,7 @@ class GameState:
             airbend_exile=list(self.airbend_exile),
             exile_source=dict(self.exile_source),
             stack_face=dict(self.stack_face),
+            stack_targets=dict(self.stack_targets),
             mana_pool=self.mana_pool.copy(),
             life=self.life,
             opponent_life=self.opponent_life,
@@ -1137,8 +1142,15 @@ class GameState:
         # (permanently, or until end of turn) — it wins over the printed set.
         if k in perm.removed_keywords or k in perm.removed_keywords_eot:
             return False
-        return (k in (x.lower() for x in perm.card.keywords)
-                or k in perm.temp_keywords or k in perm.extra_keywords)
+        # Match numbered keywords by base too: "ward" is satisfied by "ward 2".
+        def _has(kwset) -> bool:
+            for x in kwset:
+                xl = x.lower()
+                if xl == k or xl.startswith(k + " "):
+                    return True
+            return False
+        return (_has(perm.card.keywords) or _has(perm.temp_keywords)
+                or _has(perm.extra_keywords))
 
     # ---- energy (a pool: gained/spent, never emptied by phases) -------------
     def add_energy(self, n: int) -> None:
@@ -1662,7 +1674,11 @@ class GameState:
     def snapshot(self) -> dict:
         def stack_item_view(item):
             if isinstance(item, StackAbility):
-                return item.public()
+                v = item.public()
+                tgt = self.stack_targets.get(id(item))
+                if tgt:
+                    v["target"] = tgt
+                return v
             # A spell cast as a non-front face (airbended modal back side) shows
             # the face actually being cast, so the viewer picks its image/name.
             name = item.name
@@ -1675,6 +1691,7 @@ class GameState:
                 "kind": "spell",
                 "trigger": None,
                 "ability": name,
+                "target": self.stack_targets.get(id(item)),
             }
 
         return {

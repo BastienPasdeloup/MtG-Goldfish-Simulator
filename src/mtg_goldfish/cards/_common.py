@@ -1167,7 +1167,7 @@ def reanimation_aura_actions(
         def make(name=name):
             def fn(st: "GameState"):
                 aura = next((c for c in st.hand if c.name == self.card_name), None)
-                if aura is None or not begin_cast(st, aura, cost):
+                if aura is None or not begin_cast(st, aura, cost, target=name):
                     return None
                 if aura in st.stack:
                     st.stack.remove(aura)
@@ -1176,11 +1176,13 @@ def reanimation_aura_actions(
                     st.to_graveyard(aura)
                     return None
                 st.graveyard.remove(creature)
-                perm = st.put_on_battlefield(
-                    creature, tapped=tapped, fire_etb=False,
-                    announce=f"{self.card_name}: reanimate {name}{note}")
+                # Put the creature down and ATTACH the Aura BEFORE announcing, so
+                # the reanimate frame already shows the Aura on the creature (it
+                # was appearing one frame late).
+                perm = st.put_on_battlefield(creature, tapped=tapped, fire_etb=False)
                 aura_perm = st.put_on_battlefield(aura, fire_etb=False)
                 aura_perm.attached_to = perm.uid
+                st.emit(f"{self.card_name}: reanimate {name}{note}")
                 st.queue_entry_triggers([perm])
                 return st.settle()
             return fn

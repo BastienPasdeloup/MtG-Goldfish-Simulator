@@ -66,6 +66,15 @@ INSTANT_STEPS: tuple[Phase, ...] = (
 #: single-action resolution from bloating the serialized tree).
 _MAX_NODE_STEPS = 40
 
+#: Cap the number of explored-states-tree NODES recorded per game. The SEARCH is
+#: unbounded (this only limits what's kept for the tree viz), but the recorded
+#: tree is what dominates the saved session size — an unbounded run that explores
+#: millions of states produced ~20 MB+ of gzipped tree PER GAME (600 MB sessions).
+#: best-first finds a success early, so the winning line is recorded before the
+#: cap; `tree_truncated` tells the viewer the rest was elided. Per-worker in the
+#: parallel path, so the merged tree can reach ~cap × workers.
+_TREE_NODE_CAP = 30000
+
 #: Sentinel used in a fixed-config `library` list for an UNKNOWN card pinned at
 #: that depth (a random card fills it) — see _build_fixed_variant. Mirrored in
 #: the web UI as FC_UNKNOWN.
@@ -1278,7 +1287,8 @@ def _seed_game(
         deadline = time.monotonic() + config.timeout_per_game_s
     ctx = _SearchContext(properties, deadline, should_stop=should_stop,
                          should_skip=should_skip, instant_speed=config.instant_speed,
-                         game_index=game_index, on_progress=on_progress)
+                         game_index=game_index, on_progress=on_progress,
+                         tree_cap=_TREE_NODE_CAP)
     # Root of the recorded search tree: the game before any hand is kept.
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root
@@ -1692,6 +1702,9 @@ def _simulate_game_split(
             # cleared at the start of the next game, so the pool stays usable.
             found_event.set()
             ctx.timed_out = True
+            le, lc = _live_parallel_counts(progress_arr, num_parts, shallow_explored, shallow_considered)
+            ctx.branches_explored = max(ctx.branches_explored, le)
+            ctx.branches_considered = max(ctx.branches_considered, lc)
             return _assemble_outcome(ctx, root, keep_nodes, shuffled, config,
                                      game_index, False)
         if now >= hard_deadline:
@@ -1755,7 +1768,28 @@ def _simulate_game_split(
     # counts as timed out, like any other deadline cut.
     ctx.timed_out = (not success) and (
         ctx.timed_out or tainted or any(r["timed_out"] for r in results))
+    # Floor the reported counts at what the workers actually explored (from the
+    # shared live counters): a tainted game loses the wedged workers' returned
+    # results, so the merge above would otherwise undercount to ~the shallow prefix.
+    le, lc = _live_parallel_counts(progress_arr, num_parts, shallow_explored, shallow_considered)
+    ctx.branches_explored = max(ctx.branches_explored, le)
+    ctx.branches_considered = max(ctx.branches_considered, lc)
     return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index, success)
+
+
+def _live_parallel_counts(progress_arr, num_parts, shallow_e, shallow_c) -> tuple[int, int]:
+    """The workers' running branch counts (from the shared list) merged the same
+    way the final tally is (shallow prefix once + each worker's own subtrees).
+    Used as a FLOOR on the reported counts so a game whose workers were abandoned
+    (wedged/tainted — their futures never returned to be merged) still reports the
+    exploration it actually did, instead of collapsing to just the shallow count
+    (the "live counter hit millions but the final says 10k" bug)."""
+    if progress_arr is None:
+        return 0, 0
+    we = [progress_arr[2 * p] for p in range(num_parts)]
+    wc = [progress_arr[2 * p + 1] for p in range(num_parts)]
+    return (shallow_e + sum(max(0, x - shallow_e) for x in we),
+            shallow_c + sum(max(0, x - shallow_c) for x in wc))
 
 
 def _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event, progress):

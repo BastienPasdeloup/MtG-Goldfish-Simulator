@@ -50,6 +50,39 @@ const FC_PHASES = [
   ["begin_combat", "Beginning of combat"], ["declare_attackers", "Declare attackers"],
   ["postcombat_main", "Postcombat main"], ["end_step", "End step"],
 ];
+
+// The turn as a clickable TIMELINE (viewer + fixed editor). Each segment `v` is
+// the phase VALUE it sets; `covers` are the engine phase values that highlight it
+// (so combat sub-steps light the Attack segment, untap the Upkeep segment, …).
+const PHASE_TIMELINE = [
+  { v: "upkeep", label: "Upkeep", covers: ["untap", "upkeep"] },
+  { v: "draw", label: "Draw", covers: ["draw"] },
+  { v: "precombat_main", label: "Main 1", covers: ["precombat_main"] },
+  { v: "begin_combat", label: "Combat", covers: ["begin_combat"] },
+  { v: "declare_attackers", label: "Attack", covers: ["declare_attackers", "declare_blockers", "combat_damage", "end_combat"] },
+  { v: "postcombat_main", label: "Main 2", covers: ["postcombat_main"] },
+  { v: "end_step", label: "End", covers: ["end_step", "cleanup"] },
+];
+function phaseTimelineIdx(value) {
+  const i = PHASE_TIMELINE.findIndex((s) => s.covers.includes(value));
+  return i >= 0 ? i : 2;  // default to Main 1
+}
+// Build the timeline element. `editable` makes each segment clickable → onPick(v).
+function phaseTimeline(value, opts = {}) {
+  const cur = phaseTimelineIdx(value);
+  const bar = el("div", { className: "phase-timeline" + (opts.editable ? " editable" : "") });
+  PHASE_TIMELINE.forEach((seg, i) => {
+    const s = el("div", {
+      className: "phase-seg" + (i === cur ? " current" : "") + (i < cur ? " past" : ""),
+      textContent: seg.label,
+      title: opts.editable ? "set phase: " + seg.label : seg.label,
+    });
+    if (opts.editable && opts.onPick) s.onclick = () => opts.onPick(seg.v);
+    bar.append(s);
+  });
+  return bar;
+}
+function fcSetPhase(value) { state.fixedConfig.phase = value; renderConfigBuilder(); }
 const FC_MANA = ["W", "U", "B", "R", "G", "C"];
 // A fixed-config library entry that is an UNKNOWN card pinned at that depth (a
 // random card fills it at game start). Rendered as a card back. Mirrors the
@@ -68,6 +101,14 @@ const FC_COUNTER_KINDS = ["+1/+1", "-1/-1", "loyalty", "charge"];
 const FC_KEYWORDS = ["flying", "first strike", "double strike", "trample",
   "lifelink", "haste", "vigilance", "deathtouch", "reach", "menace",
   "hexproof", "indestructible"];
+
+// Keywords that carry a NUMBER (ward 2, rampage 3, annihilator 6, …). Adding one
+// prompts for the value with a −/+ stepper; the badge shows "keyword N".
+const FC_NUMBERED_KEYWORDS = ["ward", "rampage", "annihilator", "afflict", "absorb",
+  "bushido", "fading", "vanishing", "frenzy", "modular", "poisonous", "renown",
+  "toxic", "crew", "devour"];
+// The base keyword of a possibly-numbered keyword ("ward 2" -> "ward").
+function fcKeywordBase(kw) { return String(kw).replace(/\s+\d+$/, "").toLowerCase(); }
 
 const MAX_FIXED_HAND = 7;
 
@@ -1558,10 +1599,11 @@ function fcFrame() {
     };
     const pm0 = fcCounterPT(it.counters);  // net ±1/±1 counters (added to P/T badges)
     if (it.face_down) {  // a 2/2 colourless nameless creature — alterations still apply
-      // Dedupe: disguise/cloak's ward is already in `granted` (see fcApplyFaceDown);
-      // a single "ward" ability, never two.
+      // Dedupe: disguise/cloak's ward {2} is already in `granted` (see
+      // fcApplyFaceDown) as "ward 2"; a single ward ability, never two.
       const kws = [...new Set([...(it.granted || []), ...(it.granted_eot || [])])];
-      if ((it.face_down === "disguise" || it.face_down === "cloak") && !kws.includes("ward")) kws.push("ward");
+      if ((it.face_down === "disguise" || it.face_down === "cloak")
+          && !kws.some((k) => fcKeywordBase(k) === "ward")) kws.push("ward 2");
       return {
         ...common, name: "Face-down creature", token: false, commander: false,
         face_down: true, is_creature: true, is_land: false, is_aura: false,
@@ -1626,16 +1668,20 @@ function fcFrame() {
     if (removed.includes(c.name)) return;  // shuffled into the library — not here
     for (let k = 0; k < Math.max(0, c.quantity - fcUsage(c.name)); k++) command.push(c.name);
   });
+  // A commander shuffled into the deck (commander_removed) counts toward the
+  // library total (and the shuffled "rest"), same as the backend does.
+  const removedCmdCount = fcCommanderCards().reduce(
+    (s, c) => s + (removed.includes(c.name) ? Math.max(0, c.quantity - fcUsage(c.name)) : 0), 0);
   const library = mainboardCards().reduce(
-    (s, c) => s + Math.max(0, c.quantity - fcUsage(c.name)), 0);
-  const phaseLabel = (FC_PHASES.find(([v]) => v === fc.phase) || [null, fc.phase])[1];
+    (s, c) => s + Math.max(0, c.quantity - fcUsage(c.name)), 0) + removedCmdCount;
   return {
     battlefield, hand: fc.hand.slice(), graveyard: fc.graveyard.slice(),
     // Show the "exiled by" badge in the editor/preview too (exiled_with -> exiled_by).
     exile: fc.exile.map((e) => (typeof e === "string" ? e : { name: e.name, exiled_by: e.exiled_with })),
     command_zone: command, stack: [],
     library_top: (fc.library || []).slice(),  // editor: the set top of the library
-    turn: fc.turn, phase: phaseLabel, desc: "",
+    // Ship the phase VALUE (not a label) — the timeline maps it to a segment.
+    turn: fc.turn, phase: fc.phase, desc: "",
     life: fc.life, opponent_life: fc.opponent_life, library,
     counters: { storm: fc.storm_count }, mana_pool: fc.mana_pool, energy: fc.energy || 0,
   };
@@ -1736,7 +1782,7 @@ function fcApplyFaceDown(it, reason) {
   it.set_power = 2; it.set_toughness = 2;
   it.set_colors = [];          // colourless
   it.set_creature_types = [];  // no creature types
-  if (reason === "disguise" || reason === "cloak") it.granted = ["ward"];
+  if (reason === "disguise" || reason === "cloak") it.granted = ["ward 2"];  // ward {2}
   renderConfigBuilder();
 }
 
@@ -1998,12 +2044,21 @@ function fcKeywordSubmenu(idx, it) {
     onToggle: () => toggle(kw),
     onEot: () => toggleEot(kw),
   } }));
+  const addKw = (full) => {
+    drop(it.removed_keywords, full); drop(it.removed_keywords_eot, full);
+    if (!printed.includes(full) && !inAny(full)) it.granted.push(full);
+    renderConfigBuilder();
+  };
   rows.push({ sep: true }, { label: "Add keyword…", onClick: () =>
     fcStringPicker("Add a keyword", fcAllKeywords(), (kw) => {
       kw = kw.trim().toLowerCase(); if (!kw) return;
-      drop(it.removed_keywords, kw); drop(it.removed_keywords_eot, kw);
-      if (!printed.includes(kw) && !inAny(kw)) it.granted.push(kw);
-      renderConfigBuilder();
+      // A numbered keyword (ward, rampage, annihilator, …) asks for its value.
+      if (FC_NUMBERED_KEYWORDS.includes(fcKeywordBase(kw)) && !/\s\d+$/.test(kw)) {
+        fcCountPopup(window.innerWidth / 2 - 90, window.innerHeight / 2 - 40, {
+          label: `${kw} — value`, max: 99, min: 1, value: 1, button: "Add",
+          onConfirm: (n) => addKw(`${kw} ${n}`),
+        });
+      } else addKw(kw);
     }) });
   return rows;
 }
@@ -2166,9 +2221,19 @@ function fcCountPopup(x, y, opts) {
     if (ev.key === "Enter") { ev.preventDefault(); confirm(); }
     else if (ev.key === "Escape") { ev.preventDefault(); close(); }
   };
+  // −/+ stepper buttons around the input.
+  const step = (d) => (ev) => {
+    ev.stopPropagation();
+    let n = (parseInt(input.value, 10) || 0) + d;
+    input.value = String(Math.max(opts.min ?? 1, Math.min(n, max)));
+    input.focus();
+  };
+  const minus = el("button", { className: "num-popup-step", textContent: "−", onclick: step(-1) });
+  const plus = el("button", { className: "num-popup-step", textContent: "+", onclick: step(1) });
+  if (opts.min != null) { input.min = String(opts.min); input.value = String(opts.value ?? opts.min); }
   pop.append(
     el("div", { className: "num-popup-label", textContent: opts.label }),
-    el("div", { className: "num-popup-row" }, input, btn));
+    el("div", { className: "num-popup-row" }, minus, input, plus, btn));
   document.body.append(pop);
   pop.style.left = Math.min(x, window.innerWidth - pop.offsetWidth - 8) + "px";
   pop.style.top = Math.min(y, window.innerHeight - pop.offsetHeight - 8) + "px";
@@ -2472,7 +2537,7 @@ function renderConfigBuilder() {
       onCommandMenu: fcCommandMenu,
       onFieldMenu: fcBattlefieldMenu,
       onSetTurn: fcSetTurn,
-      onPhase: fcAdjustPhase,
+      onPickPhase: fcSetPhase,
       onSet: fcSet,
       onSetMana: fcSetMana,
       commanderTax,
@@ -3601,6 +3666,8 @@ function normalizePileItem(raw) {
     exiled_by: asName(raw?.exiled_by) || null,
     // Time counters remaining on a suspended card (real suspend).
     suspend: typeof raw?.suspend === "number" ? raw.suspend : null,
+    // What a spell/ability ON THE STACK targets (shown as a "→ target" badge).
+    target: asName(raw?.target) || null,
   };
 }
 
@@ -3647,6 +3714,14 @@ function pile(items, edit = {}) {
       card.append(el("div", {
         className: "suspend-badge", textContent: "⧗" + item.suspend,
         title: `Suspended — ${item.suspend} time counter${item.suspend === 1 ? "" : "s"} left`,
+      }));
+    }
+    // A spell/ability on the stack that targets something: "→ target" badge.
+    if (item.target) {
+      card.classList.add("has-exile-src");
+      card.append(el("div", {
+        className: "target-badge", textContent: "→ " + item.target,
+        title: `targets ${item.target}`,
       }));
     }
     if (edit.onMenu) {
@@ -3824,13 +3899,13 @@ function renderBoard(f, edit = {}) {
 
   const line1 = el("div", { className: "board-header step-line" });
   if (ed) {
+    // Fixed editor: turn number + a CLICKABLE phase timeline (sets fc.phase).
     line1.append(hstat("turn ", f.turn, edit.onSetTurn, 1));
-    const pdec = el("button", { className: "fc-step", textContent: "◀" }); pdec.onclick = () => edit.onPhase(-1);
-    const pinc = el("button", { className: "fc-step", textContent: "▶" }); pinc.onclick = () => edit.onPhase(1);
-    line1.append(el("span", { className: "fc-hstat" }, pdec,
-      el("b", { className: "turn", textContent: f.phase }), pinc));
+    line1.append(phaseTimeline(f.phase, { editable: true, onPick: edit.onPickPhase }));
   } else {
-    line1.append(el("span", { className: "turn", textContent: `Turn ${f.turn} · ${f.phase}` }),
+    // Replay: turn number + the phase timeline (current phase highlighted) + action.
+    line1.append(el("span", { className: "turn", textContent: `Turn ${f.turn}` }),
+      phaseTimeline(f.phase, {}),
       el("span", { className: "action", textContent: f.desc || "" }));
   }
   const ints = el("div", { className: "board-header" },

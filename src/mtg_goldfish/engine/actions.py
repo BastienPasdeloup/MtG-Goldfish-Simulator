@@ -209,17 +209,21 @@ def pay_cost_with_convoke(state, cost, extra_life=0, exclude_uids=None):
 def begin_cast(
     state: GameState, card, cost: ManaCost, *,
     zone: list | None = None, extra_life: int = 0, tag: str = "", convoke: bool = False,
+    target: str = "",
 ) -> bool:
     """Pay the cost, move the card from `zone` (default: hand) to the stack,
     bump the cast counters, and fire cast triggers. Returns False if unpaid.
     `convoke` lets untapped creatures pay part of the cost (Hoarding Broodlord;
-    spells cast from exile under it)."""
+    spells cast from exile under it). `target` names what the spell targets, so
+    the replay's stack shows "→ target"."""
     zone = state.hand if zone is None else zone
     pay = pay_cost_with_convoke if convoke else pay_cost
     if not pay(state, cost, extra_life=extra_life):
         return False
     zone.remove(card)
     state.stack.append(card)
+    if target:
+        state.stack_targets[id(card)] = target
     state.spells_cast_this_turn += 1
     state.storm_count += 1
     if card.is_creature:
@@ -235,7 +239,8 @@ def begin_cast(
     # value AT cast time, which can't be reached AFTER it resolves.
     state.note_event("cast", card.name, card=card, storm=state.storm_count,
                      is_creature=card.is_creature, is_land=card.is_land)
-    state.emit(f"cast {card.name}{f' ({tag})' if tag else ''} (on the stack)")
+    state.emit(f"cast {card.name}{f' ({tag})' if tag else ''}"
+               f"{f' → {target}' if target else ''} (on the stack)")
     state.queue_cast_triggers(card)
     state.settle_nonbranching(f"cast triggers for {card.name}")
     return True
@@ -249,6 +254,7 @@ def resolve_to_battlefield(
     permanent before ETB triggers fire (e.g. {'escaped': 1})."""
     if card in state.stack:
         state.stack.remove(card)
+    state.stack_targets.pop(id(card), None)  # left the stack — drop its target
     state.note_event("spell_resolved", card.name)
     # Effects until control returns to the search (its own entry included) are
     # attributed to this spell; ETB triggers override with their own context.
@@ -275,6 +281,7 @@ def resolve_to_battlefield(
 def resolve_to_graveyard(state: GameState, card) -> None:
     if card in state.stack:
         state.stack.remove(card)
+    state.stack_targets.pop(id(card), None)  # left the stack — drop its target
     state.note_event("spell_resolved", card.name)
     # The spell's `on_resolve` effects run right after this; attribute them to
     # the spell ("Cultivate put 2 lands into play") until settle() clears it.

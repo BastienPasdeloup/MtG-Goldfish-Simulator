@@ -1621,6 +1621,41 @@ def test_fixed_config_removes_printed_keyword():
     assert not v.has_keyword(eot, "flying") and "flying" in eot.removed_keywords_eot
 
 
+def test_numbered_keyword_matches_by_base():
+    """A numbered keyword (ward 2 / annihilator 6) satisfies a base-keyword check
+    (has_keyword('ward'))."""
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    p = g.put_on_battlefield(card("Grave Titan"))
+    p.extra_keywords.add("ward 2")
+    assert g.has_keyword(p, "ward") and g.has_keyword(p, "ward 2")
+    assert not g.has_keyword(p, "flying")
+
+
+def test_animate_dead_shows_aura_attached_in_reanimate_frame():
+    """The Animate Dead reanimate frame already shows the Aura ATTACHED to the
+    creature (it was appearing one frame late) and names its TARGET on the stack."""
+    from mtg_goldfish.cards.registry import build_card
+    from mtg_goldfish.engine.game_state import GameState
+    from mtg_goldfish.engine.phases import Phase
+    g = GameState(); g.phase = Phase.PRECOMBAT_MAIN; g.turn = 3
+    for _ in range(2):
+        s = g.put_on_battlefield(card("Swamp")); s.summoning_sick = False
+    g.graveyard.append(card("Grave Titan"))
+    g.hand.append(card("Animate Dead"))
+    act = build_card(card("Animate Dead")).cast_actions(g)[0]
+    res = act.apply(g); gg = res[0] if res else g
+    # Target named on the stack (E5).
+    onstack = [f for f in gg.log if "(on the stack)" in f.get("desc", "")]
+    assert onstack and onstack[-1]["stack"][0].get("target") == "Grave Titan"
+    # Aura attached to the titan IN the reanimate frame (E4).
+    frame = [f for f in gg.log if "reanimate" in f.get("desc", "")][-1]
+    bf = frame["battlefield"]
+    titan = next(x for x in bf if x["name"] == "Grave Titan")
+    aura = next(x for x in bf if x["name"] == "Animate Dead")
+    assert aura["attached_to"] == titan["uid"]
+
+
 def test_reanimation_aura_needs_a_target_to_cast():
     """An Aura can't be cast with no legal target: Animate Dead is uncastable with
     an empty graveyard (also blocks the graveyard-recast path) and castable once a
