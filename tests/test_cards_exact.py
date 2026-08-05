@@ -1601,6 +1601,57 @@ def test_profane_tutor_real_suspend():
         assert any(c.name in ("Sol Ring", "Dark Ritual") for c in b.hand)
 
 
+def test_reanimation_aura_needs_a_target_to_cast():
+    """An Aura can't be cast with no legal target: Animate Dead is uncastable with
+    an empty graveyard (also blocks the graveyard-recast path) and castable once a
+    creature card is there."""
+    from mtg_goldfish.cards.registry import build_card
+    from mtg_goldfish.engine.game_state import GameState
+    g = GameState()
+    ad = build_card(card("Animate Dead"))
+    assert ad.is_castable(g) is False           # empty graveyard -> no target
+    g.graveyard.append(card("Grave Titan"))
+    assert ad.is_castable(g) is True
+
+
+def test_exile_play_requires_source_only_when_stated():
+    """A card that says "for as long as it remains exiled" (Hoarding Broodlord)
+    stays playable after its source leaves; "as long as you control ~" (Gwen)
+    does not."""
+    from mtg_goldfish.engine.game_state import GameState
+    from mtg_goldfish.engine.phases import Phase
+    from mtg_goldfish.engine.actions import legal_actions
+
+    def still_playable(source_name):
+        g = GameState(); g.phase = Phase.PRECOMBAT_MAIN; g.turn = 3
+        for _ in range(4):
+            s = g.put_on_battlefield(card("Swamp")); s.summoning_sick = False
+        src = g.put_on_battlefield(card(source_name)); src.summoning_sick = False
+        g.exile.append(ritual := card("Dark Ritual"))
+        g.grant_exile_play(src, ritual)
+        g.leaves_battlefield(src, "graveyard")   # the source leaves play
+        return any("from exile" in a.label for a in legal_actions(g))
+
+    assert still_playable("Hoarding Broodlord") is True
+    assert still_playable("Gwen Stacy // Ghost-Spider") is False
+
+
+def test_game_outcome_reports_elapsed_time():
+    """Each game's outcome carries the wall-clock time its search took (the
+    per-game "Time" column)."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import SimulationConfig, simulate_game
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=card("Emet-Selch, Unsundered"))]
+    for n in ["Sol Ring", "Swamp", "Island"]:
+        entries.append(DeckEntry(quantity=20, board=DeckBoard.MAINBOARD, card=card(n)))
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    cfg = SimulationConfig(num_games=1, timeout_per_game_s=1.0, base_seed=3)
+    out = simulate_game(base, [], cfg, 0)
+    assert out.elapsed_s >= 0.0 and isinstance(out.elapsed_s, float)
+
+
 def test_fixed_config_exiled_with_phantom_source_activates_mechanism():
     """"Exiled with > Other card…": an exiler NOT on the battlefield (an
     opponent's Aang) still activates its mechanism via a phantom source — airbend

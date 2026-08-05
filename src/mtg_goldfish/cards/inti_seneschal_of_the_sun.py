@@ -17,7 +17,7 @@ class IntiSeneschalOfTheSun(Card):
 
     def link_exiled_card(self, state, perm, card):
         # Exiled with Inti -> you may play it from exile.
-        state.exile_playable.append((perm.uid, card))
+        state.grant_exile_play(perm, card)
 
     def on_you_attack(self, state, perm):
         attackers = [p for p in state.battlefield
@@ -51,5 +51,5 @@ class IntiSeneschalOfTheSun(Card):
             return
         card = state.library.pop(0)
         state.exile.append(card)
-        state.exile_playable.append((perm.uid, card))
+        state.grant_exile_play(perm, card)
         state.emit(f"Inti: exile {card.name} — may play it")

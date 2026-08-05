@@ -143,6 +143,12 @@ class Card:
     exiles_cards: ClassVar[bool] = False
     #: Static: spells you cast FROM EXILE have convoke (Hoarding Broodlord).
     grants_exile_convoke: ClassVar[bool] = False
+    #: For a card that exiles cards you "may play" (exile_playable): whether the
+    #: source must REMAIN in play for the card to stay playable. True for "as long
+    #: as you control ~" / "until your next turn while ~ lives" (Gwen, Inti);
+    #: False for "for as long as that card remains exiled" (Hoarding Broodlord),
+    #: which stays playable even if the source leaves.
+    exile_play_requires_source: ClassVar[bool] = True
     #: If set, `on_phase` only fires at this phase (avoids the base
     #: "fires every phase" behaviour — see phase_stack_items). Cards that must
     #: react to several phases leave this None and gate inside on_phase.

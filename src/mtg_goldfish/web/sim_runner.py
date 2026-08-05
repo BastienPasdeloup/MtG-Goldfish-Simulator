@@ -217,6 +217,7 @@ class SimulationRunner:
                     "hand": outcome.opening_hand,
                     "branches_explored": outcome.branches_explored,
                     "branches_considered": outcome.branches_considered,
+                    "elapsed_s": outcome.elapsed_s,
                     "tree_gz": tree_gz,
                     "tree_truncated": outcome.tree_truncated,
                     "bugs": outcome.bugs,
@@ -252,6 +253,15 @@ class SimulationRunner:
                     "game_index": game_index, "hand": hand,
                 })
 
+            def on_progress(game_index: int, explored: int, considered: int, elapsed_s: float) -> None:
+                # Live in-game ticker (~every 2s): update the running row's
+                # explored/considered counts and elapsed time.
+                HUB.broadcast_threadsafe(loop, session.id, {
+                    "type": "game_progress", "result_id": result_id,
+                    "game_index": game_index, "branches_explored": explored,
+                    "branches_considered": considered, "elapsed_s": elapsed_s,
+                })
+
             sim_config = SimulationConfig(
                 num_games=config.num_games,
                 timeout_per_game_s=config.timeout_per_game_s,
@@ -276,6 +286,7 @@ class SimulationRunner:
                     should_stop=handle.stop.is_set,
                     should_skip=handle.skip.is_set,
                     on_game_start=on_game_start,
+                    on_progress=on_progress,
                     game_indices=game_indices,
                     initial_stats=initial_stats,
                 )

@@ -500,10 +500,11 @@ table.runs .big { font-weight: 700; color: var(--accent); }
 table.viz-runs td, table.viz-runs th { padding: .35rem .6rem; }
 table.viz-runs .numc { text-align: right; font-variant-numeric: tabular-nums; }
 table.viz-runs .cc { text-align: center; }
-table.viz-runs th.sortable { cursor: pointer; user-select: none; }
-table.viz-runs th.sortable:hover { color: var(--text); }
+table.viz-runs th.sortable, table.sessions-table th.sortable { cursor: pointer; user-select: none; }
+table.viz-runs th.sortable:hover, table.sessions-table th.sortable:hover { color: var(--text); }
 .sortv { opacity: .4; font-size: 9px; margin-left: 3px; }
 .sortv.active { opacity: 1; color: var(--accent); }
+.time-cell .live-time { color: var(--accent); font-variant-numeric: tabular-nums; }
 table.viz-runs td.status { font-weight: 700; font-size: 14px; }
 table.viz-runs td.status.ok { color: var(--good); }
 table.viz-runs td.status.ko { color: var(--bad); }

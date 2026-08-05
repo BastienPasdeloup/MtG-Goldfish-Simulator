@@ -148,6 +148,8 @@ class GameOutcome:
     tree_truncated: bool = False
     # Exceptions hit during this game's search (see _SearchContext.record_bug).
     bugs: list[dict] = field(default_factory=list)
+    # Wall-clock seconds this game's search took (per-game "Time" column).
+    elapsed_s: float = 0.0
 
 
 @dataclass
@@ -178,9 +180,16 @@ class _SearchContext:
         should_stop: Callable[[], bool] | None = None,
         should_skip: Callable[[], bool] | None = None,
         instant_speed: bool = False,
+        game_index: int = 0,
+        on_progress: Callable[[int, int, int, float], None] | None = None,
     ) -> None:
         self.properties = properties
         self.deadline = deadline
+        # Live in-game progress: `on_progress(game_index, explored, considered,
+        # elapsed_s)` is called from the search hot path, throttled to ~2s.
+        self.game_index = game_index
+        self._on_progress = on_progress
+        self._last_progress = 0.0
         self.instant_speed = instant_speed  # explore instant-speed windows?
         self.timed_out = False
         # Cooperative cancellation: when this returns True the current game is
@@ -195,6 +204,9 @@ class _SearchContext:
         self.max_rank = max(
             ((p.turn, phase_index(p.phase)) for p in properties), default=(0, 0)
         )
+        # Wall-clock start of this game's search (for the per-game "Time" column
+        # and the live in-game progress ticker).
+        self.start_time = time.monotonic()
         # Search-shape bookkeeping (for the per-run table + tree view).
         self.branches_explored = 0     # states actually processed by the search
         self.branches_considered = 0   # candidate branches created / enumerated
@@ -261,7 +273,12 @@ class _SearchContext:
             # continues with the next game. Marked as a timeout for the stats.
             self.timed_out = True
             return True
-        if time.monotonic() > self.deadline:
+        now = time.monotonic()
+        if self._on_progress is not None and now - self._last_progress >= 2.0:
+            self._last_progress = now
+            self._on_progress(self.game_index, self.branches_explored,
+                              self.branches_considered, now - self.start_time)
+        if now > self.deadline:
             self.timed_out = True
             return True
         return False
@@ -1240,6 +1257,7 @@ def _seed_game(
     should_stop: Callable[[], bool] | None = None,
     should_skip: Callable[[], bool] | None = None,
     deadline: float | None = None,
+    on_progress: Callable[[int, int, int, float], None] | None = None,
 ) -> tuple[_SearchContext, dict, list[tuple], list[tuple], list]:
     """Deterministically set up one game: the shuffled library, the search
     context/tree root, and the opening-keep frontier seeds. Everything derives
@@ -1254,7 +1272,8 @@ def _seed_game(
     if deadline is None:
         deadline = time.monotonic() + config.timeout_per_game_s
     ctx = _SearchContext(properties, deadline, should_stop=should_stop,
-                         should_skip=should_skip, instant_speed=config.instant_speed)
+                         should_skip=should_skip, instant_speed=config.instant_speed,
+                         game_index=game_index, on_progress=on_progress)
     # Root of the recorded search tree: the game before any hand is kept.
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root
@@ -1357,6 +1376,7 @@ def _assemble_outcome(
         tree=root,
         tree_truncated=ctx.tree_truncated,
         bugs=ctx.bugs,
+        elapsed_s=time.monotonic() - ctx.start_time,
     )
 
 
@@ -1368,10 +1388,11 @@ def simulate_game(
     should_stop: Callable[[], bool] | None = None,
     should_skip: Callable[[], bool] | None = None,
     on_game_start: Callable[[int, list], None] | None = None,
+    on_progress: Callable[[int, int, int, float], None] | None = None,
 ) -> GameOutcome:
     ctx, root, items, keep_nodes, shuffled = _seed_game(
         base_state, properties, config, game_index,
-        should_stop=should_stop, should_skip=should_skip)
+        should_stop=should_stop, should_skip=should_skip, on_progress=on_progress)
     if on_game_start is not None:
         # The opening hand is known once the game is seeded — report it so the
         # results table can show a "running" row (with its hand) live.
@@ -1564,6 +1585,7 @@ def _simulate_game_split(
     on_tainted: Callable[[], None] | None = None,
     should_skip: Callable[[], bool] | None = None,
     on_game_start: Callable[[int, list], None] | None = None,
+    on_progress: Callable[[int, int, int, float], None] | None = None,
 ) -> GameOutcome | None:
     """One game, its tree explored in parallel. The master expands the search
     level by level until enough subtrees hang at some depth (or the search
@@ -1615,8 +1637,17 @@ def _simulate_game_split(
     # are wedged: abandon them and flag the pool for a kill + rebuild.
     hard_deadline = time.monotonic() + remaining + _WORKER_GRACE_S
     tainted = False
+    last_prog = time.monotonic()
     while pending:
         now = time.monotonic()
+        # Live in-game progress while the workers churn: the master can't see the
+        # workers' running branch counts (they only return at the end), so it
+        # reports the elapsed time + the shallow (phase-1) counts every ~2s; the
+        # client also ticks elapsed on its own. Final counts land at game end.
+        if on_progress is not None and now - last_prog >= 2.0:
+            last_prog = now
+            on_progress(game_index, ctx.branches_explored, ctx.branches_considered,
+                        now - ctx.start_time)
         if should_stop and should_stop():
             # User abort: abandon the game IMMEDIATELY. Its result is discarded
             # (return None), so there is no reason to wait for workers to hand
@@ -1731,6 +1762,7 @@ def run_simulation(
     *,
     should_skip: Callable[[], bool] | None = None,
     on_game_start: Callable[[int, list], None] | None = None,
+    on_progress: Callable[[int, int, int, float], None] | None = None,
     game_indices: list[int] | None = None,
     initial_stats: dict | None = None,
 ) -> SimulationStats:
@@ -1790,12 +1822,14 @@ def run_simulation(
                         base_state, properties, config, i, pool, workers,
                         stop_event, found_event, should_stop,
                         on_tainted=lambda: tainted.__setitem__(0, True),
-                        should_skip=should_skip, on_game_start=on_game_start)
+                        should_skip=should_skip, on_game_start=on_game_start,
+                        on_progress=on_progress)
                 else:
                     outcome = simulate_game(base_state, properties, config, i,
                                             should_stop=should_stop,
                                             should_skip=should_skip,
-                                            on_game_start=on_game_start)
+                                            on_game_start=on_game_start,
+                                            on_progress=on_progress)
             except Exception as exc:  # keep the run alive; report the game as buggy
                 outcome = _buggy_outcome(i, exc)
             # A tainted pool has a wedged worker process holding a core hostage:

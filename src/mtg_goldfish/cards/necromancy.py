@@ -12,5 +12,8 @@ from .registry import register
 class Necromancy(Card):
     card_name = "Necromancy"
 
+    def is_castable(self, state):
+        return any(c.is_creature for c in state.graveyard)  # needs a target to reanimate
+
     def cast_actions(self, state):
         return reanimation_aura_actions(self, state)

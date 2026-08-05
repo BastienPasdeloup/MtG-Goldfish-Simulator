@@ -17,5 +17,10 @@ class AnimateDead(Card):
         # (applied to the host's effective power via the attachment).
         return (-1, 0)
 
+    def is_castable(self, state):
+        # An Aura can't be cast with no legal target — a reanimation Aura needs a
+        # creature card in a graveyard (also gates the graveyard-recast path).
+        return any(c.is_creature for c in state.graveyard)
+
     def cast_actions(self, state):
         return reanimation_aura_actions(self, state)

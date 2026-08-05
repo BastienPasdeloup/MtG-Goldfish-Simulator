@@ -303,6 +303,10 @@ class GameState:
     stack: list[CardData | StackAbility] = field(default_factory=list)
     # Cards exiled "you may play it" (source_uid, card); playable while source lives.
     exile_playable: list[tuple[int, CardData]] = field(default_factory=list)
+    # source_uid -> whether the source must REMAIN in play for its exile_playable
+    # cards to stay playable (Card.exile_play_requires_source). True (Gwen/Inti)
+    # gates on the source; False (Hoarding Broodlord) keeps it playable regardless.
+    exile_play_needs_source: dict = field(default_factory=dict)
     # Cards airbended into exile (Aang, Swift Savior): their owner may cast them
     # for {2} for as long as they remain exiled (no source-permanent dependency,
     # unlike exile_playable). Any face of a modal card that has a mana cost may
@@ -451,6 +455,7 @@ class GameState:
             command_zone=list(self.command_zone),
             stack=list(self.stack),
             exile_playable=list(self.exile_playable),
+            exile_play_needs_source=dict(self.exile_play_needs_source),
             airbend_exile=list(self.airbend_exile),
             exile_source=dict(self.exile_source),
             stack_face=dict(self.stack_face),
@@ -1107,6 +1112,14 @@ class GameState:
             return False
         self.energy -= n
         return True
+
+    def grant_exile_play(self, source_perm, card) -> None:
+        """Record that `card` (in exile) may be played, sourced from
+        `source_perm`, remembering whether that source must remain in play for it
+        to stay playable (`Card.exile_play_requires_source`). Use this instead of
+        appending to `exile_playable` directly so the source dependency is set."""
+        self.exile_playable.append((source_perm.uid, card))
+        self.exile_play_needs_source[source_perm.uid] = source_perm.impl.exile_play_requires_source
 
     # ---- game events (ability / spell outcomes) -----------------------------
     def note_event(self, kind: str, name: str, detail: str | None = None, **extra) -> None:

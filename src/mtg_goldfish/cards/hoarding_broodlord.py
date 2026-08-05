@@ -20,10 +20,13 @@ class HoardingBroodlord(Card):
     card_name = "Hoarding Broodlord"
     exiles_cards = True
     grants_exile_convoke = True   # "Spells you cast from exile have convoke."
+    # "for as long as that card remains exiled you may play it" — playable even
+    # after Hoarding Broodlord itself leaves the battlefield.
+    exile_play_requires_source = False
 
     def link_exiled_card(self, state, perm, card):
         # Exiled with Hoarding Broodlord -> you may play it from exile.
-        state.exile_playable.append((perm.uid, card))
+        state.grant_exile_play(perm, card)
 
     def on_etb(self, state, permanent):
         cands = state.search_library(lambda c: True)
@@ -38,7 +41,7 @@ class HoardingBroodlord(Card):
             st.take_from_library(c)
             st.exile.append(c)
             live = st.find_permanent(permanent.uid)
-            st.exile_playable.append(((live.uid if live else permanent.uid), c))
+            st.grant_exile_play(live or permanent, c)
             st.shuffle_library()
             st.emit(f"Hoarding Broodlord: exile {name} face down — you may play it")
             return None

@@ -277,41 +277,71 @@ async function loadSessionList() {
     const { sessions } = await api("/api/sessions");
     if (!sessions.length) { box.textContent = "No sessions yet."; box.className = "muted"; return; }
     box.className = "";
-    const head = el("tr", {},
-      el("th", { textContent: "Deck" }),
-      el("th", { textContent: "Format" }),
-      el("th", { textContent: "Created" }),
-      el("th", { textContent: "Last run" }),
-      el("th", { className: "numc", textContent: "Runs" }),
-      el("th", {}));
-    const rows = sessions.map((s) => {
-      const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
-      if (s.commanders.length) {
-        // One line per commander, each showing a card miniature on hover.
-        for (const c of s.commanders) {
-          const name = hoverable(el("span", { textContent: "⚔ " + c.name }), c.image);
-          fmtCell.append(el("div", { className: "muted sub" }, name));
-        }
-      } else {
-        fmtCell.append(el("div", { className: "muted sub", textContent: "no commander" }));
-      }
-      // Per-row delete — same "danger" button as the deck page (text "Delete");
-      // stops the row's open-on-click.
-      const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
-      delBtn.onclick = (e) => { e.stopPropagation(); deleteSessionRow(s.id, s.name); };
-      const tr = el("tr", { className: "session-row", title: "open this session",
-                            onclick: () => openSession(s.id) },
-        el("td", {}, el("b", { textContent: s.name })),
-        fmtCell,
-        el("td", { className: "muted nowrap", textContent: fmtDate(s.created_at).slice(0, 10) }),
-        el("td", { className: "muted nowrap", textContent: s.last_run ? fmtDate(s.last_run).slice(0, 10) : "—" }),
-        el("td", { className: "numc", textContent: String(s.num_results) }),
-        el("td", { className: "numc" }, delBtn));
-      return tr;
-    });
-    box.replaceChildren(el("table", { className: "sessions-table" },
-      el("thead", {}, head), el("tbody", {}, ...rows)));
+    state.sessions = sessions;
+    if (!state.sessionsSort) state.sessionsSort = { key: "Created", dir: -1 };
+    renderSessionList();
   } catch (e) { box.textContent = "Error: " + e.message; box.className = "err"; }
+}
+
+// Sort accessors per sessions-table column (string or number; null sorts last).
+const SESSION_SORTS = {
+  Deck: (s) => (s.name || "").toLowerCase(),
+  Format: (s) => formatName(s.format_id).toLowerCase(),
+  Created: (s) => s.created_at || "",
+  "Last run": (s) => s.last_run || "",
+  Runs: (s) => s.num_results,
+};
+
+function renderSessionList() {
+  const box = $("session-list");
+  const { key, dir } = state.sessionsSort;
+  // [header, alignment-class, sortable].
+  const COLS = [["Deck", "", true], ["Format", "", true], ["Created", "nowrap", true],
+    ["Last run", "nowrap", true], ["Runs", "numc", true], ["", "numc", false]];
+  const head = el("tr", {}, ...COLS.map(([h, cls, sortable]) => {
+    const th = el("th", { className: cls + (sortable ? " sortable" : "") }, h);
+    if (sortable) {
+      const active = key === h;
+      th.append(el("span", { className: "sortv" + (active ? " active" : ""),
+        textContent: active && dir === -1 ? "▴" : "▾" }));
+      th.title = "sort by " + h.toLowerCase();
+      th.onclick = () => { state.sessionsSort = { key: h, dir: key === h ? -dir : 1 }; renderSessionList(); };
+    }
+    return th;
+  }));
+
+  const f = SESSION_SORTS[key] || SESSION_SORTS.Created;
+  const sorted = state.sessions.slice().sort((a, b) => {
+    const va = f(a), vb = f(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1; if (vb == null) return -1;   // missing values last
+    const c = typeof va === "string" ? va.localeCompare(vb) : (va - vb);
+    return c * dir || (a.name || "").localeCompare(b.name || "");
+  });
+
+  const rows = sorted.map((s) => {
+    const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
+    if (s.commanders.length) {
+      for (const c of s.commanders) {
+        const name = hoverable(el("span", { textContent: "⚔ " + c.name }), c.image);
+        fmtCell.append(el("div", { className: "muted sub" }, name));
+      }
+    } else {
+      fmtCell.append(el("div", { className: "muted sub", textContent: "no commander" }));
+    }
+    const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
+    delBtn.onclick = (e) => { e.stopPropagation(); deleteSessionRow(s.id, s.name); };
+    return el("tr", { className: "session-row", title: "open this session",
+                      onclick: () => openSession(s.id) },
+      el("td", {}, el("b", { textContent: s.name })),
+      fmtCell,
+      el("td", { className: "muted nowrap", textContent: fmtDate(s.created_at).slice(0, 10) }),
+      el("td", { className: "muted nowrap", textContent: s.last_run ? fmtDate(s.last_run).slice(0, 10) : "—" }),
+      el("td", { className: "numc", textContent: String(s.num_results) }),
+      el("td", { className: "numc" }, delBtn));
+  });
+  box.replaceChildren(el("table", { className: "sessions-table" },
+    el("thead", {}, head), el("tbody", {}, ...rows)));
 }
 
 // Delete a session (and its saved runs) from the main list. (Named distinctly
@@ -1517,14 +1547,14 @@ function fcFrame() {
       counters: it.counters || {}, granted: [...(it.granted || []), ...(it.granted_eot || [])],
       is_lander: false, attached_to: it.attached_to,
     };
+    const pm0 = fcCounterPT(it.counters);  // net ±1/±1 counters (added to P/T badges)
     if (it.face_down) {  // a 2/2 colourless nameless creature — alterations still apply
-      const hasPT = it.set_power != null && it.set_toughness != null;
       const kws = [...(it.granted || []), ...(it.granted_eot || [])];
       if (it.face_down === "disguise" || it.face_down === "cloak") kws.push("ward");
       return {
         ...common, name: "Face-down creature", token: false, commander: false,
         face_down: true, is_creature: true, is_land: false, is_aura: false,
-        power: hasPT ? it.set_power : 2, toughness: hasPT ? it.set_toughness : 2,
+        power: (it.set_power ?? 2) + pm0, toughness: (it.set_toughness ?? 2) + pm0,
         colors: it.set_colors || [], recolored: it.set_colors != null,
         granted: kws, attacking: !!it.attacking && combat,
       };
@@ -1535,7 +1565,8 @@ function fcFrame() {
       return {
         ...common, name: it.name, token: true, type_line: it.type_line, text: it.text || "",
         colors: it.colors || [], copy: !!it.copy_of,
-        power: isCreature ? (it.power ?? 0) : null, toughness: isCreature ? (it.toughness ?? 0) : null,
+        power: isCreature ? (it.power ?? 0) + pm0 : null,
+        toughness: isCreature ? (it.toughness ?? 0) + pm0 : null,
         is_land: head.includes("land"), is_creature: isCreature, commander: false,
         attacking: !!it.attacking && combat && isCreature,
       };
@@ -1543,15 +1574,15 @@ function fcFrame() {
     if (it.added) {  // an arbitrary added card — its characteristics live in the spec
       const head = (it.type_line || "").split("—")[0].toLowerCase();
       const isCreature = head.includes("creature") || !!it.make_creature;
-      const hasPT = it.set_power != null && it.set_toughness != null;
+      const bp = it.set_power ?? it.power, bt = it.set_toughness ?? it.toughness;
       return {
         ...common, name: it.name, token: false, commander: false,
         type_line: it.type_line, colors: it.colors || [], recolored: true,
         is_land: it.make_creature ? false : head.includes("land"),
         is_creature: isCreature, is_aura: (it.type_line || "").toLowerCase().includes("aura"),
         attacking: !!it.attacking && combat && isCreature,
-        power: hasPT ? it.set_power : (isCreature ? (it.power ?? null) : null),
-        toughness: hasPT ? it.set_toughness : (isCreature ? (it.toughness ?? null) : null),
+        power: isCreature && bp != null ? bp + pm0 : null,
+        toughness: isCreature && bt != null ? bt + pm0 : null,
       };
     }
     const face = fcFace(it.name, it.transformed);  // active (front/back) face
@@ -1559,19 +1590,21 @@ function fcFrame() {
     // creature-subtype override (set_creature_types) and a colour override.
     const isCreature = face.is_creature || !!it.make_creature;
     const isLand = it.make_creature ? false : face.is_land;
-    // Show a P/T badge whenever the stats are ALTERED (either stat set, or a
-    // noncreature made into a creature) — falling back to the printed value for
-    // an unset stat so a partial override still reads correctly.
+    // Show a P/T badge whenever the stats are ALTERED — either stat set, a
+    // noncreature made into a creature, or ±1/±1 counters — falling back to the
+    // printed value for an unset stat so a partial override still reads correctly
+    // (matches the replay, which always shows an altered creature's current P/T).
     const meta = fcCardMeta(it.name);
-    const altered = it.set_power != null || it.set_toughness != null || !!it.make_creature;
+    const pm = fcCounterPT(it.counters);
+    const altered = it.set_power != null || it.set_toughness != null || !!it.make_creature || pm !== 0;
     const showPT = isCreature && altered;
     return {
       ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
       attacking: !!it.attacking && combat && isCreature,
       is_land: isLand,
       is_creature: isCreature, is_aura: fcIsAura(it.name),
-      power: showPT ? (it.set_power ?? meta.power ?? 0) : null,
-      toughness: showPT ? (it.set_toughness ?? meta.toughness ?? 0) : null,
+      power: showPT ? (it.set_power ?? meta.power ?? 0) + pm : null,
+      toughness: showPT ? (it.set_toughness ?? meta.toughness ?? 0) + pm : null,
       colors: it.set_colors || undefined,
       recolored: it.set_colors != null,
     };
@@ -1676,6 +1709,22 @@ const FC_FACE_DOWN_REASONS = [
 // (any other can be typed in via "Add type…").
 const FC_CREATURE_TYPES = ["Zombie", "Human", "Elf", "Goblin", "Dragon", "Angel",
   "Demon", "Beast", "Wizard", "Warrior", "Soldier", "Vampire", "Spirit"];
+
+// Net P/T change from ±1/±1 counters on a battlefield entry (for P/T badges).
+function fcCounterPT(counters) {
+  const c = counters || {};
+  return (c["+1/+1"] || 0) - (c["-1/-1"] || 0);
+}
+
+// Clear all "Alter card" overrides on a battlefield entry (P/T, colours, creature
+// types, make-a-creature, granted keywords, counters, and their EOT flags). Used
+// when turning a card face up/down — it becomes a clean 2/2 back or its real card.
+function fcResetAlterations(it) {
+  ["set_power", "set_toughness", "set_colors", "set_creature_types"].forEach((k) => { it[k] = null; });
+  ["make_creature", "set_power_eot", "set_toughness_eot", "make_creature_eot",
+    "set_creature_types_eot", "set_colors_eot"].forEach((k) => { it[k] = false; });
+  it.granted = []; it.granted_eot = []; it.counters = {};
+}
 
 // The "Alter card" submenu. Each change has its OWN "until end of turn" toggle
 // (like the Add-keyword menu): power / toughness (creatures only), make-a-creature
@@ -1856,10 +1905,10 @@ function fcPermMenu(p, e) {
   // so it's a submenu; already-face-down shows a single "Turn face up".
   if (it.face_down) {
     items.push({ label: `Turn face up (was ${it.face_down})`,
-      onClick: () => { it.face_down = ""; renderConfigBuilder(); } });
+      onClick: () => { fcResetAlterations(it); it.face_down = ""; renderConfigBuilder(); } });
   } else {
     items.push({ label: "Turn face down", submenu: FC_FACE_DOWN_REASONS.map(([val, lbl]) => ({
-      label: lbl, onClick: () => { it.face_down = val; renderConfigBuilder(); } })) });
+      label: lbl, onClick: () => { fcResetAlterations(it); it.face_down = val; renderConfigBuilder(); } })) });
   }
 
   // Alter card — power/toughness, creature-ness, colours & creature types,
@@ -2462,11 +2511,21 @@ async function runSim() {
 function onSimEvent(msg) {
   if (msg.type === "game_start") {
     appendRunningRow(msg.game_index, msg.hand || []); // a "running" row (with its hand) + Skip
+  } else if (msg.type === "game_progress") {
+    // Live in-game ticker: update the running row's explored/considered + time.
+    const at = state.vizRuns.findIndex((r) => r._i === msg.game_index && r.running);
+    if (at >= 0) {
+      // Counts come from the backend; elapsed stays client-owned (smooth ticker).
+      state.vizRuns[at].branches_explored = msg.branches_explored;
+      state.vizRuns[at].branches_considered = msg.branches_considered;
+      renderRunsTable();
+    }
   } else if (msg.type === "progress") {
     renderStats(msg.stats);
     if (msg.run) appendLiveRun(msg.run); // populate the games table on the fly
   } else if (msg.type === "done") {
     $("run-btn").disabled = false; $("stop-btn").disabled = true;
+    stopLiveClock();
     // A game still shown as "running" (the ⏳ row with the Skip button) was
     // abandoned when the run stopped — drop it so the table shows only games
     // that actually completed.
@@ -2567,12 +2626,34 @@ function resetViz() {
 function appendRunningRow(gi, hand) {
   const at = state.vizRuns.findIndex((r) => r._i === gi);
   const row = { _i: gi, running: true, hand, frames: [], success: false, timed_out: false,
-                branches_explored: null, branches_considered: null };
+                branches_explored: null, branches_considered: null,
+                elapsed_s: 0, _startMs: Date.now() };
   if (at >= 0) { if (state.vizRuns[at].running) state.vizRuns[at] = row; }  // don't clobber a finished row
   else state.vizRuns.push(row);
   state.vizGames[gi] = [];
   $("viz-box").classList.remove("hidden");
   renderRunsTable();
+  startLiveClock();
+}
+
+// Tick the elapsed-time display of running rows once a second (client-side, so
+// the Time column advances smoothly even between backend progress messages).
+function startLiveClock() {
+  if (state.vizClock) return;
+  state.vizClock = setInterval(() => {
+    const running = state.vizRuns.filter((r) => r.running && r._startMs);
+    if (!running.length) { stopLiveClock(); return; }
+    const list = $("viz-list");
+    running.forEach((r) => {
+      const secs = (Date.now() - r._startMs) / 1000;
+      r.elapsed_s = secs;  // so a re-render (e.g. a progress msg) keeps the value
+      const cell = list && list.querySelector(`.time-cell[data-idx="${r._i}"] .live-time`);
+      if (cell) cell.textContent = fmtSecs(secs);
+    });
+  }, 1000);
+}
+function stopLiveClock() {
+  if (state.vizClock) { clearInterval(state.vizClock); state.vizClock = null; }
 }
 
 // Append (or replace) a single game's row as it finishes, live.
@@ -2629,13 +2710,22 @@ const RUN_SORTS = {
   Steps: (r) => (r.frames.length ? r.frames.length : null),
   Explored: (r) => r.branches_explored,
   Considered: (r) => r.branches_considered,
+  Time: (r) => (r.elapsed_s == null ? null : r.elapsed_s),
 };
+
+// A duration in seconds as a compact string (e.g. "0.8s", "12.3s", "1m 05s").
+function fmtSecs(s) {
+  if (s == null) return "—";
+  if (s < 60) return s.toFixed(1) + "s";
+  const m = Math.floor(s / 60);
+  return `${m}m ${String(Math.round(s - m * 60)).padStart(2, "0")}s`;
+}
 
 function runsTable(runs) {
   // [header, alignment-class, sortable] triples.
   const COLS = [["#", "numc", true], ["Result", "cc", true], ["Hand", "cc", false],
     ["Steps", "numc", true], ["Explored", "numc", true], ["Considered", "numc", true],
-    ["Tree", "cc", false]];
+    ["Time", "numc", true], ["Tree", "cc", false]];
   const { key, dir } = state.runsSort;
   const thead = el("thead", {}, el("tr", {},
     ...COLS.map(([h, cls, sortable]) => {
@@ -2674,8 +2764,8 @@ function runsTable(runs) {
     let title = run.running ? "searching this game…"
       : run.success ? "all properties satisfied"
       : "no line satisfying all properties was found";
-    let suffix = "";
-    if (!run.running && run.timed_out) { suffix = " ⏱"; title += " — timed out before the search completed"; }
+    // The timeout ⏱ marker now lives in the Time column, not the Result cell.
+    if (!run.running && run.timed_out) title += " — timed out before the search completed";
 
     const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the opening hand" });
     hoverGrid(handIcon, run.hand || []);
@@ -2692,7 +2782,7 @@ function runsTable(runs) {
     // is shown in the Result cell (no dedicated column) and opens the detail.
     const nbugs = (run.bugs || []).length;
     const resultCell = el("td", { className: "cc status " + cls, title });
-    resultCell.append(el("span", { textContent: mark + suffix }));
+    resultCell.append(el("span", { textContent: mark }));
     if (run.running) {
       // Skip this game — abandon its search (counts as a failure), move on.
       const skip = el("button", { className: "danger skip-btn", textContent: "Skip",
@@ -2716,12 +2806,25 @@ function runsTable(runs) {
     const tr = el("tr", { className: "run-row" + (canReplay ? " replayable" : "") },
       el("td", { className: "numc", textContent: String(i + 1) }));
     tr.dataset.idx = i; // original game index (survives sorting)
+    // Time cell — elapsed search time, with the ⏱ marker for a timed-out game.
+    // A running game shows a LIVE ticker (updated by the in-game progress timer).
+    const timeCell = el("td", { className: "numc time-cell" });
+    timeCell.dataset.idx = i;
+    if (run.running) {
+      timeCell.append(el("span", { className: "live-time", textContent: fmtSecs(run.elapsed_s || 0) }));
+    } else {
+      timeCell.textContent = fmtSecs(run.elapsed_s);
+      if (run.timed_out) {
+        timeCell.append(el("span", { className: "muted", title: "timed out before the search completed", textContent: " ⏱" }));
+      }
+    }
     tr.append(
       resultCell,
       el("td", { className: "cc" }, handIcon),
       el("td", { className: "numc", title: "steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
       el("td", { className: "numc", textContent: num(run.branches_explored) }),
       el("td", { className: "numc", textContent: num(run.branches_considered) }),
+      timeCell,
       el("td", { className: "cc" }, treeCell));
     if (canReplay) {
       tr.title = "click to replay the winning line below";
