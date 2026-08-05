@@ -20,6 +20,10 @@ class FixedBattlefieldCard(BaseModel):
     granted: list[str] = Field(default_factory=list)
     # Keywords granted only until end of turn (lowercase).
     granted_eot: list[str] = Field(default_factory=list)
+    # Keywords REMOVED from the card (editor unchecks a printed keyword):
+    # permanently, or only until end of turn.
+    removed_keywords: list[str] = Field(default_factory=list)
+    removed_keywords_eot: list[str] = Field(default_factory=list)
     # For a double-faced card: True = on its back face.
     transformed: bool = False
     # A token (not a deck card): created via make_token with these characteristics.

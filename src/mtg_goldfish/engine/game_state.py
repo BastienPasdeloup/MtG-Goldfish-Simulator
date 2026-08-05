@@ -112,6 +112,11 @@ class Permanent:
     temp_toughness: int = 0
     temp_keywords: set = field(default_factory=set)  # lowercase, until end of turn
     extra_keywords: set = field(default_factory=set)  # lowercase, permanent grants (not cleared at cleanup)
+    # Fixed-config "remove keyword" overrides: strip a printed keyword permanently
+    # (removed_keywords) or until end of turn (removed_keywords_eot, cleared at
+    # cleanup). Read via has_keyword (they win over the printed set).
+    removed_keywords: set = field(default_factory=set)
+    removed_keywords_eot: set = field(default_factory=set)
     # P/T-defining behaviour stays anchored to the permanent even when its text
     # box moves (Deadpool's exchange): when set, dynamic P/T is read from this
     # impl instead of `impl`.
@@ -140,6 +145,11 @@ class Permanent:
     # Half / a Fixed-config copy token) — shown with a "copy" badge.
     is_copy: bool = False
     uid: int = 0
+    # Cache of the lowercased card-type head (left of "—"), keyed on the type_line
+    # string identity — `is_creature_now`/`is_land` are called millions of times
+    # per game, and this avoids re-splitting/lowercasing the same string. Not
+    # cloned (recomputed lazily), excluded from equality/repr.
+    _head_cache: tuple | None = field(default=None, compare=False, repr=False)
 
     @property
     def colors(self) -> list:
@@ -168,15 +178,26 @@ class Permanent:
             return self.becomes["type_line"]
         return self.face.type_line or self.card.type_line
 
+    def _type_head(self) -> str:
+        """The lowercased card-type portion (left of "—"), cached on the
+        type_line string's identity (which changes when becomes/face changes)."""
+        tl = self.type_line
+        c = self._head_cache
+        if c is not None and c[0] is tl:
+            return c[1]
+        head = tl.split("—", 1)[0].lower()
+        self._head_cache = (tl, head)
+        return head
+
     @property
     def is_creature_now(self) -> bool:
-        return "creature" in self.type_line.split("—")[0].lower()
+        return "creature" in self._type_head()
 
     @property
     def is_land(self) -> bool:
         # Only the card types (left of the "—") count — this must NOT match a
         # subtype like "Lander" (a Lander token is an Artifact, not a Land).
-        return "land" in self.type_line.split("—")[0].lower()
+        return "land" in self._type_head()
 
     @property
     def is_lander(self) -> bool:
@@ -207,6 +228,8 @@ class Permanent:
             temp_toughness=self.temp_toughness,
             temp_keywords=set(self.temp_keywords),
             extra_keywords=set(self.extra_keywords),
+            removed_keywords=set(self.removed_keywords),
+            removed_keywords_eot=set(self.removed_keywords_eot),
             pt_impl=self.pt_impl,
             damage=self.damage,
             attached_to=self.attached_to,
@@ -520,7 +543,14 @@ class GameState:
 
     def emit(self, message: str) -> None:
         """Append a log *frame*: a description plus a compact board snapshot,
-        so the winning line can be replayed graphically."""
+        so the winning line can be replayed graphically. Building the snapshot is
+        the single hottest cost of the search (a frame per action, most on states
+        that are never replayed), so frames the replay DROPS anyway — "pass …" and
+        "pay …" (see normalizeRun) — are stored as a bare description. The tree
+        still gets their text (it only reads `desc`)."""
+        if message.startswith("pass") or message.startswith("pay "):
+            self.log.append({"desc": message})
+            return
         frame = {"desc": message}
         frame.update(self.snapshot())
         self.log.append(frame)
@@ -1099,6 +1129,10 @@ class GameState:
 
     def has_keyword(self, perm: Permanent, kw: str) -> bool:
         k = kw.lower()
+        # A Fixed-config "remove keyword" override strips a printed keyword
+        # (permanently, or until end of turn) — it wins over the printed set.
+        if k in perm.removed_keywords or k in perm.removed_keywords_eot:
+            return False
         return (k in (x.lower() for x in perm.card.keywords)
                 or k in perm.temp_keywords or k in perm.extra_keywords)
 

@@ -1693,22 +1693,10 @@ function fcCounterKinds(it) {
 
 // Right-click menu on a battlefield permanent — entries are gated by the
 // card's type and the current phase (game-rules-valid actions only).
-// The reasons a permanent can be turned face down. All become a 2/2 colourless
-// nameless creature; disguise / cloak additionally have ward {2}. The value is
-// stored in `face_down` (empty = face up).
-const FC_FACE_DOWN_REASONS = [
-  ["manifest", "Manifest (2/2)"],
-  ["morph", "Morph (2/2)"],
-  ["megamorph", "Megamorph (2/2)"],
-  ["disguise", "Disguise (2/2, ward {2})"],
-  ["cloak", "Cloak (2/2, ward {2})"],
-  ["facedown", "Face down (2/2)"],
-];
-
-// A short list of common creature subtypes offered by "Set creature types"
-// (any other can be typed in via "Add type…").
-const FC_CREATURE_TYPES = ["Zombie", "Human", "Elf", "Goblin", "Dragon", "Angel",
-  "Demon", "Beast", "Wizard", "Warrior", "Soldier", "Vampire", "Spirit"];
+// The mechanisms a permanent can be turned face down by (prompted, not a
+// submenu). All become a 2/2 colourless nameless creature; disguise / cloak
+// additionally have ward. Stored in `face_down` (empty = face up).
+const FC_FACE_DOWN_REASONS = ["manifest", "morph", "megamorph", "disguise", "cloak", "facedown"];
 
 // Net P/T change from ±1/±1 counters on a battlefield entry (for P/T badges).
 function fcCounterPT(counters) {
@@ -1717,13 +1705,103 @@ function fcCounterPT(counters) {
 }
 
 // Clear all "Alter card" overrides on a battlefield entry (P/T, colours, creature
-// types, make-a-creature, granted keywords, counters, and their EOT flags). Used
-// when turning a card face up/down — it becomes a clean 2/2 back or its real card.
+// types, make-a-creature, granted/removed keywords, counters, and EOT flags).
 function fcResetAlterations(it) {
   ["set_power", "set_toughness", "set_colors", "set_creature_types"].forEach((k) => { it[k] = null; });
   ["make_creature", "set_power_eot", "set_toughness_eot", "make_creature_eot",
     "set_creature_types_eot", "set_colors_eot"].forEach((k) => { it[k] = false; });
-  it.granted = []; it.granted_eot = []; it.counters = {};
+  it.granted = []; it.granted_eot = []; it.removed_keywords = []; it.removed_keywords_eot = [];
+  it.counters = {};
+}
+
+// Turn a card face down: it becomes a 2/2 colourless nameless creature, so its
+// characteristics change to the mechanism's — no creature types, colourless,
+// 2/2, and ward for disguise / cloak. (Fixes a face-down Broodlord "staying a
+// Dragon".) Prior overrides are cleared first.
+function fcApplyFaceDown(it, reason) {
+  fcResetAlterations(it);
+  it.face_down = reason;
+  it.make_creature = true;
+  it.set_power = 2; it.set_toughness = 2;
+  it.set_colors = [];          // colourless
+  it.set_creature_types = [];  // no creature types
+  if (reason === "disguise" || reason === "cloak") it.granted = ["ward"];
+  renderConfigBuilder();
+}
+
+// The card's printed colours (deck cards from metadata; tokens/added from spec).
+function fcCardColors(it) {
+  return (it.token || it.added) ? (it.colors || []) : (fcCardMeta(it.name).colors || []);
+}
+// The card's printed keywords (lowercase).
+function fcCardKeywords(it) {
+  const raw = (it.token || it.added) ? (it.keywords || []) : (fcCardMeta(it.name).keywords || []);
+  return raw.map((k) => k.toLowerCase());
+}
+// Every creature subtype / keyword that EXISTS in this game (across the deck's
+// cards) — offered by the "Add type…/Add keyword…" pickers (custom still allowed).
+function fcAllCreatureTypes() {
+  const set = new Set();
+  (state.cards || []).forEach((c) => {
+    const faces = (c.faces && c.faces.length) ? c.faces : [c];
+    faces.forEach((f) => {
+      const tail = (f.type_line || "").split("—")[1];
+      if (tail) tail.trim().split(/\s+/).forEach((t) => { if (t) set.add(t); });
+    });
+  });
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+function fcAllKeywords() {
+  const set = new Set(FC_KEYWORDS);
+  (state.cards || []).forEach((c) => (c.keywords || []).forEach((k) => set.add(k.toLowerCase())));
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+// A filterable picker modal for choosing one string from `options` (a custom
+// value can still be typed). `onPick(value)` receives the chosen string.
+function fcStringPicker(title, options, onPick) {
+  let ov = document.getElementById("fc-str-modal");
+  if (!ov) {
+    ov = el("div", { id: "fc-str-modal", className: "modal-overlay hidden" });
+    const input = el("input", { id: "fc-str-q", type: "text", autocomplete: "off", placeholder: "Filter…" });
+    const list = el("div", { id: "fc-str-results", className: "str-results" });
+    ov.append(el("div", { className: "modal" },
+      el("div", { className: "modal-head" },
+        el("b", { id: "fc-str-title" }, title),
+        el("span", { className: "spacer" }),
+        el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
+          onclick: () => ov.classList.add("hidden") })),
+      el("div", { className: "modal-body" }, input, list)));
+    ov.onclick = (e) => { if (e.target === ov) ov.classList.add("hidden"); };
+    document.body.append(ov);
+    input.oninput = () => fcStrRender();
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") { const first = list.querySelector(".str-opt"); if (first) first.click(); }
+    };
+  }
+  state._strOpts = options; state._strPick = onPick;
+  document.getElementById("fc-str-title").textContent = title;
+  const input = document.getElementById("fc-str-q");
+  input.value = "";
+  ov.classList.remove("hidden");
+  fcStrRender();
+  setTimeout(() => input.focus(), 30);
+}
+function fcStrRender() {
+  const q = (document.getElementById("fc-str-q").value || "").trim().toLowerCase();
+  const list = document.getElementById("fc-str-results");
+  list.replaceChildren();
+  const opts = (state._strOpts || []).filter((o) => o.toLowerCase().includes(q)).slice(0, 300);
+  const exact = opts.some((o) => o.toLowerCase() === q);
+  if (q && !exact) list.append(el("div", { className: "str-opt custom", textContent: `Add "${q}"`,
+    onclick: () => fcStrChoose(q) }));
+  opts.forEach((o) => list.append(el("div", { className: "str-opt", textContent: o, onclick: () => fcStrChoose(o) })));
+  if (!opts.length && !q) list.append(el("div", { className: "muted sub", textContent: "Type to filter." }));
+}
+function fcStrChoose(v) {
+  const ov = document.getElementById("fc-str-modal");
+  if (ov) ov.classList.add("hidden");
+  if (state._strPick) state._strPick(v);
 }
 
 // The "Alter card" submenu. Each change has its OWN "until end of turn" toggle
@@ -1736,6 +1814,7 @@ function fcAlterMenu(idx, it, creatureNow) {
     sub.push(fcStatRow(idx, it, "power"));
     sub.push(fcStatRow(idx, it, "toughness"));
     sub.push({ label: "Set creature types", submenu: fcCreatureTypeSubmenu(idx, it) });
+    sub.push({ label: "Keywords", submenu: fcKeywordSubmenu(idx, it) });
     if (!it.token && it.make_creature) {
       sub.push({ label: "Revert to noncreature", onClick: () => {
         it.make_creature = false; it.make_creature_eot = false;
@@ -1808,55 +1887,113 @@ function fcSetStat(idx, stat) {
   renderConfigBuilder();
 }
 
-// Checkbox submenu of the five colours (tokens/added edit `colors`; deck cards a
-// `set_colors` override). Toggling keeps the submenu open (keepOpen).
-// Colour submenu — one kwrow per colour ("[✓] Red [EOT]"), exactly like the
-// keyword menu: the checkbox toggles membership, the EOT button toggles the
-// colour change's "until end of turn" flag (a single shared flag — the whole
-// override is one colour change). Tokens/added carry colour natively (no EOT).
+// Colour submenu — one kwrow per colour ("[✓] Red [EOT]"). The card's PRINTED
+// colours are checked by DEFAULT (so they can be unchecked/removed); the first
+// toggle materialises a `set_colors` override. Tokens/added carry colour
+// natively in `colors` (no EOT).
 function fcColorSubmenu(idx) {
   const it = fcPerm(idx);
-  const field = (it.token || it.added) ? "colors" : "set_colors";
-  const canEot = !(it.token || it.added);
-  const cur = () => it[field] || [];
+  const isTok = it.token || it.added;
+  const canEot = !isTok;
+  // Effective current colours: an explicit override if set, else the printed ones.
+  const cur = () => isTok ? (it.colors || []) : (it.set_colors ?? fcCardColors(it));
+  const setCur = (arr) => { if (isTok) it.colors = arr; else it.set_colors = arr; };
   return "WUBRG".split("").map((c) => ({ kwrow: {
     label: FC_COLOR_NAME[c] || c,
     checked: () => cur().includes(c),
     eot: () => canEot && !!it.set_colors_eot,
     onToggle: () => {
-      const arr = it[field] = [...cur()];
+      const arr = [...cur()];
       const j = arr.indexOf(c); if (j >= 0) arr.splice(j, 1); else arr.push(c);
-      renderConfigBuilder();
+      setCur(arr); renderConfigBuilder();
     },
     onEot: () => { if (canEot) { it.set_colors_eot = !it.set_colors_eot; renderConfigBuilder(); } },
   } }));
 }
 
-// Creature-subtype submenu — one kwrow per type ("[✓] Zombie [EOT]") like the
-// keyword menu (checkbox = has the subtype, EOT = the change lasts until end of
-// turn, a single shared flag), plus an "Add type…" prompt for anything else.
+// Creature-subtype submenu — INITIALISED from the clicked creature's printed
+// subtypes (checked); unchecking one materialises a `set_creature_types`
+// override, and "Add type…" opens a picker of every subtype in the game.
 function fcCreatureTypeSubmenu(idx, it) {
-  const cur = () => it.set_creature_types || fcCurrentCreatureTypes(it);
-  const list = FC_CREATURE_TYPES.slice();
-  cur().forEach((t) => { if (!list.includes(t)) list.push(t); });
-  const rows = list.map((t) => ({ kwrow: {
+  const base = fcCurrentCreatureTypes(it);              // the card's printed subtypes
+  const cur = () => it.set_creature_types ?? base;      // effective (override wins)
+  // Show the printed subtypes AND any added via the override, so an unchecked
+  // one stays visible to re-check.
+  const universe = [...new Set([...base, ...(it.set_creature_types || [])])].sort((a, b) => a.localeCompare(b));
+  const toggle = (t) => {
+    const arr = [...cur()];
+    const j = arr.indexOf(t); if (j >= 0) arr.splice(j, 1); else arr.push(t);
+    it.set_creature_types = arr; renderConfigBuilder();
+  };
+  const rows = universe.map((t) => ({ kwrow: {
     label: t,
     checked: () => cur().includes(t),
     eot: () => !!it.set_creature_types_eot,
-    onToggle: () => {
-      const arr = it.set_creature_types = [...cur()];
-      const j = arr.indexOf(t); if (j >= 0) arr.splice(j, 1); else arr.push(t);
-      renderConfigBuilder();
-    },
+    onToggle: () => toggle(t),
     onEot: () => { it.set_creature_types_eot = !it.set_creature_types_eot; renderConfigBuilder(); },
   } }));
-  rows.push({ sep: true }, { label: "Add type…", onClick: () => {
-    const t = (prompt("Creature type to add (e.g. Zombie):", "") || "").trim();
-    if (!t) return;
-    const arr = it.set_creature_types = [...cur()];
-    if (!arr.includes(t)) arr.push(t);
+  rows.push({ sep: true }, { label: "Add type…", onClick: () =>
+    fcStringPicker("Add a creature type", fcAllCreatureTypes(), (t) => {
+      t = t.trim(); if (!t) return;
+      const arr = [...cur()]; if (!arr.includes(t)) arr.push(t);
+      it.set_creature_types = arr; renderConfigBuilder();
+    }) });
+  return rows;
+}
+
+// Keyword submenu — INITIALISED from the creature's printed keywords (checked) +
+// any granted. Unchecking a printed keyword removes it (removed_keywords);
+// unchecking a granted one drops it. Each has its OWN EOT toggle. "Add keyword…"
+// opens a picker of every keyword in the game.
+function fcKeywordSubmenu(idx, it) {
+  const printed = fcCardKeywords(it);
+  it.granted = it.granted || []; it.granted_eot = it.granted_eot || [];
+  it.removed_keywords = it.removed_keywords || []; it.removed_keywords_eot = it.removed_keywords_eot || [];
+  const inAny = (kw) => it.granted.includes(kw) || it.granted_eot.includes(kw);
+  const isRemoved = (kw) => it.removed_keywords.includes(kw) || it.removed_keywords_eot.includes(kw);
+  const has = (kw) => inAny(kw) || (printed.includes(kw) && !isRemoved(kw));
+  const drop = (arr, kw) => { const j = arr.indexOf(kw); if (j >= 0) arr.splice(j, 1); };
+  const toggle = (kw) => {
+    if (has(kw)) {
+      drop(it.granted, kw); drop(it.granted_eot, kw);
+      if (printed.includes(kw)) it.removed_keywords.push(kw);  // strip a printed keyword
+    } else {
+      drop(it.removed_keywords, kw); drop(it.removed_keywords_eot, kw);
+      if (!printed.includes(kw) && !inAny(kw)) it.granted.push(kw);  // grant an extra keyword
+    }
     renderConfigBuilder();
-  } });
+  };
+  // EOT toggles the "until end of turn"-ness of whichever override is active for
+  // this keyword: a REMOVAL (printed keyword turned off) or a GRANT (extra kw).
+  const toggleEot = (kw) => {
+    if (isRemoved(kw)) {
+      const eot = it.removed_keywords_eot.includes(kw);
+      drop(it.removed_keywords, kw); drop(it.removed_keywords_eot, kw);
+      (eot ? it.removed_keywords : it.removed_keywords_eot).push(kw);
+    } else if (inAny(kw)) {
+      const eot = it.granted_eot.includes(kw);
+      drop(it.granted, kw); drop(it.granted_eot, kw);
+      (eot ? it.granted : it.granted_eot).push(kw);
+    }
+    renderConfigBuilder();
+  };
+  const isEot = (kw) => it.granted_eot.includes(kw) || it.removed_keywords_eot.includes(kw);
+  const universe = [...new Set([...printed, ...it.granted, ...it.granted_eot,
+    ...it.removed_keywords, ...it.removed_keywords_eot])].sort((a, b) => a.localeCompare(b));
+  const rows = universe.map((kw) => ({ kwrow: {
+    label: kw,
+    checked: () => has(kw),
+    eot: () => isEot(kw),
+    onToggle: () => toggle(kw),
+    onEot: () => toggleEot(kw),
+  } }));
+  rows.push({ sep: true }, { label: "Add keyword…", onClick: () =>
+    fcStringPicker("Add a keyword", fcAllKeywords(), (kw) => {
+      kw = kw.trim().toLowerCase(); if (!kw) return;
+      drop(it.removed_keywords, kw); drop(it.removed_keywords_eot, kw);
+      if (!printed.includes(kw) && !inAny(kw)) it.granted.push(kw);
+      renderConfigBuilder();
+    }) });
   return rows;
 }
 
@@ -1900,15 +2037,15 @@ function fcPermMenu(p, e) {
     });
   }
 
-  // Turn face down — a 2/2 colourless nameless creature. Different REASONS set
-  // slightly different characteristics (disguise / cloak are 2/2 with ward {2}),
-  // so it's a submenu; already-face-down shows a single "Turn face up".
+  // Turn face down — a 2/2 colourless nameless creature. Clicking PROMPTS for the
+  // mechanism (manifest / morph / disguise / …), which sets its characteristics.
   if (it.face_down) {
     items.push({ label: `Turn face up (was ${it.face_down})`,
       onClick: () => { fcResetAlterations(it); it.face_down = ""; renderConfigBuilder(); } });
   } else {
-    items.push({ label: "Turn face down", submenu: FC_FACE_DOWN_REASONS.map(([val, lbl]) => ({
-      label: lbl, onClick: () => { fcResetAlterations(it); it.face_down = val; renderConfigBuilder(); } })) });
+    items.push({ label: "Turn face down…", onClick: () =>
+      fcStringPicker("Turn face down — choose the mechanism", FC_FACE_DOWN_REASONS,
+        (r) => fcApplyFaceDown(it, r.trim().toLowerCase())) });
   }
 
   // Alter card — power/toughness, creature-ness, colours & creature types,
@@ -1939,40 +2076,7 @@ function fcPermMenu(p, e) {
   });
   items.push({ label: "Add counter", submenu: counterItems });
 
-  // Add keyword — one row per keyword with its OWN "until end of turn" checkbox
-  // (permanent grant vs granted_eot); creatures only.
-  if (face.is_creature) {
-    it.granted = it.granted || []; it.granted_eot = it.granted_eot || [];
-    const has = (kw) => it.granted.includes(kw) || it.granted_eot.includes(kw);
-    const drop = (kw) => {
-      [it.granted, it.granted_eot].forEach((arr) => { const j = arr.indexOf(kw); if (j >= 0) arr.splice(j, 1); });
-    };
-    // The standard keywords plus any custom one already granted (so its EOT can
-    // be toggled and it can be removed).
-    const kwList = FC_KEYWORDS.slice();
-    [...it.granted, ...it.granted_eot].forEach((kw) => { if (!kwList.includes(kw)) kwList.push(kw); });
-    const kwItems = kwList.map((kw) => ({
-      kwrow: {
-        label: kw,
-        checked: () => has(kw),
-        eot: () => it.granted_eot.includes(kw),
-        onToggle: () => { if (has(kw)) drop(kw); else it.granted.push(kw); renderConfigBuilder(); },
-        onEot: () => {
-          const eot = it.granted_eot.includes(kw);
-          drop(kw);
-          (eot ? it.granted : it.granted_eot).push(kw);  // toggle bucket (grants it if absent)
-          renderConfigBuilder();
-        },
-      },
-    }));
-    kwItems.push({ sep: true }, {
-      label: "Add keyword…", onClick: () => {
-        const kw = (prompt("Keyword to grant (e.g. flying, deathtouch):", "") || "").trim().toLowerCase();
-        if (kw && !has(kw)) { it.granted.push(kw); renderConfigBuilder(); }
-      },
-    });
-    items.push({ label: "Add keyword", submenu: kwItems });
-  }
+  // (Keywords moved into the "Alter card" submenu — see fcKeywordSubmenu.)
 
   // Change target — an aura (any other permanent) or equipment (a creature) can
   // be re-attached to a DIFFERENT valid target (or unattached). Lists the other
@@ -2218,9 +2322,26 @@ function closeContextMenu() {
 }
 function ctxEsc(e) { if (e.key === "Escape") closeContextMenu(); }
 
+// Sort menu entries alphabetically by label, WITHIN each separator-delimited
+// segment — so a trailing "Add X…" / action group (after a separator) keeps its
+// position while the checkbox/toggle list above it is alphabetised.
+function sortMenuItems(items) {
+  const labelOf = (it) =>
+    ((it.kwrow && it.kwrow.label) || (it.stepper && it.stepper.label) || it.label || "").toLowerCase();
+  const out = [];
+  let seg = [];
+  const flush = () => {
+    seg.sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+    out.push(...seg); seg = [];
+  };
+  items.forEach((it) => { if (it.sep) { flush(); out.push(it); } else seg.push(it); });
+  flush();
+  return out;
+}
+
 function buildMenu(items) {
   const menu = el("div", { className: "ctx-menu" });
-  items.forEach((it) => {
+  sortMenuItems(items).forEach((it) => {
     if (it.sep) { menu.append(el("div", { className: "ctx-sep" })); return; }
     // A stepper row: "label [−] value [+]" — the buttons adjust without closing.
     if (it.stepper) {

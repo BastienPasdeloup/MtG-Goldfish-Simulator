@@ -179,6 +179,7 @@ def card_view(deck: Deck) -> list[dict]:
             "is_land": c.is_land,
             "power": _int_or_none(c.power),        # printed P/T (for altered-stat badges)
             "toughness": _int_or_none(c.toughness),
+            "keywords": [k.lower() for k in (c.keywords or [])],  # printed keywords (menu init)
             "loyalty": c.loyalty,  # for the Fixed-config editor (planeswalkers)
             "enters_counters": _initial_counters(c),  # counters it enters play with
             "counter_kinds": _counter_kinds(c),       # counter kinds it can carry

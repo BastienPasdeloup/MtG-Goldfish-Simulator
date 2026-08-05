@@ -274,7 +274,7 @@ class _SearchContext:
             self.timed_out = True
             return True
         now = time.monotonic()
-        if self._on_progress is not None and now - self._last_progress >= 2.0:
+        if self._on_progress is not None and now - self._last_progress >= 1.0:
             self._last_progress = now
             self._on_progress(self.game_index, self.branches_explored,
                               self.branches_considered, now - self.start_time)
@@ -401,6 +401,7 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             perm.temp_power = 0
             perm.temp_toughness = 0
             perm.temp_keywords.clear()
+            perm.removed_keywords_eot.clear()  # end-of-turn keyword removals end
             # An until-end-of-turn colour override ends now.
             if perm.color_override_eot:
                 perm.color_override = None
@@ -1063,6 +1064,10 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
                 perm.extra_keywords.add(str(kw).lower())
             for kw in (spec.get("granted_eot") or []):
                 perm.temp_keywords.add(str(kw).lower())
+            for kw in (spec.get("removed_keywords") or []):
+                perm.removed_keywords.add(str(kw).lower())
+            for kw in (spec.get("removed_keywords_eot") or []):
+                perm.removed_keywords_eot.add(str(kw).lower())
             # Editor "Alter card": override P/T, creature subtypes ("Set creature
             # types") and/or add the Creature card type ("Make a creature"). These
             # fold into a single `becomes` animation. Each contributing change has
@@ -1449,7 +1454,7 @@ _SPLIT_MAX_DEPTH = 12
 _WORKER_GRACE_S = 5.0
 
 
-def _worker_init(deck, specs, config: SimulationConfig, stop_event, found_event) -> None:
+def _worker_init(deck, specs, config: SimulationConfig, stop_event, found_event, progress) -> None:
     from ..cards import load_all_cards
     from ..properties.evaluator import compile_all
 
@@ -1462,6 +1467,23 @@ def _worker_init(deck, specs, config: SimulationConfig, stop_event, found_event)
     _WORKER["config"] = config
     _WORKER["stop"] = stop_event    # the user pressed Stop
     _WORKER["found"] = found_event  # another worker found this game's success
+    _WORKER["progress"] = progress  # shared list: live [explored, considered] per part
+
+
+def _worker_progress(part: int) -> Callable[[int, int, int, float], None]:
+    """A progress callback for a subtree worker: writes its running branch counts
+    into the shared list at its part's slots (throttled by the ctx to ~1s), so
+    the master can report LIVE parallel progress."""
+    arr = _WORKER.get("progress")
+
+    def cb(_gi: int, explored: int, considered: int, _el: float) -> None:
+        if arr is not None:
+            try:
+                arr[2 * part] = explored
+                arr[2 * part + 1] = considered
+            except Exception:  # noqa: BLE001 - progress is best-effort
+                pass
+    return cb
 
 
 def _throttled_stop(*events, interval: float = 0.15) -> Callable[[], bool]:
@@ -1530,7 +1552,7 @@ def _tree_worker(game_index: int, min_leaves: int, num_parts: int, part: int,
     ctx, root, items, keep_nodes, shuffled = _seed_game(
         _WORKER["base"], _WORKER["props"], config, game_index,
         should_stop=_throttled_stop(_WORKER["stop"], _WORKER["found"]),
-        deadline=deadline,
+        deadline=deadline, on_progress=_worker_progress(part),
     )
     success = False
     subtrees: dict[int, dict] = {}
@@ -1586,6 +1608,7 @@ def _simulate_game_split(
     should_skip: Callable[[], bool] | None = None,
     on_game_start: Callable[[int, list], None] | None = None,
     on_progress: Callable[[int, int, int, float], None] | None = None,
+    progress_arr=None,
 ) -> GameOutcome | None:
     """One game, its tree explored in parallel. The master expands the search
     level by level until enough subtrees hang at some depth (or the search
@@ -1622,6 +1645,9 @@ def _simulate_game_split(
     shallow_explored = ctx.branches_explored
     shallow_considered = ctx.branches_considered
     found_event.clear()
+    if progress_arr is not None:                # zero the live counters for this game
+        for _pi in range(len(progress_arr)):
+            progress_arr[_pi] = 0
     remaining = max(0.05, ctx.deadline - time.monotonic())
     num_parts = min(workers, len(leaves))
     futures = [pool.submit(_tree_worker, game_index, min_leaves, num_parts, part, remaining)
@@ -1640,14 +1666,18 @@ def _simulate_game_split(
     last_prog = time.monotonic()
     while pending:
         now = time.monotonic()
-        # Live in-game progress while the workers churn: the master can't see the
-        # workers' running branch counts (they only return at the end), so it
-        # reports the elapsed time + the shallow (phase-1) counts every ~2s; the
-        # client also ticks elapsed on its own. Final counts land at game end.
-        if on_progress is not None and now - last_prog >= 2.0:
+        # Live in-game progress while the workers churn (every ~1s): sum the
+        # workers' shared branch counters. Each worker's count includes the shared
+        # shallow prefix, so mirror the final merge (shallow + Σ(worker−shallow)).
+        if on_progress is not None and now - last_prog >= 1.0:
             last_prog = now
-            on_progress(game_index, ctx.branches_explored, ctx.branches_considered,
-                        now - ctx.start_time)
+            expl, cons = ctx.branches_explored, ctx.branches_considered
+            if progress_arr is not None:
+                we = [progress_arr[2 * p] for p in range(num_parts)]
+                wc = [progress_arr[2 * p + 1] for p in range(num_parts)]
+                expl = shallow_explored + sum(max(0, x - shallow_explored) for x in we)
+                cons = shallow_considered + sum(max(0, x - shallow_considered) for x in wc)
+            on_progress(game_index, expl, cons, now - ctx.start_time)
         if should_stop and should_stop():
             # User abort: abandon the game IMMEDIATELY. Its result is discarded
             # (return None), so there is no reason to wait for workers to hand
@@ -1728,12 +1758,12 @@ def _simulate_game_split(
     return _assemble_outcome(ctx, root, keep_nodes, shuffled, config, game_index, success)
 
 
-def _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event):
+def _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event, progress):
     from concurrent.futures import ProcessPoolExecutor
 
     return ProcessPoolExecutor(
         max_workers=workers, mp_context=mp_ctx, initializer=_worker_init,
-        initargs=(deck, specs, config, stop_event, found_event),
+        initargs=(deck, specs, config, stop_event, found_event, progress),
     )
 
 
@@ -1800,7 +1830,7 @@ def run_simulation(
     # property objects (tests) don't have one — those run fully sequentially.
     can_parallel = all(getattr(p, "spec", None) is not None for p in properties)
 
-    pool = manager = stop_event = found_event = mp_ctx = specs = None
+    pool = manager = stop_event = found_event = mp_ctx = specs = progress_arr = None
     if workers > 1 and indices and can_parallel:
         import multiprocessing as mp
 
@@ -1809,7 +1839,10 @@ def run_simulation(
         manager = mp_ctx.Manager()
         stop_event = manager.Event()
         found_event = manager.Event()
-        pool = _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event)
+        # Shared live branch counts per worker part ([explored, considered] × workers),
+        # so the master can report parallel progress every ~1s (see _worker_progress).
+        progress_arr = manager.list([0] * (2 * workers))
+        pool = _new_pool(mp_ctx, workers, deck, specs, config, stop_event, found_event, progress_arr)
 
     try:
         for i in indices:
@@ -1823,7 +1856,7 @@ def run_simulation(
                         stop_event, found_event, should_stop,
                         on_tainted=lambda: tainted.__setitem__(0, True),
                         should_skip=should_skip, on_game_start=on_game_start,
-                        on_progress=on_progress)
+                        on_progress=on_progress, progress_arr=progress_arr)
                 else:
                     outcome = simulate_game(base_state, properties, config, i,
                                             should_stop=should_stop,
@@ -1839,7 +1872,7 @@ def run_simulation(
                 _terminate_pool(pool)
                 pool = (None if (should_stop and should_stop())
                         else _new_pool(mp_ctx, workers, deck, specs, config,
-                                       stop_event, found_event))
+                                       stop_event, found_event, progress_arr))
             # If Stop fired during this game, abandon it: don't report a
             # half-searched game as a result or count it.
             if outcome is None or (should_stop and should_stop()):

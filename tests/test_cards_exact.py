@@ -1601,6 +1601,26 @@ def test_profane_tutor_real_suspend():
         assert any(c.name in ("Sol Ring", "Dark Ritual") for c in b.hand)
 
 
+def test_fixed_config_removes_printed_keyword():
+    """The editor can UNCHECK a printed keyword to strip it (permanently or until
+    end of turn); other printed keywords stay."""
+    from mtg_goldfish.deck.models import Deck, DeckBoard, DeckEntry
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    entries = [DeckEntry(quantity=1, board=DeckBoard.COMMANDER, card=card("Emet-Selch, Unsundered")),
+               DeckEntry(quantity=2, board=DeckBoard.MAINBOARD, card=card("Hoarding Broodlord"))]
+    base = new_game_from_deck(Deck(name="t", entries=entries))
+    fixed = {"turn": 4, "phase": "precombat_main", "battlefield": [
+        {"name": "Hoarding Broodlord", "removed_keywords": ["flying"]},
+        {"name": "Hoarding Broodlord", "removed_keywords_eot": ["flying"]},
+    ]}
+    v = _build_fixed_variant(base, fixed, seed=1)
+    perm, eot = v.battlefield
+    assert not v.has_keyword(perm, "flying") and v.has_keyword(perm, "convoke")
+    assert not v.has_keyword(eot, "flying") and "flying" in eot.removed_keywords_eot
+
+
 def test_reanimation_aura_needs_a_target_to_cast():
     """An Aura can't be cast with no legal target: Animate Dead is uncastable with
     an empty graveyard (also blocks the graveyard-recast path) and castable once a
