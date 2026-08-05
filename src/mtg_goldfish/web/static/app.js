@@ -173,6 +173,12 @@ async function init() {
     b.dataset.on = on ? "0" : "1";
     b.textContent = on ? "Disabled" : "Enabled";
   };
+  $("parallel-toggle").onclick = (e) => {
+    const b = e.currentTarget;
+    const on = b.dataset.on === "1";
+    b.dataset.on = on ? "0" : "1";
+    b.textContent = on ? "Disabled" : "Enabled";
+  };
   $("stop-btn").onclick = () => api(`/api/sessions/${state.session.id}/simulate/stop`, { method: "POST" });
   $("resume-btn").onclick = resumeRun;
   $("prop-help-btn").onclick = () => $("prop-help-modal").classList.remove("hidden");
@@ -582,6 +588,9 @@ function loadRun(r) {
   const fsb = $("fake-shuffle-toggle"), fson = !!cfg.fake_shuffle;
   fsb.dataset.on = fson ? "1" : "0";
   fsb.textContent = fson ? "Enabled" : "Disabled";
+  const plb = $("parallel-toggle"), plon = cfg.parallel !== false;  // default on
+  plb.dataset.on = plon ? "1" : "0";
+  plb.textContent = plon ? "Enabled" : "Disabled";
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -1549,8 +1558,10 @@ function fcFrame() {
     };
     const pm0 = fcCounterPT(it.counters);  // net ±1/±1 counters (added to P/T badges)
     if (it.face_down) {  // a 2/2 colourless nameless creature — alterations still apply
-      const kws = [...(it.granted || []), ...(it.granted_eot || [])];
-      if (it.face_down === "disguise" || it.face_down === "cloak") kws.push("ward");
+      // Dedupe: disguise/cloak's ward is already in `granted` (see fcApplyFaceDown);
+      // a single "ward" ability, never two.
+      const kws = [...new Set([...(it.granted || []), ...(it.granted_eot || [])])];
+      if ((it.face_down === "disguise" || it.face_down === "cloak") && !kws.includes("ward")) kws.push("ward");
       return {
         ...common, name: "Face-down creature", token: false, commander: false,
         face_down: true, is_creature: true, is_land: false, is_aura: false,
@@ -2395,7 +2406,19 @@ function buildMenu(items) {
           sub.classList.add("ctx-submenu");
           sub.onmouseenter = cancelClose;
           sub.onmouseleave = scheduleClose;
-          row.append(sub);
+          // Append to <body>, not the row: a scrollable parent menu (overflow for
+          // long lists) would otherwise CLIP the submenu at left:100%. Position it
+          // (fixed) at the row's right edge, flipping left / clamping up if it
+          // would run off-screen.
+          document.body.append(sub);
+          const r = row.getBoundingClientRect();
+          const sw = sub.offsetWidth, sh = sub.offsetHeight;
+          let left = r.right + 2;
+          if (left + sw > window.innerWidth) left = Math.max(2, r.left - sw - 2);
+          let top = r.top;
+          if (top + sh > window.innerHeight) top = Math.max(2, window.innerHeight - sh - 2);
+          sub.style.left = left + "px";
+          sub.style.top = top + "px";
         }
       };
       row.onmouseleave = scheduleClose;
@@ -2610,6 +2633,7 @@ async function runSim() {
     search_mode: $("search-mode").value,
     instant_speed: $("instant-speed-toggle").dataset.on === "1",
     fake_shuffle: $("fake-shuffle-toggle").dataset.on === "1",
+    parallel: $("parallel-toggle").dataset.on === "1",
     fixed_hand: fixed ? state.fixedHand.slice() : null,
     fixed_hand_pad_to: fixed && $("fixed-pad").checked
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)
@@ -2721,10 +2745,14 @@ function normalizeRun(r, i) {
   return {
     ...r,
     _i: i,
-    // Replay frames drop "pass"/"pay" steps.
+    // Replay frames drop bookkeeping NOISE — "pass …"/"pay …" and mana taps
+    // ("tap for mana …"). These carry no board snapshot (the engine skips it for
+    // them, the search's hottest cost), so they MUST be filtered here or
+    // renderBoard would get a boardless frame. ("(on the stack)" frames DO keep
+    // their snapshot — they show the spell/face on the stack — so they stay.)
     frames: (r.log || []).filter((f) => {
       const d = f.desc || "";
-      return !d.startsWith("pass") && !d.startsWith("pay ");
+      return !d.startsWith("pass") && !d.startsWith("pay ") && !d.startsWith("tap for mana");
     }),
   };
 }

@@ -89,6 +89,7 @@ class SimulateRequest(BaseModel):
     search_mode: str = "best_first"  # see engine.simulator.SEARCH_MODES
     instant_speed: bool = False  # explore instant-speed plays (see SimConfig)
     fake_shuffle: bool = False  # never really reorder the library (see SimConfig)
+    parallel: bool = True  # spread the search across CPU cores (see SimConfig)
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
@@ -848,6 +849,7 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
         search_mode=req.search_mode,
         instant_speed=req.instant_speed,
         fake_shuffle=req.fake_shuffle,
+        parallel=req.parallel,
         fixed_hand=(req.fixed_hand or None),
         fixed_hand_pad_to=(req.fixed_hand_pad_to if req.fixed_hand else None),
         fixed_config=req.fixed_config,

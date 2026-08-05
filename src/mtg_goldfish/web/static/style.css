@@ -260,7 +260,9 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .ctx-item .ctx-arrow { color: var(--muted); font-size: 11px; }
 .ctx-item:hover .ctx-arrow { color: #1a1205; }
 .ctx-sep { height: 1px; background: var(--border); margin: .25rem .3rem; }
-.ctx-submenu { position: absolute; top: -.3rem; left: 100%; margin-left: 2px; }
+/* Submenus are appended to <body> and positioned by JS (so a scrollable parent
+   menu's overflow can't clip them); .ctx-menu is already position: fixed. */
+.ctx-submenu { margin: 0; }
 
 /* mana pips (used for the board mana pool) */
 .pip {
@@ -445,7 +447,7 @@ table.sessions-table th {
   color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
   font-weight: 600; border-bottom: 1px solid var(--border);
 }
-table.sessions-table .numc { text-align: right; font-variant-numeric: tabular-nums; }
+table.sessions-table .numc { text-align: center; font-variant-numeric: tabular-nums; }
 table.sessions-table .nowrap { white-space: nowrap; }
 table.sessions-table .sub { font-size: 12px; margin-top: .1rem; }
 table.sessions-table tbody tr.session-row { cursor: pointer; }
@@ -506,7 +508,7 @@ table.runs .big { font-weight: 700; color: var(--accent); }
 #viz-log { margin-top: 1rem; } /* air between the games table and the board */
 .runs-scroll.scrolling { max-height: 380px; overflow-y: auto; } /* ~10 rows */
 table.viz-runs td, table.viz-runs th { padding: .35rem .6rem; }
-table.viz-runs .numc { text-align: right; font-variant-numeric: tabular-nums; }
+table.viz-runs .numc { text-align: center; font-variant-numeric: tabular-nums; }
 table.viz-runs .cc { text-align: center; }
 table.viz-runs th.sortable, table.sessions-table th.sortable { cursor: pointer; user-select: none; }
 table.viz-runs th.sortable:hover, table.sessions-table th.sortable:hover { color: var(--text); }

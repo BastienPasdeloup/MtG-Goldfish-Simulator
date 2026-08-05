@@ -148,6 +148,10 @@
                 <button id="fake-shuffle-toggle" data-on="1"
                         title="When enabled, the library is never really shuffled mid-game: a 'shuffle' only reinserts the cards whose position you know (put on top by a Brainstorm, bottomed by a mulligan or a scry...) at random places, and every other card keeps its order. This keeps the library near-constant across all lines of play, avoiding over-evaluated probabilities when different lines shuffle differently (see the Properties help ? for details). Enabled by default.">Enabled</button>
               </div>
+              <div><label>Parallel exploration</label><br />
+                <button id="parallel-toggle" data-on="1"
+                        title="Spread each game's tree search across your CPU cores. Enabled by default; turn off to run single-threaded (one core), which is easier to profile or reproduce exactly.">Enabled</button>
+              </div>
             </div>
             <div class="row" style="margin-top:.6rem">
               <button id="run-btn" class="primary">Run</button>
