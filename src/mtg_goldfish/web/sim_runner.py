@@ -273,6 +273,7 @@ class SimulationRunner:
                 fake_shuffle=config.fake_shuffle,
                 # Parallel exploration off -> single-threaded (1 worker).
                 parallel_workers=(None if config.parallel else 1),
+                save_tree=config.save_tree,
                 fixed_hand=config.fixed_hand,
                 fixed_hand_pad_to=config.fixed_hand_pad_to,
                 fixed_config=(config.fixed_config.model_dump()

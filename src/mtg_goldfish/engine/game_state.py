@@ -548,16 +548,11 @@ class GameState:
 
     def emit(self, message: str) -> None:
         """Append a log *frame*: a description plus a compact board snapshot, so a
-        winning line can be replayed graphically. Building the snapshot is the
-        single hottest cost of the search (a frame per action, almost all on
-        states that are never replayed — only a WINNING line is ever shown). So
-        NOISE frames the replay drops anyway are stored as a bare description:
-        "pass …"/"pay …" and mana taps ("tap for mana …"). NOTE: "(on the stack)"
-        frames are NOT skipped — they carry the stack contents the viewer shows
-        (which spell / which modal face is being cast). The tree still gets the
-        skipped frames' text (it only reads `desc`)."""
-        if (message.startswith("pass") or message.startswith("pay ")
-                or message.startswith("tap for mana")):
+        winning line can be replayed graphically. Only "pass …"/"pay …" frames —
+        which the replay has always dropped (see normalizeRun) — skip the snapshot
+        (the tree still gets their text, it only reads `desc`). Every OTHER frame,
+        INCLUDING mana taps, keeps its board so the replay is fully detailed."""
+        if message.startswith("pass") or message.startswith("pay "):
             self.log.append({"desc": message})
             return
         frame = {"desc": message}

@@ -129,6 +129,10 @@ class SimulationConfig:
     #: automatic (all cores but one, to keep the machine responsive); 1 = fully
     #: sequential in-process.
     parallel_workers: int | None = None
+    #: Record the explored-states TREE (for the tree viz). Off = don't build it,
+    #: which trims memory + the saved session size (the tree dominates it) and
+    #: shaves the recording overhead. Replays (winning-line logs) are unaffected.
+    save_tree: bool = True
     #: Fixed-config mode: a fully-specified starting state (a plain dict — the
     #: FixedConfig model dumped) the search begins from instead of an opening
     #: hand. Keys: battlefield [{name, tapped}], hand/graveyard/exile [names],
@@ -1288,7 +1292,7 @@ def _seed_game(
     ctx = _SearchContext(properties, deadline, should_stop=should_stop,
                          should_skip=should_skip, instant_speed=config.instant_speed,
                          game_index=game_index, on_progress=on_progress,
-                         tree_cap=_TREE_NODE_CAP)
+                         tree_cap=(_TREE_NODE_CAP if config.save_tree else 1))
     # Root of the recorded search tree: the game before any hand is kept.
     root = {"id": 0, "label": "game", "turn": 0, "phase": "start", "children": [], "success": False, "sat": []}
     ctx.tree_root = root

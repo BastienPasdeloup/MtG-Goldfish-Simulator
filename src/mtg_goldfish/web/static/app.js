@@ -202,24 +202,7 @@ async function init() {
     b.dataset.play = on ? "0" : "1";
     b.textContent = on ? "On the draw" : "On the play";
   };
-  $("instant-speed-toggle").onclick = (e) => {
-    const b = e.currentTarget;
-    const on = b.dataset.on === "1";
-    b.dataset.on = on ? "0" : "1";
-    b.textContent = on ? "Disabled" : "Enabled";
-  };
-  $("fake-shuffle-toggle").onclick = (e) => {
-    const b = e.currentTarget;
-    const on = b.dataset.on === "1";
-    b.dataset.on = on ? "0" : "1";
-    b.textContent = on ? "Disabled" : "Enabled";
-  };
-  $("parallel-toggle").onclick = (e) => {
-    const b = e.currentTarget;
-    const on = b.dataset.on === "1";
-    b.dataset.on = on ? "0" : "1";
-    b.textContent = on ? "Disabled" : "Enabled";
-  };
+  // The Options toggles are now native checkboxes (no handlers needed).
   $("stop-btn").onclick = () => api(`/api/sessions/${state.session.id}/simulate/stop`, { method: "POST" });
   $("resume-btn").onclick = resumeRun;
   $("prop-help-btn").onclick = () => $("prop-help-modal").classList.remove("hidden");
@@ -623,15 +606,10 @@ function loadRun(r) {
   const sm = $("search-mode");
   sm.value = cfg.search_mode ?? "best_first";
   if (sm.value !== (cfg.search_mode ?? "best_first")) sm.value = "best_first";
-  const isb = $("instant-speed-toggle"), ison = !!cfg.instant_speed;
-  isb.dataset.on = ison ? "1" : "0";
-  isb.textContent = ison ? "Enabled" : "Disabled";
-  const fsb = $("fake-shuffle-toggle"), fson = !!cfg.fake_shuffle;
-  fsb.dataset.on = fson ? "1" : "0";
-  fsb.textContent = fson ? "Enabled" : "Disabled";
-  const plb = $("parallel-toggle"), plon = cfg.parallel !== false;  // default on
-  plb.dataset.on = plon ? "1" : "0";
-  plb.textContent = plon ? "Enabled" : "Disabled";
+  $("instant-speed-toggle").checked = !!cfg.instant_speed;
+  $("fake-shuffle-toggle").checked = !!cfg.fake_shuffle;
+  $("parallel-toggle").checked = cfg.parallel !== false;   // default on
+  $("save-tree-toggle").checked = cfg.save_tree !== false; // default on
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -1556,18 +1534,22 @@ function fcRemoveBattlefieldIndices(indices) {
 // Called on dragend of any fixed-config card. If the card was NOT dropped on a
 // zone (state.fcDropped stays false), it was dragged out of every area, so we
 // remove it — the same as right-click "Remove". Returns true if it removed the
-// card (so the pile reorder handler knows to skip). Commanders are exempt (they
-// belong in the command zone; use "Shuffle to library" instead).
+// card (so the pile reorder handler knows to skip). A COMMANDER dragged out of
+// the game area is shuffled into the library (the deck) — the commander analogue
+// of removing a card (a commander can't just cease to exist).
 function fcHandleDragEnd() {
   const d = state.fcDrag;
   const dropped = state.fcDropped;
   state.fcDrag = null;
   state.fcDropped = false;
-  if (d && !dropped && d.from && d.from !== "command") {
-    fcRemove(d.from, d.idx);
-    return true;
+  if (!d || dropped || !d.from) return false;
+  if (d.from === "command") {
+    const name = d.name || (fcFrame().command_zone || [])[d.idx];
+    if (name) { fcShuffleCommander(name); return true; }
+    return false;
   }
-  return false;
+  fcRemove(d.from, d.idx);
+  return true;
 }
 
 function fcRemove(zone, idx) {
@@ -1808,9 +1790,34 @@ function fcAllCreatureTypes() {
   });
   return [...set].sort((a, b) => a.localeCompare(b));
 }
+// The real MTG keyword ABILITIES (not ability-words or named card abilities like
+// "Starscourge"). A card's printed keywords are unioned in ONLY when they match a
+// recognised keyword, so junk never appears; anything else can still be typed.
+const FC_KEYWORD_ABILITIES = [
+  "flying", "first strike", "double strike", "deathtouch", "defender", "reach",
+  "trample", "vigilance", "haste", "lifelink", "menace", "hexproof", "shroud",
+  "indestructible", "flash", "prowess", "ward", "protection", "fear", "intimidate",
+  "skulk", "shadow", "horsemanship", "banding", "flanking", "rampage", "bushido",
+  "provoke", "frenzy", "melee", "mentor", "exalted", "battle cry", "extort",
+  "afflict", "convoke", "delve", "improvise", "affinity", "cascade", "storm",
+  "annihilator", "infect", "wither", "persist", "undying", "modular", "graft",
+  "sunburst", "devour", "amass", "riot", "adapt", "evolve", "outlast", "renown",
+  "dethrone", "myriad", "unleash", "bloodthirst", "poisonous", "toxic", "soulbond",
+  "changeling", "landwalk", "islandwalk", "swampwalk", "mountainwalk", "forestwalk",
+  "plainswalk", "cumulative upkeep", "fading", "vanishing", "echo", "phasing",
+  "buyback", "flashback", "madness", "morph", "megamorph", "manifest", "disguise",
+  "cloak", "ninjutsu", "dash", "blitz", "boast", "training", "backup", "bestow",
+  "reconfigure", "for mirrodin", "living weapon", "crew", "fabricate", "partner",
+  "companion", "read ahead", "prototype", "unearth", "embalm", "eternalize",
+  "escape", "aftermath", "jump-start", "retrace", "encore", "mutate", "friends forever",
+];
 function fcAllKeywords() {
-  const set = new Set(FC_KEYWORDS);
-  (state.cards || []).forEach((c) => (c.keywords || []).forEach((k) => set.add(k.toLowerCase())));
+  const known = new Set(FC_KEYWORD_ABILITIES);
+  const set = new Set(FC_KEYWORD_ABILITIES);
+  // Add a deck card's printed keyword only if it's a recognised keyword ability.
+  (state.cards || []).forEach((c) => (c.keywords || []).forEach((k) => {
+    const kl = k.toLowerCase(); if (known.has(kl)) set.add(kl);
+  }));
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
@@ -2696,9 +2703,10 @@ async function runSim() {
     on_the_play: $("play-draw-toggle").dataset.play === "1",
     base_seed: seedField === "" ? null : parseInt(seedField),
     search_mode: $("search-mode").value,
-    instant_speed: $("instant-speed-toggle").dataset.on === "1",
-    fake_shuffle: $("fake-shuffle-toggle").dataset.on === "1",
-    parallel: $("parallel-toggle").dataset.on === "1",
+    instant_speed: $("instant-speed-toggle").checked,
+    fake_shuffle: $("fake-shuffle-toggle").checked,
+    parallel: $("parallel-toggle").checked,
+    save_tree: $("save-tree-toggle").checked,
     fixed_hand: fixed ? state.fixedHand.slice() : null,
     fixed_hand_pad_to: fixed && $("fixed-pad").checked
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)
@@ -2810,14 +2818,12 @@ function normalizeRun(r, i) {
   return {
     ...r,
     _i: i,
-    // Replay frames drop bookkeeping NOISE — "pass …"/"pay …" and mana taps
-    // ("tap for mana …"). These carry no board snapshot (the engine skips it for
-    // them, the search's hottest cost), so they MUST be filtered here or
-    // renderBoard would get a boardless frame. ("(on the stack)" frames DO keep
-    // their snapshot — they show the spell/face on the stack — so they stay.)
+    // Replay frames drop only "pass …"/"pay …" (bare-description frames with no
+    // board — the engine skips their snapshot). Everything else, INCLUDING mana
+    // taps, is kept so the replay is fully detailed.
     frames: (r.log || []).filter((f) => {
       const d = f.desc || "";
-      return !d.startsWith("pass") && !d.startsWith("pay ") && !d.startsWith("tap for mana");
+      return !d.startsWith("pass") && !d.startsWith("pay ");
     }),
   };
 }
@@ -3903,11 +3909,15 @@ function renderBoard(f, edit = {}) {
     line1.append(hstat("turn ", f.turn, edit.onSetTurn, 1));
     line1.append(phaseTimeline(f.phase, { editable: true, onPick: edit.onPickPhase }));
   } else {
-    // Replay: turn number + the phase timeline (current phase highlighted) + action.
+    // Replay: turn number + the phase timeline (current phase highlighted). The
+    // action (what this step does) goes on its OWN line below (see actionLine).
     line1.append(el("span", { className: "turn", textContent: `Turn ${f.turn}` }),
-      phaseTimeline(f.phase, {}),
-      el("span", { className: "action", textContent: f.desc || "" }));
+      phaseTimeline(f.phase, {}));
   }
+  // Replay only: the yellow "what this step does" line, BELOW the turn/phase line.
+  const actionLine = (!ed && f.desc)
+    ? el("div", { className: "board-header action-line" }, el("span", { className: "action", textContent: f.desc }))
+    : null;
   const ints = el("div", { className: "board-header" },
     hstat("life ", f.life, ed && ((v) => edit.onSet("life", v))),
     hstat("opp ", f.opponent_life ?? 20, ed && ((v) => edit.onSet("opponent_life", v))));
@@ -3936,7 +3946,9 @@ function renderBoard(f, edit = {}) {
     if (ed) extras.append(hstat("energy ", f.energy || 0, (v) => edit.onSet("energy", v), 0));
     else extras.append(el("span", {}, el("span", { className: "k", textContent: "energy " }), energyPips(f.energy || 0)));
   }
-  const header = el("div", {}, line1, ints, pools);
+  const header = el("div", {}, line1);
+  if (actionLine) header.append(actionLine);  // the action, on its own line below
+  header.append(ints, pools);
   if (extras.childNodes.length) header.append(extras);
 
   // MTGO-like layout: exile + graveyard piles on the left, the field in the

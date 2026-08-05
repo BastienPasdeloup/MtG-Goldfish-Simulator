@@ -136,6 +136,9 @@ class SimConfig(BaseModel):
     # Spread each game's tree search across CPU cores. On by default; turn off to
     # run single-threaded (parallel_workers=1) — easier to profile / reproduce.
     parallel: bool = True
+    # Record the explored-states tree (for the tree viz). Off = smaller saved
+    # sessions + a little faster; replays are unaffected.
+    save_tree: bool = True
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
