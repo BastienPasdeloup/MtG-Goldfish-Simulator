@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import signal
 import subprocess
 from pathlib import Path
 
@@ -90,7 +91,7 @@ class SimulateRequest(BaseModel):
     instant_speed: bool = False  # explore instant-speed plays (see SimConfig)
     fake_shuffle: bool = False  # never really reorder the library (see SimConfig)
     parallel: bool = True  # spread the search across CPU cores (see SimConfig)
-    save_tree: bool = True  # record the explored-states tree (see SimConfig)
+    save_tree: bool = False  # record the explored-states tree (off by default)
     # Fixed-hand mode: force this exact opening hand (card names); None = normal.
     fixed_hand: list[str] | None = None
     # Fixed-hand mode: pad the hand with random cards up to this size (None = no padding).
@@ -889,6 +890,51 @@ def skip_game(session_id: str) -> dict:
     run moves on to the next game."""
     runner.skip(session_id)
     return {"ok": True}
+
+
+#: Auto-exit: shut the server down when no browser tab has the app open (unless
+#: MTG_KEEP_ALIVE is set — e.g. for development). Grace covers page navigation.
+_AUTO_EXIT = os.environ.get("MTG_KEEP_ALIVE") is None
+_EXIT_GRACE_S = 8.0
+
+
+@app.websocket("/ws/presence")
+async def ws_presence(websocket: WebSocket) -> None:
+    """Every open tab (home or session) holds one of these — the server counts
+    them to know when the app is no longer open anywhere (see the auto-exit
+    monitor). Declared BEFORE /ws/{session_id} so it isn't captured as a session."""
+    await HUB.presence_connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # keep-alive; ignore content
+    except WebSocketDisconnect:
+        pass
+    finally:
+        HUB.presence_disconnect(websocket)
+
+
+@app.on_event("startup")
+async def _start_auto_exit_monitor() -> None:
+    if not _AUTO_EXIT:
+        return
+
+    async def monitor() -> None:
+        idle = 0.0
+        while True:
+            await asyncio.sleep(2.0)
+            # Only after at least one tab has EVER connected (don't exit before
+            # the browser opens), shut down once every tab has been closed for the
+            # grace period.
+            if HUB.ever_connected() and not HUB.has_tabs():
+                idle += 2.0
+                if idle >= _EXIT_GRACE_S:
+                    print("No open tabs — shutting down the MtG Goldfish Simulator.")
+                    os.kill(os.getpid(), signal.SIGINT)  # uvicorn shuts down gracefully
+                    return
+            else:
+                idle = 0.0
+
+    asyncio.ensure_future(monitor())
 
 
 @app.websocket("/ws/{session_id}")

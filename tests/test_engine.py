@@ -566,7 +566,7 @@ def test_tree_nodes_carry_replay_steps():
     prop = _Prop("t", "at", Phase.POSTCOMBAT_MAIN, 2, lambda s: True)  # trivially reached
     seen = []
     run_simulation(deck, [prop], SimulationConfig(num_games=1, timeout_per_game_s=3,
-                                                  parallel_workers=1),
+                                                  parallel_workers=1, save_tree=True),
                    on_game=lambda o, st: seen.append(o))
     o = seen[0]
     assert o.success and o.tree is not None

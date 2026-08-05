@@ -57,11 +57,21 @@ if not %errorlevel%==0 (
 )
 
 echo.
+echo ==^> Creating a Start Menu entry...
+powershell -NoProfile -Command ^
+  "$ws = New-Object -ComObject WScript.Shell;" ^
+  "$lnk = $ws.CreateShortcut([Environment]::GetFolderPath('Programs') + '\MtG Goldfish Simulator.lnk');" ^
+  "$lnk.TargetPath = '%~dp0launch-windows.bat';" ^
+  "$lnk.WorkingDirectory = '%~dp0';" ^
+  "$lnk.Description = 'MtG Goldfish Simulator';" ^
+  "$lnk.Save()"
+
+echo.
 echo ==================================================
 echo   [OK]  All done!
 echo ==================================================
 echo.
-echo   To start the simulator, double-click:
-echo       launch-windows.bat
+echo   Launch it from the Start Menu:  MtG Goldfish Simulator
+echo   ...or double-click:  launch-windows.bat
 echo.
 pause

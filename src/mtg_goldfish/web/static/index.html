@@ -142,15 +142,15 @@
               </div>
             </div>
             <div class="row options-row" style="margin-top:.6rem">
-              <span class="options-label">Options</span>
+              <label class="options-label">Options</label>
               <label class="opt" title="Also explore instant-speed plays — casting instants/flash and activating abilities during other steps (upkeep, combat, end step), plus niche lines like countering your own spells. Explores many more lines, so it is much slower. Off by default.">
                 <input type="checkbox" id="instant-speed-toggle" /> Instant speed</label>
               <label class="opt" title="When enabled, the library is never really shuffled mid-game: a 'shuffle' only reinserts the cards whose position you know (Brainstorm put-backs, scry bottoms...) at random places, and every other card keeps its order — keeping the library near-constant across all lines of play. Enabled by default.">
                 <input type="checkbox" id="fake-shuffle-toggle" checked /> Fake shuffling</label>
               <label class="opt" title="Spread each game's tree search across your CPU cores. Enabled by default; turn off to run single-threaded (one core), which is easier to profile or reproduce exactly.">
                 <input type="checkbox" id="parallel-toggle" checked /> Parallel exploration</label>
-              <label class="opt" title="Record the explored-states tree for the tree viz. Turn off for smaller saved sessions and a little more speed — replays are unaffected. Enabled by default.">
-                <input type="checkbox" id="save-tree-toggle" checked /> Save explored-states tree</label>
+              <label class="opt" title="Record the explored-states tree for the tree viz. Off by default (smaller saved sessions and a little more speed) — turn on to inspect the search tree. Replays are unaffected.">
+                <input type="checkbox" id="save-tree-toggle" /> Save explored-states tree</label>
             </div>
             <div class="row" style="margin-top:.6rem">
               <button id="run-btn" class="primary">Run</button>

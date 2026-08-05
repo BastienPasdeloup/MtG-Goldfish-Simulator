@@ -135,13 +135,29 @@ class ScryfallClient:
         except Exception:
             return None
 
+    def _get(self, client: "httpx.Client", path: str, params: dict, tries: int = 5):
+        """GET with Scryfall rate-limit (429) handling: honour Retry-After (or
+        exponential backoff) so a burst of fetches doesn't just fail."""
+        resp = None
+        for attempt in range(tries):
+            resp = client.get(f"{SCRYFALL_API}{path}", params=params)
+            if resp.status_code != 429:
+                return resp
+            wait = 0.0
+            try:
+                wait = float(resp.headers.get("Retry-After", "0"))
+            except ValueError:
+                pass
+            time.sleep(min(max(wait, 0.4 * (2 ** attempt)), 12.0))
+        return resp
+
     def _oldest_raw(self, client: "httpx.Client", name: str) -> dict | None:
         """The EARLIEST paper printing of `name` (so images use the first
         published art). Oracle text on Scryfall is the current wording for every
         printing, so only the art/set differs. Returns None if the exact-name
         prints search finds nothing (caller falls back to /cards/named)."""
         try:
-            resp = client.get(f"{SCRYFALL_API}/cards/search", params={
+            resp = self._get(client, "/cards/search", {
                 "q": f'!"{name}" game:paper', "unique": "prints",
                 "order": "released", "dir": "asc"})
             if resp.status_code == 200:
@@ -158,14 +174,14 @@ class ScryfallClient:
         raw = self._oldest_raw(client, name)
         if raw is not None:
             return raw
-        resp = client.get(f"{SCRYFALL_API}/cards/named", params={"exact": name})
+        resp = self._get(client, "/cards/named", {"exact": name})
         if resp.status_code != 200:
-            resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": name})
+            resp = self._get(client, "/cards/named", {"fuzzy": name})
         if resp.status_code != 200 and "//" in name:
             # Double-faced cards: exact/fuzzy on the full "Front // Back" name
             # often fails; the front face resolves.
             front = name.split("//")[0].strip()
-            resp = client.get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": front})
+            resp = self._get(client, "/cards/named", {"fuzzy": front})
         return resp.json() if resp.status_code == 200 else None
 
     def get_named(self, name: str, refresh: bool = False) -> CardData:

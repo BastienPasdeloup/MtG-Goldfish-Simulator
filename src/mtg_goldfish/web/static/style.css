@@ -287,10 +287,12 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 /* The step stays to the RIGHT of the phase: it takes the remaining width and
    wraps inside its own column instead of dropping to a new line. */
 .board-header .action { flex: 1; min-width: 0; color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: break-word; }
-/* Simulation "Options" row: a label + a set of checkbox toggles. */
-.options-row { gap: 1.1rem; align-items: center; }
-.options-row .options-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
-.options-row .opt { display: inline-flex; align-items: center; gap: .35rem; color: var(--text); font-size: 13px; cursor: pointer; }
+/* Simulation "Options": a label then ONE checkbox toggle per line. The label
+   matches the other control labels ("Search", "Games", …) — the plain `label`
+   style (muted, 12px). */
+.options-row { flex-direction: column; align-items: flex-start; gap: .35rem; }
+.options-row .options-label { color: var(--muted); font-size: 12px; }
+.options-row .opt { display: flex; align-items: center; gap: .4rem; color: var(--text); font-size: 13px; cursor: pointer; }
 .options-row .opt input { cursor: pointer; margin: 0; }
 
 .board-header .k { color: var(--muted); font-size: 11px; text-transform: uppercase; }
@@ -512,6 +514,9 @@ table.sessions-table tbody tr.session-row:hover { background: var(--panel-2); }
 .str-opt:hover { background: var(--accent); color: #1a1205; }
 .str-opt.custom { font-style: italic; color: var(--muted); }
 .str-opt.custom:hover { color: #1a1205; }
+/* Numeric parameter step inside the picker (ward/rampage/annihilator value). */
+.str-stepper { display: flex; gap: .4rem; align-items: center; margin-top: .6rem; }
+.str-stepper .num-popup-input { width: 64px; text-align: center; }
 .tok-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: .7rem; }
 .tok-cand { display: flex; flex-direction: column; align-items: center; gap: .3rem; cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: .3rem; }
 .tok-cand:hover { border-color: var(--accent); background: var(--panel-2); }

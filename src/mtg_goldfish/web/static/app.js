@@ -107,8 +107,27 @@ const FC_KEYWORDS = ["flying", "first strike", "double strike", "trample",
 const FC_NUMBERED_KEYWORDS = ["ward", "rampage", "annihilator", "afflict", "absorb",
   "bushido", "fading", "vanishing", "frenzy", "modular", "poisonous", "renown",
   "toxic", "crew", "devour"];
-// The base keyword of a possibly-numbered keyword ("ward 2" -> "ward").
-function fcKeywordBase(kw) { return String(kw).replace(/\s+\d+$/, "").toLowerCase(); }
+// The base keyword of a parameterised keyword ("ward 2" / "protection from red"
+// -> "ward" / "protection").
+function fcKeywordBase(kw) { return String(kw).replace(/\s+(?:\d+|from\s.*)$/i, "").trim().toLowerCase(); }
+
+// Every "protection from …" variant that exists in the game (the parameter picked
+// for the Protection keyword). A custom value can still be typed.
+const FC_PROTECTIONS = [
+  "white", "blue", "black", "red", "green",
+  "all colors", "each color", "colorless", "multicolored", "monocolored",
+  "creatures", "artifacts", "enchantments", "planeswalkers", "lands",
+  "instants", "sorceries", "instants and sorceries",
+  "everything", "opponents", "the chosen color", "the color of your choice",
+  "Dragons", "Demons", "Angels", "Zombies", "Goblins", "Humans", "Vampires",
+];
+// Keywords that take a PARAMETER (chosen in the same picker window). `number`:
+// a −/+ value (ward 2, rampage 3, annihilator 6…). `from`: a "protection from X"
+// choice from the given list.
+const FC_KEYWORD_PARAMS = {
+  protection: { from: FC_PROTECTIONS },
+};
+FC_NUMBERED_KEYWORDS.forEach((k) => { FC_KEYWORD_PARAMS[k] = { number: true }; });
 
 const MAX_FIXED_HAND = 7;
 
@@ -181,6 +200,7 @@ async function api(path, opts) {
 
 // ---------------------------------------------------------------- init
 async function init() {
+  connectPresence();  // tell the server this tab is open (it exits when none are)
   state.meta = await api("/api/meta");
   updateLlmUi();
 
@@ -609,7 +629,7 @@ function loadRun(r) {
   $("instant-speed-toggle").checked = !!cfg.instant_speed;
   $("fake-shuffle-toggle").checked = !!cfg.fake_shuffle;
   $("parallel-toggle").checked = cfg.parallel !== false;   // default on
-  $("save-tree-toggle").checked = cfg.save_tree !== false; // default on
+  $("save-tree-toggle").checked = !!cfg.save_tree; // default off
   const b = $("play-draw-toggle"), on = cfg.on_the_play !== false;
   b.dataset.play = on ? "1" : "0";
   b.textContent = on ? "On the play" : "On the draw";
@@ -1031,6 +1051,19 @@ function openWs() {
   state.ws = ws;
 }
 function closeWs() { if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; } }
+
+// A persistent "presence" socket every tab keeps open, so the server knows the
+// app is still open somewhere (it shuts itself down when no tab remains). Auto-
+// reconnects so a brief blip doesn't look like the tab closed.
+function connectPresence() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  let ws;
+  try { ws = new WebSocket(`${proto}://${location.host}/ws/presence`); }
+  catch { setTimeout(connectPresence, 2000); return; }
+  state.presenceWs = ws;
+  ws.onclose = () => { state.presenceWs = null; setTimeout(connectPresence, 2000); };
+  ws.onerror = () => { try { ws.close(); } catch {} };
+}
 
 // ---- fixed-hand mode ----
 function setSimMode(mode) {
@@ -1822,34 +1855,67 @@ function fcAllKeywords() {
 }
 
 // A filterable picker modal for choosing one string from `options` (a custom
-// value can still be typed). `onPick(value)` receives the chosen string.
-function fcStringPicker(title, options, onPick) {
+// value can still be typed). `onPick(value)` receives the chosen string; if it
+// returns a truthy value the modal STAYS OPEN (so a second step — e.g. choosing
+// a keyword's parameter — happens IN THE SAME WINDOW; the follow-up just calls
+// fcStringPicker / fcStrNumberStep again from inside onPick).
+function fcStrModal() {
   let ov = document.getElementById("fc-str-modal");
-  if (!ov) {
-    ov = el("div", { id: "fc-str-modal", className: "modal-overlay hidden" });
-    const input = el("input", { id: "fc-str-q", type: "text", autocomplete: "off", placeholder: "Filter…" });
-    const list = el("div", { id: "fc-str-results", className: "str-results" });
-    ov.append(el("div", { className: "modal" },
-      el("div", { className: "modal-head" },
-        el("b", { id: "fc-str-title" }, title),
-        el("span", { className: "spacer" }),
-        el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
-          onclick: () => ov.classList.add("hidden") })),
-      el("div", { className: "modal-body" }, input, list)));
-    ov.onclick = (e) => { if (e.target === ov) ov.classList.add("hidden"); };
-    document.body.append(ov);
-    input.oninput = () => fcStrRender();
-    input.onkeydown = (e) => {
-      if (e.key === "Enter") { const first = list.querySelector(".str-opt"); if (first) first.click(); }
-    };
-  }
+  if (ov) return ov;
+  ov = el("div", { id: "fc-str-modal", className: "modal-overlay hidden" });
+  const input = el("input", { id: "fc-str-q", type: "text", autocomplete: "off", placeholder: "Filter…" });
+  const list = el("div", { id: "fc-str-results", className: "str-results" });
+  // Number-stepper step (hidden in list mode): − [value] + [Add].
+  const numInput = el("input", { id: "fc-str-num", type: "number", min: "1", value: "1", className: "num-popup-input" });
+  const stepper = el("div", { id: "fc-str-stepper", className: "str-stepper hidden" },
+    el("button", { className: "num-popup-step", textContent: "−",
+      onclick: () => { numInput.value = String(Math.max(1, (parseInt(numInput.value, 10) || 1) - 1)); numInput.focus(); } }),
+    numInput,
+    el("button", { className: "num-popup-step", textContent: "+",
+      onclick: () => { numInput.value = String((parseInt(numInput.value, 10) || 0) + 1); numInput.focus(); } }),
+    el("button", { className: "num-popup-add", textContent: "Add",
+      onclick: () => fcStrChoose(String(Math.max(1, parseInt(numInput.value, 10) || 1))) }));
+  ov.append(el("div", { className: "modal" },
+    el("div", { className: "modal-head" },
+      el("b", { id: "fc-str-title" }, ""),
+      el("span", { className: "spacer" }),
+      el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
+        onclick: () => ov.classList.add("hidden") })),
+    el("div", { className: "modal-body" }, input, list, stepper)));
+  ov.onclick = (e) => { if (e.target === ov) ov.classList.add("hidden"); };
+  document.body.append(ov);
+  input.oninput = () => fcStrRender();
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { const first = list.querySelector(".str-opt"); if (first) first.click(); }
+  };
+  numInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault();
+    fcStrChoose(String(Math.max(1, parseInt(numInput.value, 10) || 1))); } };
+  return ov;
+}
+function fcStringPicker(title, options, onPick) {
+  const ov = fcStrModal();
   state._strOpts = options; state._strPick = onPick;
   document.getElementById("fc-str-title").textContent = title;
-  const input = document.getElementById("fc-str-q");
-  input.value = "";
+  document.getElementById("fc-str-q").value = "";
+  document.getElementById("fc-str-q").classList.remove("hidden");
+  document.getElementById("fc-str-results").classList.remove("hidden");
+  document.getElementById("fc-str-stepper").classList.add("hidden");
   ov.classList.remove("hidden");
   fcStrRender();
-  setTimeout(() => input.focus(), 30);
+  setTimeout(() => document.getElementById("fc-str-q").focus(), 30);
+}
+// A numeric step in the SAME picker window (−/+ stepper). onPick gets the number.
+function fcStrNumberStep(title, initial, onPick) {
+  const ov = fcStrModal();
+  state._strPick = onPick;
+  document.getElementById("fc-str-title").textContent = title;
+  document.getElementById("fc-str-q").classList.add("hidden");
+  document.getElementById("fc-str-results").classList.add("hidden");
+  document.getElementById("fc-str-stepper").classList.remove("hidden");
+  const num = document.getElementById("fc-str-num");
+  num.value = String(initial || 1);
+  ov.classList.remove("hidden");
+  setTimeout(() => { num.focus(); num.select(); }, 30);
 }
 function fcStrRender() {
   const q = (document.getElementById("fc-str-q").value || "").trim().toLowerCase();
@@ -1863,9 +1929,12 @@ function fcStrRender() {
   if (!opts.length && !q) list.append(el("div", { className: "muted sub", textContent: "Type to filter." }));
 }
 function fcStrChoose(v) {
-  const ov = document.getElementById("fc-str-modal");
-  if (ov) ov.classList.add("hidden");
-  if (state._strPick) state._strPick(v);
+  // onPick may CHAIN (return truthy) to keep the window open for a follow-up step.
+  const keepOpen = state._strPick && state._strPick(v);
+  if (!keepOpen) {
+    const ov = document.getElementById("fc-str-modal");
+    if (ov) ov.classList.add("hidden");
+  }
 }
 
 // The "Alter card" submenu. Each change has its OWN "until end of turn" toggle
@@ -2059,13 +2128,15 @@ function fcKeywordSubmenu(idx, it) {
   rows.push({ sep: true }, { label: "Add keyword…", onClick: () =>
     fcStringPicker("Add a keyword", fcAllKeywords(), (kw) => {
       kw = kw.trim().toLowerCase(); if (!kw) return;
-      // A numbered keyword (ward, rampage, annihilator, …) asks for its value.
-      if (FC_NUMBERED_KEYWORDS.includes(fcKeywordBase(kw)) && !/\s\d+$/.test(kw)) {
-        fcCountPopup(window.innerWidth / 2 - 90, window.innerHeight / 2 - 40, {
-          label: `${kw} — value`, max: 99, min: 1, value: 1, button: "Add",
-          onConfirm: (n) => addKw(`${kw} ${n}`),
-        });
-      } else addKw(kw);
+      const param = FC_KEYWORD_PARAMS[fcKeywordBase(kw)];
+      const hasParam = /\s/.test(kw);  // already typed "ward 2" / "protection from red"
+      if (param && !hasParam) {
+        // Second step IN THE SAME WINDOW: pick the keyword's parameter.
+        if (param.number) fcStrNumberStep(`${kw} — value`, 1, (n) => { addKw(`${kw} ${n}`); });
+        else if (param.from) fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); });
+        return true;  // keep the picker open for the parameter step
+      }
+      addKw(kw);
     }) });
   return rows;
 }
@@ -2942,10 +3013,13 @@ function fmtSecs(s) {
 }
 
 function runsTable(runs) {
+  // The Tree column only appears if any game actually has a saved tree (the
+  // "Save explored-states tree" option was on).
+  const anyTree = runs.some((r) => r.tree || r.tree_gz || r.has_tree);
   // [header, alignment-class, sortable] triples.
   const COLS = [["#", "numc", true], ["Result", "cc", true], ["Hand", "cc", false],
     ["Steps", "numc", true], ["Explored", "numc", true], ["Considered", "numc", true],
-    ["Time", "numc", true], ["Tree", "cc", false]];
+    ["Time", "numc", true], ...(anyTree ? [["Tree", "cc", false]] : [])];
   const { key, dir } = state.runsSort;
   const thead = el("thead", {}, el("tr", {},
     ...COLS.map(([h, cls, sortable]) => {
@@ -3044,8 +3118,8 @@ function runsTable(runs) {
       el("td", { className: "numc", title: "steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
       el("td", { className: "numc", textContent: num(run.branches_explored) }),
       el("td", { className: "numc", textContent: num(run.branches_considered) }),
-      timeCell,
-      el("td", { className: "cc" }, treeCell));
+      timeCell);
+    if (anyTree) tr.append(el("td", { className: "cc" }, treeCell));  // Tree column only when saved
     if (canReplay) {
       tr.title = "click to replay the winning line below";
       tr.onclick = () => { highlightGame(i, true); openBoard(i); };

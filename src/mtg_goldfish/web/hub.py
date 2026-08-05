@@ -10,6 +10,10 @@ from fastapi import WebSocket
 class Hub:
     def __init__(self) -> None:
         self._conns: dict[str, set[WebSocket]] = defaultdict(set)
+        # "Presence" sockets: EVERY open tab (home or session) holds one, so the
+        # server can tell when no tab has the app open and shut itself down.
+        self._presence: set[WebSocket] = set()
+        self._ever_connected = False
 
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         await ws.accept()
@@ -17,6 +21,20 @@ class Hub:
 
     def disconnect(self, session_id: str, ws: WebSocket) -> None:
         self._conns[session_id].discard(ws)
+
+    async def presence_connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self._presence.add(ws)
+        self._ever_connected = True
+
+    def presence_disconnect(self, ws: WebSocket) -> None:
+        self._presence.discard(ws)
+
+    def has_tabs(self) -> bool:
+        return bool(self._presence)
+
+    def ever_connected(self) -> bool:
+        return self._ever_connected
 
     async def broadcast(self, session_id: str, message: dict) -> None:
         dead: list[WebSocket] = []

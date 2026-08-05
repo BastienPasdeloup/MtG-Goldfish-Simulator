@@ -47,13 +47,35 @@ echo "    (The first time this can take a minute or two — please be patient.)"
 echo ""
 uv sync
 
+# ------------------------------------------- step 3: menu entry (.desktop)
+# A launcher in your applications menu so you can start the simulator without
+# hunting for this folder. It starts the server + opens your browser; the server
+# quits itself when you close the last tab.
+echo ""
+echo "==> Creating an applications-menu entry…"
+PROJECT_DIR="$(pwd)"
+APPS_DIR="$HOME/.local/share/applications"
+mkdir -p "$APPS_DIR"
+cat > "$APPS_DIR/mtg-goldfish-simulator.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=MtG Goldfish Simulator
+Comment=Solitaire MTG deck-testing simulator
+Exec="$PROJECT_DIR/launch-linux.sh"
+Path=$PROJECT_DIR
+Terminal=true
+Categories=Game;
+DESKTOP
+chmod +x "$APPS_DIR/mtg-goldfish-simulator.desktop"
+update-desktop-database "$APPS_DIR" 2>/dev/null || true
+
 echo ""
 echo "=================================================="
 echo "  ✅  All done!"
 echo "=================================================="
 echo ""
-echo "  To start the simulator, run:  ./launch-linux.sh"
-echo "  (or double-click launch-linux.sh and choose 'Run in Terminal')"
+echo "  Launch it from your applications menu:  MtG Goldfish Simulator"
+echo "  …or run:  ./launch-linux.sh"
 echo ""
 read -n 1 -s -r -p "Press any key to close."
 echo ""

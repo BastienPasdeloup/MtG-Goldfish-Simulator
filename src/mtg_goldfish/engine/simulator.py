@@ -129,10 +129,10 @@ class SimulationConfig:
     #: automatic (all cores but one, to keep the machine responsive); 1 = fully
     #: sequential in-process.
     parallel_workers: int | None = None
-    #: Record the explored-states TREE (for the tree viz). Off = don't build it,
-    #: which trims memory + the saved session size (the tree dominates it) and
-    #: shaves the recording overhead. Replays (winning-line logs) are unaffected.
-    save_tree: bool = True
+    #: Record the explored-states TREE (for the tree viz). Off by DEFAULT — don't
+    #: build it, which trims memory + the saved session size (the tree dominates
+    #: it) and shaves the recording overhead. Replays are unaffected.
+    save_tree: bool = False
     #: Fixed-config mode: a fully-specified starting state (a plain dict — the
     #: FixedConfig model dumped) the search begins from instead of an opening
     #: hand. Keys: battlefield [{name, tapped}], hand/graveyard/exile [names],
