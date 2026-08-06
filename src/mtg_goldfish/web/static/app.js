@@ -308,7 +308,8 @@ function showHome() {
   closeWs();
   $("home-view").classList.remove("hidden");
   $("session-view").classList.add("hidden");
-  $("bug-btn").classList.add("hidden"); // reports attach a session + run
+  // The bug button stays visible on the home page — openBugModal adapts its
+  // content (no session/run to attach → a general issue).
   loadSessionList();
 }
 
@@ -757,6 +758,7 @@ function renderDeck() {
     container.append(el("div", { className: "card-group-title", textContent: `${label} (${n})` }));
     groups[label].sort(cmp).forEach((c) => container.append(cardRow(c)));
   });
+  updateDeckDimming();  // reflect the current tab's placement state (L7)
 }
 
 function hoverable(node, img, meta = null) {
@@ -769,6 +771,7 @@ function hoverable(node, img, meta = null) {
 
 function cardRow(c) {
   const row = el("div", { className: "card-row" + (c.implemented ? "" : " unimpl") });
+  row.dataset.cname = c.name;  // used by updateDeckDimming (L7)
   // Drag a deck card straight into a Fixed-config zone / the fixed hand — the
   // left decklist IS the card source (no separate picker). Carries the card name;
   // the zone/hand drop handlers add it.
@@ -798,8 +801,19 @@ function cardRow(c) {
 // ---- bug report: download the session file + how-to for a GitHub issue ----
 function openBugModal() {
   $("bug-github").href = (state.meta && state.meta.github_issues_url) || "#";
-  $("bug-file-note").textContent = state.currentResultId
-    ? "" : "(no run yet — the file will contain the session only)";
+  // On the home page there is no open session/run to attach — adapt the modal
+  // to a general issue (disable the download, keep the GitHub link).
+  const onHome = !$("home-view").classList.contains("hidden");
+  const dl = $("bug-download");
+  if (onHome || !state.session) {
+    dl.disabled = true;
+    $("bug-file-note").textContent =
+      "(no session open — open one to attach its file, or file a general issue below)";
+  } else {
+    dl.disabled = false;
+    $("bug-file-note").textContent = state.currentResultId
+      ? "" : "(no run yet — the file will contain the session only)";
+  }
   $("bug-modal").classList.remove("hidden");
 }
 
@@ -1101,11 +1115,39 @@ function setSimMode(mode) {
   updateResumeButton(); // Resume only shows on the tab its run was made from
   if (mode === "fixed") renderFixedBuilder();
   if (mode === "config") renderConfigBuilder();
+  updateDeckDimming();  // dim cards that can't be placed in this tab (L7)
 }
 
 // Cards that can be placed in a zone: mainboard cards + the commander(s).
 function placeableCards() {
   return state.cards.filter((c) => c.board === "mainboard" || c.board === "commander");
+}
+
+// L7: whether a decklist card can still be placed in the CURRENT tab's target.
+// Random-hand mode places nothing (never dims). Fixed-hand: only mainboard
+// cards, until the hand is full or all copies are in it. Fixed-config: mainboard
+// + commanders, until all copies are placed across the zones.
+function cardPlaceableInTab(c) {
+  const mode = state.simMode;
+  if (mode === "fixed") {
+    return c.board === "mainboard"
+      && state.fixedHand.length < MAX_FIXED_HAND
+      && fixedHandCount(c.name) < c.quantity;
+  }
+  if (mode === "config") {
+    return (c.board === "mainboard" || c.board === "commander")
+      && fcUsage(c.name) < c.quantity;
+  }
+  return true;  // random-hand mode: nothing is placed, nothing is dimmed
+}
+
+// Grey out decklist rows whose copies can no longer be placed in the current
+// tab (re-run on tab switch and after every hand/config change).
+function updateDeckDimming() {
+  $("deck-cards").querySelectorAll(".card-row").forEach((row) => {
+    const c = state.cards.find((x) => x.name === row.dataset.cname);
+    row.classList.toggle("unplaceable", !!c && !cardPlaceableInTab(c));
+  });
 }
 
 // Total number of copies of `name` placed across every fixed-config zone.
@@ -1139,12 +1181,17 @@ const fcFaces = (name) => fcCardMeta(name).faces || [];
 const fcIsDfc = (name) => fcFaces(name).length === 2;
 // The active face's characteristics for a battlefield entry (front / back).
 function fcFace(name, transformed) {
+  const meta = fcCardMeta(name);
   const faces = fcFaces(name);
   const f = faces.length === 2 ? faces[transformed ? 1 : 0] : null;
-  const type_line = f ? f.type_line : (fcCardMeta(name).type_line || "");
+  const type_line = f ? f.type_line : (meta.type_line || "");
   const head = type_line.split("—")[0].toLowerCase();
+  // Printed P/T of the ACTIVE face — a DFC's top-level power/toughness is null
+  // (they live on the faces), so read them from the face when present.
+  const power = f ? f.power : meta.power;
+  const toughness = f ? f.toughness : meta.toughness;
   return {
-    name: f ? f.name : name, type_line,
+    name: f ? f.name : name, type_line, power, toughness,
     is_land: head.includes("land"), is_creature: head.includes("creature"),
   };
 }
@@ -1168,14 +1215,6 @@ function fcIsPermanentType(name) {
 // Which face indices (0/1) of `name` are permanents that can be on the
 // battlefield. A single-faced permanent is [0]; a DFC returns the permanent
 // faces (an instant/sorcery face is excluded — e.g. Waterlogged Teachings).
-function fcBattlefieldFaces(name) {
-  const isPerm = (tl) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"]
-    .some((k) => (tl || "").split("—")[0].toLowerCase().includes(k));
-  if (!fcIsDfc(name)) return isPerm(fcCardMeta(name).type_line) ? [0] : [];
-  const faces = fcFaces(name);
-  return [0, 1].filter((i) => isPerm(faces[i].type_line));
-}
-
 // Put a battlefield entry for `name` (on `transformed` face), initialised with
 // the counters that face enters play with (planeswalker loyalty, a Saga's lore,
 // Peter Parker's Camera's film, a flipped Tamiyo's loyalty, ...).
@@ -1225,18 +1264,19 @@ function fcBattlefieldCenter() {
 // front/back; if only one face is a valid permanent it is used silently
 // (Waterlogged Teachings → its land back). `x`/`y` position any chooser.
 function fcPlaceOnBattlefield(name, x, y) {
-  const valid = fcBattlefieldFaces(name);
-  if (fcIsDfc(name) && valid.length >= 2) {
+  // A double-faced card always prompts which face enters — and ALWAYS offers the
+  // FRONT first (L8), even when only the back is a normal permanent (the
+  // battlefield accepts either face for scenario testing).
+  if (fcIsDfc(name)) {
     const faces = fcFaces(name);
     const ctr = fcBattlefieldCenter();  // choice menu in the middle of the field
     showContextMenu(ctr.x, ctr.y, [
       { label: `Front — ${faces[0].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, false), name, x, y) },
       { label: `Back — ${faces[1].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, true), name, x, y) },
-    ]);
+    ], { sort: false });  // keep Front first (L8)
     return;
   }
-  const transformed = fcIsDfc(name) && valid.length === 1 && valid[0] === 1;
-  fcAfterPlace(fcPushPermanent(name, transformed), name, x, y);
+  fcAfterPlace(fcPushPermanent(name, false), name, x, y);
 }
 
 // ---- tokens (created on the battlefield, not deck cards) ----
@@ -1698,17 +1738,19 @@ function fcFrame() {
     // noncreature made into a creature, or ±1/±1 counters — falling back to the
     // printed value for an unset stat so a partial override still reads correctly
     // (matches the replay, which always shows an altered creature's current P/T).
-    const meta = fcCardMeta(it.name);
     const pm = fcCounterPT(it.counters);
     const altered = it.set_power != null || it.set_toughness != null || !!it.make_creature || pm !== 0;
     const showPT = isCreature && altered;
+    // An UNSET stat falls back to the active face's printed value (0 only when the
+    // card has no printed P/T, e.g. a noncreature "made" a creature) — so setting
+    // only one stat keeps the other at the creature's default, not 0.
     return {
       ...common, name: face.name, commander: fcIsCommander(it.name), token: false,
       attacking: !!it.attacking && combat && isCreature,
       is_land: isLand,
       is_creature: isCreature, is_aura: fcIsAura(it.name),
-      power: showPT ? (it.set_power ?? meta.power ?? 0) + pm : null,
-      toughness: showPT ? (it.set_toughness ?? meta.toughness ?? 0) + pm : null,
+      power: showPT ? (it.set_power ?? face.power ?? 0) + pm : null,
+      toughness: showPT ? (it.set_toughness ?? face.toughness ?? 0) + pm : null,
       colors: it.set_colors || undefined,
       recolored: it.set_colors != null,
     };
@@ -2557,9 +2599,9 @@ function sortMenuItems(items) {
   return out;
 }
 
-function buildMenu(items) {
+function buildMenu(items, cancelUp = () => {}, sort = true) {
   const menu = el("div", { className: "ctx-menu" });
-  sortMenuItems(items).forEach((it) => {
+  (sort ? sortMenuItems(items) : items).forEach((it) => {
     if (it.sep) { menu.append(el("div", { className: "ctx-sep" })); return; }
     // A stepper row: "label [−] value [+]" — the buttons adjust without closing.
     if (it.stepper) {
@@ -2617,18 +2659,24 @@ function buildMenu(items) {
       // parent row across the small gap into the submenu doesn't dismiss it
       // (the classic disappearing-submenu bug). Entering the row or the submenu
       // cancels a pending close.
+      // Submenus are body-appended (NOT DOM children), so moving from a submenu
+      // into its OWN sub-submenu fires the submenu's mouseleave and would close
+      // it. We prevent that by propagating "cancel close" UP the whole open
+      // chain (cancelUp), so no ancestor closes while a descendant is hovered.
       let sub = null, closeTimer = null;
       const cancelClose = () => { if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; } };
       const scheduleClose = () => {
         cancelClose();
         closeTimer = setTimeout(() => { if (sub) { sub.remove(); sub = null; } closeTimer = null; }, 320);
       };
+      // Cancel THIS row's pending close AND every ancestor's, up the chain.
+      const cancelChain = () => { cancelClose(); cancelUp(); };
       row.onmouseenter = () => {
-        cancelClose();
+        cancelChain();
         if (!sub) {
-          sub = buildMenu(it.submenu);
+          sub = buildMenu(it.submenu, cancelChain);
           sub.classList.add("ctx-submenu");
-          sub.onmouseenter = cancelClose;
+          sub.onmouseenter = cancelChain;
           sub.onmouseleave = scheduleClose;
           // Append to <body>, not the row: a scrollable parent menu (overflow for
           // long lists) would otherwise CLIP the submenu at left:100%. Position it
@@ -2658,9 +2706,11 @@ function buildMenu(items) {
   return menu;
 }
 
-function showContextMenu(x, y, items) {
+function showContextMenu(x, y, items, opts = {}) {
   closeContextMenu();
-  const menu = buildMenu(items);
+  // opts.sort === false keeps the caller's item order (e.g. a Front/Back choice
+  // that must list Front first, which alphabetical sorting would flip).
+  const menu = buildMenu(items, () => {}, opts.sort !== false);
   menu.style.left = x + "px";
   menu.style.top = y + "px";
   document.body.append(menu);
@@ -2723,6 +2773,7 @@ function renderConfigBuilder() {
   });
 
   // (Cards are dragged in from the LEFT decklist — no separate picker.)
+  updateDeckDimming();  // dim decklist cards fully placed across the zones (L7)
 }
 
 // Only mainboard cards are drawable into an opening hand (commanders live in
@@ -2769,6 +2820,7 @@ function renderFixedBuilder() {
     const raw = ev.dataTransfer.getData("text/plain");
     if (raw && !raw.startsWith("{")) addToFixedHand(raw);  // a plain card name from the decklist
   };
+  updateDeckDimming();  // dim decklist cards fully added to the hand (L7)
   if (!slots) minis.append(el("span", { className: "muted", textContent: "empty — drag cards here from the decklist" }));
   for (let i = 0; i < slots; i++) {
     const name = state.fixedHand[i];

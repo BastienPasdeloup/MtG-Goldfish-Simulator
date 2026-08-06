@@ -12,7 +12,8 @@
     <span class="logo" id="home-logo" role="button" tabindex="0" title="Back to home">🐟 MtG Goldfish Simulator</span>
     <span id="app-version" class="version-badge" title="installed version"></span>
     <span class="spacer"></span>
-    <button id="bug-btn" class="hidden" title="Report a bug — the current session and run are attached">🐞 Report a bug</button>
+    <button id="bug-btn" title="Report a bug">🐞 Report a bug</button>
+    <a id="github-btn" class="appbar-link" href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator" target="_blank" rel="noopener" title="View the project on GitHub ↗">🐙 GitHub</a>
     <button id="docs-btn" title="Open the documentation website ↗">📖 Documentation</button>
   </header>
 
@@ -48,19 +49,21 @@
       <div class="session-grid">
         <!-- LEFT: title box + decklist (a sticky column, decklist width) -->
         <div class="left-col">
-          <div class="card-box session-title">
-            <div class="row title-row">
+          <div class="title-area">
+            <div class="card-box session-title">
               <h2 id="s-name" style="margin:0"></h2>
+              <div class="row title-badges">
+                <span id="s-commanders" class="pill"></span>
+                <span id="s-format" class="pill"></span>
+                <span id="s-date" class="pill" title="session created on"></span>
+                <a id="s-source" class="pill hidden" target="_blank" rel="noopener"></a>
+              </div>
+              <div id="s-warnings" class="warnings"></div>
+            </div>
+            <div class="title-buttons">
               <button id="load-run-btn">Previous runs</button>
               <button id="delete-session" class="danger">Delete session</button>
             </div>
-            <div class="row title-badges">
-              <span id="s-commanders" class="pill"></span>
-              <span id="s-format" class="pill"></span>
-              <span id="s-date" class="pill" title="session created on"></span>
-              <a id="s-source" class="pill hidden" target="_blank" rel="noopener"></a>
-            </div>
-            <div id="s-warnings" class="warnings"></div>
           </div>
           <div class="card-box decklist">
             <div class="deck-controls">

@@ -179,6 +179,10 @@ def card_view(deck: Deck) -> list[dict]:
                 "mana_cost": f.mana_cost,
                 "type_line": f.type_line,
                 "loyalty": f.loyalty,  # for the Fixed-config editor (flipped planeswalkers)
+                # Per-face printed P/T: a DFC's top-level power/toughness is null
+                # (they live on the faces), so altered-stat badges read them here.
+                "power": _int_or_none(f.power),
+                "toughness": _int_or_none(f.toughness),
             }
             for f, fi in zip(c.faces, img_faces)
         ] if len(c.faces) > 1 else []
