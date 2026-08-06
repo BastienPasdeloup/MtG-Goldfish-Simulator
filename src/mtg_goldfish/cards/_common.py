@@ -38,6 +38,22 @@ def mv(card: CardData) -> int:
     return int(card.cmc)
 
 
+def artifact_ability_cost(state: "GameState", cost: ManaCost) -> ManaCost:
+    """Apply 'activated abilities of artifacts you control cost {N} less to
+    activate' (Forensic Gadgeteer), reducing the GENERIC part but never taking
+    the total below one mana. Artifact activated abilities compute their mana
+    cost through this so the reduction is honoured wherever it applies."""
+    disc = sum(p.impl.artifact_ability_discount for p in state.battlefield)
+    if disc <= 0:
+        return cost
+    total = cost.generic + sum(n for _, n in cost.pips)
+    reducible = max(0, total - 1)  # can't reduce below one total mana
+    reduce = min(disc, reducible, cost.generic)
+    if reduce <= 0:
+        return cost
+    return ManaCost(generic=cost.generic - reduce, pips=cost.pips)
+
+
 def type_matches(card: CardData, *words: str) -> bool:
     tl = card.type_line.lower()
     return any(w.lower() in tl for w in words)
@@ -1384,7 +1400,7 @@ class ClueToken(Card):
     def battlefield_actions(self, state, perm):
         from ..engine.actions import can_afford, pay_cost
 
-        cost = ManaCost(generic=2)
+        cost = artifact_ability_cost(state, ManaCost(generic=2))
         if not can_afford(state, cost):
             return []
 

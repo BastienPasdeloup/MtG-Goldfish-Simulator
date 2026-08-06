@@ -80,6 +80,10 @@ class CardData(BaseModel):
         return "sorcery" in self._types()
 
     @property
+    def is_artifact(self) -> bool:
+        return "artifact" in self._types()
+
+    @property
     def is_permanent(self) -> bool:
         perm = {"land", "creature", "artifact", "enchantment", "planeswalker", "battle"}
         return bool(self._types() & perm)

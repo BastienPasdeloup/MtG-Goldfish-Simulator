@@ -143,6 +143,15 @@ class Card:
     exiles_cards: ClassVar[bool] = False
     #: Static: spells you cast FROM EXILE have convoke (Hoarding Broodlord).
     grants_exile_convoke: ClassVar[bool] = False
+    #: Static: noncreature spells you cast have improvise (Ironheart, Clever
+    #: Champion). The improvise keyword on a card itself is read from its
+    #: `keywords`; this grants it to OTHER noncreature spells.
+    grants_noncreature_improvise: ClassVar[bool] = False
+    #: Static: activated abilities of artifacts you control cost this much {1}
+    #: less to activate — never below one total mana (Forensic Gadgeteer). Applied
+    #: by `artifact_ability_cost` (see _common) when a card computes an artifact
+    #: activated ability's mana cost.
+    artifact_ability_discount: ClassVar[int] = 0
     #: For a card that exiles cards you "may play" (exile_playable): whether the
     #: source must REMAIN in play for the card to stay playable. True for "as long
     #: as you control ~" / "until your next turn while ~ lives" (Gwen, Inti);
@@ -622,6 +631,12 @@ class Card:
             trigger_text=f"{left.name} left the battlefield",
             ability_text="Triggered ability",
         )]
+
+    def skips_untap(self, state: "GameState", perm: "Permanent") -> bool:
+        """Whether this permanent does NOT untap during its controller's untap
+        step (Basalt Monolith: "This artifact doesn't untap during your untap
+        step.")."""
+        return False
 
     def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
         """Additional land plays per turn granted while on the battlefield

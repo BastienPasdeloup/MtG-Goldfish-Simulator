@@ -361,8 +361,10 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
         state.turn += 1
         state.reset_turn_counters()
         for perm in state.battlefield:
-            perm.tapped = False
             perm.summoning_sick = False
+            # Basalt Monolith & co. don't untap during the untap step.
+            if not perm.impl.skips_untap(state, perm):
+                perm.tapped = False
         state.mana_pool.clear()
     elif state.phase == Phase.UPKEEP:
         suspend_branches = _resolve_suspend(state)

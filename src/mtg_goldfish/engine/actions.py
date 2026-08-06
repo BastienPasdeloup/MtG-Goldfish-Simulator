@@ -204,20 +204,85 @@ def pay_cost_with_convoke(state, cost, extra_life=0, exclude_uids=None):
 
 
 # --------------------------------------------------------------------------
+# Improvise — tap untapped artifacts, each paying {1} of GENERIC cost only
+# (never a coloured pip). We tap the minimum number of artifacts needed to make
+# the rest affordable with mana, preferring artifacts that DON'T tap for mana so
+# a mana rock is kept for real mana. A spell you can already pay for taps none.
+# --------------------------------------------------------------------------
+def _improvise_plan(state: GameState, cost: ManaCost, exclude_uids=None):
+    base_exclude = set(exclude_uids or set())
+    arts = [
+        p for p in state.battlefield
+        if p.is_artifact and not p.tapped and p.uid not in base_exclude
+        and not (p.is_creature_now and p.summoning_sick
+                 and not state.has_keyword(p, "Haste"))
+    ]
+    # Non-mana artifacts first (keep mana rocks for mana), then fewest choices.
+    arts.sort(key=lambda p: (bool(p.impl.mana_abilities_perm(state, p)),))
+
+    def eff(k: int) -> ManaCost:
+        return ManaCost(generic=max(0, cost.generic - k), pips=cost.pips)
+
+    def afford(k: int) -> bool:
+        excl = base_exclude | {p.uid for p in arts[:k]}
+        return can_afford(state, eff(k), exclude_uids=excl)
+
+    limit = min(len(arts), cost.generic)
+    k = 0
+    while not afford(k) and k < limit:
+        k += 1
+    if not afford(k):
+        return None
+    return arts[:k], eff(k)
+
+
+def can_afford_with_improvise(state, cost, extra_life=0, exclude_uids=None):
+    if extra_life and state.life <= extra_life:
+        return False
+    return _improvise_plan(state, cost, exclude_uids) is not None
+
+
+def pay_cost_with_improvise(state, cost, extra_life=0, exclude_uids=None):
+    plan = _improvise_plan(state, cost, exclude_uids)
+    if plan is None:
+        return False
+    used, reduced = plan
+    for art in used:
+        art.tapped = True
+        state.emit(f"improvise: tap {art.name}")
+    return pay_cost(state, reduced, extra_life=extra_life, exclude_uids=exclude_uids)
+
+
+def card_has_improvise(state: GameState, card) -> bool:
+    """Whether casting `card` from hand uses improvise: the card itself has the
+    Improvise keyword, or a permanent grants improvise to your noncreature spells
+    (Ironheart, Clever Champion)."""
+    if any(str(k).lower() == "improvise" for k in (card.keywords or [])):
+        return True
+    if not card.is_creature and any(
+        p.impl.grants_noncreature_improvise for p in state.battlefield
+    ):
+        return True
+    return False
+
+
+# --------------------------------------------------------------------------
 # Casting helpers (used by generic actions AND by card implementations)
 # --------------------------------------------------------------------------
 def begin_cast(
     state: GameState, card, cost: ManaCost, *,
     zone: list | None = None, extra_life: int = 0, tag: str = "", convoke: bool = False,
-    target: str = "",
+    improvise: bool = False, target: str = "",
 ) -> bool:
     """Pay the cost, move the card from `zone` (default: hand) to the stack,
     bump the cast counters, and fire cast triggers. Returns False if unpaid.
     `convoke` lets untapped creatures pay part of the cost (Hoarding Broodlord;
-    spells cast from exile under it). `target` names what the spell targets, so
-    the replay's stack shows "→ target"."""
+    spells cast from exile under it); `improvise` lets untapped artifacts pay the
+    generic part (Kappa Cannoneer, Ironheart). `target` names what the spell
+    targets, so the replay's stack shows "→ target"."""
     zone = state.hand if zone is None else zone
-    pay = pay_cost_with_convoke if convoke else pay_cost
+    pay = (pay_cost_with_improvise if improvise
+           else pay_cost_with_convoke if convoke else pay_cost)
     if not pay(state, cost, extra_life=extra_life):
         return False
     zone.remove(card)
@@ -385,14 +450,15 @@ class CastDefault(Action):
     """Engine-default cast: pay, stack, resolve (permanent enters / spell to
     graveyard after `on_resolve`)."""
 
-    def __init__(self, card_name: str) -> None:
+    def __init__(self, card_name: str, improvise: bool = False) -> None:
         self.card_name = card_name
+        self.improvise = improvise
         self.label = f"cast {card_name}"
 
     def apply(self, state: GameState):
         card = _find_in_zone(state.hand, self.card_name)
         impl = _impl(card)
-        if not begin_cast(state, card, impl.cast_cost(state)):
+        if not begin_cast(state, card, impl.cast_cost(state), improvise=self.improvise):
             return None
         if card.is_permanent:
             result = resolve_to_battlefield(state, card)
@@ -476,8 +542,13 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
             custom = impl.cast_actions(state)
             if custom is not None:
                 actions.extend(_mark(list(custom), inst))
-            elif impl.is_castable(state) and can_afford(state, impl.cast_cost(state)):
-                actions.append(_mark([CastDefault(card.name)], inst)[0])
+            elif impl.is_castable(state):
+                improvise = card_has_improvise(state, card)
+                afford = (can_afford_with_improvise(state, impl.cast_cost(state))
+                          if improvise else can_afford(state, impl.cast_cost(state)))
+                if afford:
+                    actions.append(
+                        _mark([CastDefault(card.name, improvise=improvise)], inst)[0])
         actions.extend(impl.hand_actions(state))
 
     # --- commander(s) from the command zone ---
@@ -528,6 +599,25 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
                 if impl.is_castable(state) and can_afford(state, cost):
                     actions.extend(_mark(_gy_cast_actions(state, card, cost),
                                          _is_instant_speed(card)))
+
+    # --- specific artifact cards you may cast from the graveyard this turn
+    #     (Emry, Lurker of the Loch). You still pay their costs. ---
+    if state.gy_castable:
+        seen_gyc: set[str] = set()
+        for card in list(state.graveyard):
+            if card.name not in state.gy_castable or card.name in seen_gyc:
+                continue
+            seen_gyc.add(card.name)
+            impl = _impl(card)
+            if _front_is_land(card):
+                continue  # Emry marks artifact (nonland) cards only
+            improvise = card_has_improvise(state, card)
+            cost = impl.cast_cost(state)
+            afford = (can_afford_with_improvise(state, cost) if improvise
+                      else can_afford(state, cost))
+            if impl.is_castable(state) and afford:
+                actions.extend(_mark(_gy_cast_actions(state, card, cost, improvise=improvise),
+                                     _is_instant_speed(card)))
 
     # --- land plays from the graveyard (Icetill Explorer) ---
     if land_drop_ok and any(p.impl.grants_gy_land_plays for p in state.battlefield):
@@ -597,16 +687,16 @@ def _grant_matches(grant: dict, card) -> bool:
     return True
 
 
-def _gy_cast_actions(state: GameState, card, cost: ManaCost) -> list:
-    """Cast a card from the graveyard paying its cost (Yawgmoth's Will, Hades).
-    Uses the default resolution (permanent → battlefield, else on_resolve), so a
-    spell whose effect lives in a custom `cast_actions` (targeted removal) casts
-    as its plain on_resolve here — an accepted simplification for gy replay."""
+def _gy_cast_actions(state: GameState, card, cost: ManaCost, improvise: bool = False) -> list:
+    """Cast a card from the graveyard paying its cost (Yawgmoth's Will, Hades,
+    Emry). Uses the default resolution (permanent → battlefield, else on_resolve),
+    so a spell whose effect lives in a custom `cast_actions` (targeted removal)
+    casts as its plain on_resolve here — an accepted simplification for gy replay."""
     from ..cards.base import CardAction
 
     def fn(st: GameState):
         c = _find_in_zone(st.graveyard, card.name)
-        if c is None or not begin_cast(st, c, cost, zone=st.graveyard):
+        if c is None or not begin_cast(st, c, cost, zone=st.graveyard, improvise=improvise):
             return None
         if c.is_permanent:
             return resolve_to_battlefield(st, c) or None

@@ -203,6 +203,10 @@ class Permanent:
     def is_lander(self) -> bool:
         return "lander" in self.type_line.lower()
 
+    @property
+    def is_artifact(self) -> bool:
+        return "artifact" in self._type_head()
+
     def base_power(self) -> int:
         if self.becomes is not None and self.becomes.get("power") is not None:
             return int(self.becomes["power"])
@@ -335,6 +339,9 @@ class GameState:
     # unlike exile_playable). Any face of a modal card that has a mana cost may
     # be cast this way. The card objects also live in `exile` (zone display).
     airbend_exile: list[CardData] = field(default_factory=list)
+    # Names of artifact cards in your graveyard you MAY CAST this turn (Emry,
+    # Lurker of the Loch). You still pay their costs; reset each turn.
+    gy_castable: list[str] = field(default_factory=list)
     # id(card) -> name of the permanent it was "exiled with" (Fixed-config setup),
     # so the exile-zone badge names the source regardless of which mechanism the
     # card was routed into (playable / airbend / return-on-leave / copy).
@@ -484,6 +491,7 @@ class GameState:
             exile_playable=list(self.exile_playable),
             exile_play_needs_source=dict(self.exile_play_needs_source),
             airbend_exile=list(self.airbend_exile),
+            gy_castable=list(self.gy_castable),
             exile_source=dict(self.exile_source),
             stack_face=dict(self.stack_face),
             stack_targets=dict(self.stack_targets),
@@ -706,6 +714,7 @@ class GameState:
         self.left_graveyard_this_turn = False
         self.prevent_nonwolf_combat_damage = False
         self.free_casts = []
+        self.gy_castable = []
         self.cast_sorcery_as_flash = False
         self.untap_lands_end_step = 0
         self.extra_combats = 0
