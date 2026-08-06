@@ -207,9 +207,14 @@ class SimulationRunner:
                 # the frontend inflates them with DecompressionStream. Parallel
                 # workers pre-compress the tree; sequential games compress here.
                 nonlocal last_stats
-                tree_gz = outcome.tree_gz
-                if tree_gz is None and outcome.tree is not None:
-                    tree_gz = compress_tree(outcome.tree)
+                # No tree when tree-saving is off (the search still runs a root-
+                # only tree, which would otherwise compress to a non-null tree_gz
+                # and make the games table show a Tree column).
+                tree_gz = None
+                if config.save_tree:
+                    tree_gz = outcome.tree_gz
+                    if tree_gz is None and outcome.tree is not None:
+                        tree_gz = compress_tree(outcome.tree)
                 run = {
                     "game_index": outcome.game_index,
                     "success": outcome.success,

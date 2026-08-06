@@ -1053,17 +1053,29 @@ function openWs() {
 function closeWs() { if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; } }
 
 // A persistent "presence" socket every tab keeps open, so the server knows the
-// app is still open somewhere (it shuts itself down when no tab remains). Auto-
-// reconnects so a brief blip doesn't look like the tab closed.
+// app is still open somewhere (it shuts itself down when no tab remains). It
+// PINGS every few seconds so the server can detect a tab closed abruptly (no
+// clean WS close), and auto-reconnects so a brief blip doesn't look like a close.
 function connectPresence() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   let ws;
   try { ws = new WebSocket(`${proto}://${location.host}/ws/presence`); }
   catch { setTimeout(connectPresence, 2000); return; }
   state.presenceWs = ws;
-  ws.onclose = () => { state.presenceWs = null; setTimeout(connectPresence, 2000); };
+  let ping = null;
+  ws.onopen = () => {
+    ping = setInterval(() => { try { ws.send("ping"); } catch {} }, 3000);
+  };
+  ws.onclose = () => {
+    if (ping) { clearInterval(ping); ping = null; }
+    state.presenceWs = null;
+    setTimeout(connectPresence, 2000);
+  };
   ws.onerror = () => { try { ws.close(); } catch {} };
 }
+// Close the presence socket cleanly when the tab goes away, so the server drops
+// it immediately (rather than waiting for the heartbeat timeout).
+window.addEventListener("pagehide", () => { try { state.presenceWs && state.presenceWs.close(); } catch {} });
 
 // ---- fixed-hand mode ----
 function setSimMode(mode) {
@@ -1188,13 +1200,25 @@ function fcAfterPlace(idx, name, x, y) {
 }
 
 // Place `name` on the battlefield. A DFC with BOTH faces permanents asks
+// The centre of the battlefield area (for menus shown when dropping a card
+// there — a DFC front/back choice, an attach target — so they appear in the
+// middle of the field rather than wherever the drop landed). Offsets by roughly
+// half a menu so the menu is centred, not corner-anchored.
+function fcBattlefieldCenter() {
+  const field = document.querySelector(".area-field");
+  if (!field) return { x: 300, y: 300 };
+  const r = field.getBoundingClientRect();
+  return { x: r.left + r.width / 2 - 95, y: r.top + r.height / 2 - 20 };
+}
+
 // front/back; if only one face is a valid permanent it is used silently
 // (Waterlogged Teachings → its land back). `x`/`y` position any chooser.
 function fcPlaceOnBattlefield(name, x, y) {
   const valid = fcBattlefieldFaces(name);
   if (fcIsDfc(name) && valid.length >= 2) {
     const faces = fcFaces(name);
-    showContextMenu(x || 300, y || 300, [
+    const ctr = fcBattlefieldCenter();  // choice menu in the middle of the field
+    showContextMenu(ctr.x, ctr.y, [
       { label: `Front — ${faces[0].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, false), name, x, y) },
       { label: `Back — ${faces[1].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, true), name, x, y) },
     ]);
@@ -1546,7 +1570,8 @@ function fcChooseAttach(idx, hosts, x, y) {
     onClick: () => { bf[idx].attached_to = h; renderConfigBuilder(); },
   }));
   items.push({ sep: true }, { label: "Leave unattached", onClick: () => {} });
-  showContextMenu(x || 300, y || 300, items);
+  const ctr = fcBattlefieldCenter();  // attach chooser in the middle of the field
+  showContextMenu(ctr.x, ctr.y, items);
 }
 
 // Remove several battlefield entries at once, remapping every attachment index
@@ -2113,35 +2138,13 @@ function fcKeywordSubmenu(idx, it) {
   const isEot = (kw) => it.granted_eot.includes(kw) || it.removed_keywords_eot.includes(kw);
   const universe = [...new Set([...printed, ...it.granted, ...it.granted_eot,
     ...it.removed_keywords, ...it.removed_keywords_eot])].sort((a, b) => a.localeCompare(b));
-  // Replace the keyword `old` with `neu` wherever it lives (granted / granted_eot
-  // / removed …) — used by the per-row number stepper to change "ward 2" → "ward 3".
-  const replaceKw = (arrs, old, neu) => arrs.forEach((a) => {
-    const j = a.indexOf(old); if (j >= 0) a[j] = neu;
-  });
-  const rows = universe.map((kw0) => {
-    const base = fcKeywordBase(kw0);
-    const numbered = FC_NUMBERED_KEYWORDS.includes(base);
-    let key = kw0;  // this row's CURRENT full keyword (mutated by the stepper)
-    const kwrow = {
-      label: numbered ? base : kw0,          // numbered rows label with the base; value in the stepper
-      checked: () => has(key),
-      eot: () => isEot(key),
-      onToggle: () => toggle(key),
-      onEot: () => toggleEot(key),
-    };
-    if (numbered) {
-      const val = () => { const m = /\s(\d+)$/.exec(key); return m ? parseInt(m[1], 10) : 1; };
-      const setVal = (n) => {
-        n = Math.max(1, n);
-        const neu = `${base} ${n}`;
-        replaceKw([it.granted, it.granted_eot, it.removed_keywords, it.removed_keywords_eot], key, neu);
-        key = neu;
-        renderConfigBuilder();  // update the board badge (the open menu updates in place)
-      };
-      kwrow.num = { get: val, dec: () => setVal(val() - 1), inc: () => setVal(val() + 1) };
-    }
-    return { kwrow };
-  });
+  const rows = universe.map((kw) => ({ kwrow: {
+    label: kw,
+    checked: () => has(kw),
+    eot: () => isEot(kw),
+    onToggle: () => toggle(kw),
+    onEot: () => toggleEot(kw),
+  } }));
   const addKw = (full) => {
     drop(it.removed_keywords, full); drop(it.removed_keywords_eot, full);
     if (!printed.includes(full) && !inAny(full)) it.granted.push(full);
@@ -2153,9 +2156,11 @@ function fcKeywordSubmenu(idx, it) {
       const param = FC_KEYWORD_PARAMS[fcKeywordBase(kw)];
       const hasParam = /\s/.test(kw);  // already typed "ward 2" / "protection from red"
       if (param && !hasParam) {
-        if (param.number) { addKw(`${kw} 1`); return; }  // add with default 1 — adjust via the per-row −/+
-        // A "from …" parameter (protection) is a CHOICE — pick it in the same window.
-        if (param.from) { fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); }); return true; }
+        // Ask for the parameter AFTER selecting, in the same window: a −/+ value
+        // step for numbered keywords, a "protection from…" choice for protection.
+        if (param.number) fcStrNumberStep(`${kw} — value`, 1, (n) => { addKw(`${kw} ${n}`); });
+        else if (param.from) fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); });
+        return true;  // keep the picker open for the parameter step
       }
       addKw(kw);
     }) });
@@ -2537,26 +2542,9 @@ function buildMenu(items) {
       const k = it.kwrow;
       const chk = el("span", { className: "ctx-check", textContent: k.checked() ? "✓" : "" });
       const eot = el("button", { className: "ctx-eot" + (k.eot() ? " on" : ""), title: "until end of turn", textContent: "EOT" });
-      const parts = [chk, el("span", { className: "ctx-label", textContent: k.label })];
-      // A parameterised keyword (ward N, rampage N, annihilator N…) shows a
-      // per-row −/+ stepper for its value.
-      let numVal = null;
-      const sync = () => {
-        chk.textContent = k.checked() ? "✓" : "";
-        eot.classList.toggle("on", k.eot());
-        if (numVal) numVal.textContent = String(k.num.get());
-      };
-      if (k.num) {
-        numVal = el("b", { className: "ctx-val", textContent: String(k.num.get()) });
-        const stepBtn = (sym, fn) => {
-          const b = el("button", { className: "ctx-step", textContent: sym });
-          b.onclick = (ev) => { ev.stopPropagation(); fn(); sync(); };
-          return b;
-        };
-        parts.push(stepBtn("−", k.num.dec), numVal, stepBtn("+", k.num.inc));
-      }
-      parts.push(eot);
-      const row = el("div", { className: "ctx-item ctx-kwrow" }, ...parts);
+      const row = el("div", { className: "ctx-item ctx-kwrow" }, chk,
+        el("span", { className: "ctx-label", textContent: k.label }), eot);
+      const sync = () => { chk.textContent = k.checked() ? "✓" : ""; eot.classList.toggle("on", k.eot()); };
       row.onclick = (ev) => { ev.stopPropagation(); k.onToggle(); sync(); };
       eot.onclick = (ev) => { ev.stopPropagation(); k.onEot(); sync(); };
       menu.append(row);

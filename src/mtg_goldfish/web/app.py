@@ -146,6 +146,16 @@ def _counter_kinds(card) -> list[str]:
     return kinds
 
 
+def _fresh_card(card):
+    """The card RE-RESOLVED from the Scryfall cache (which now holds the earliest
+    printing's art) if present, else the deck's stored copy. This corrects images
+    on decks imported BEFORE the oldest-print change WITHOUT rewriting the (often
+    huge) session files — cache-only, never a network fetch."""
+    from ..deck.scryfall import ScryfallClient
+    cached = ScryfallClient()._read_cache(card.name)
+    return cached or card
+
+
 def card_view(deck: Deck) -> list[dict]:
     """Aggregate the deck into per-card rows for the UI (implemented flag,
     image, sort keys)."""
@@ -156,16 +166,21 @@ def card_view(deck: Deck) -> list[dict]:
         if key in agg:
             agg[key]["quantity"] += e.quantity
             continue
+        # Use the deck's card, but prefer the cache's (oldest-print) IMAGE so old
+        # sessions show the corrected art.
         c = e.card
+        cimg = _fresh_card(c)
+        # Face images come from the cache-resolved card when its faces line up.
+        img_faces = cimg.faces if len(cimg.faces) == len(c.faces) else c.faces
         faces = [
             {
                 "name": f.name,
-                "image": f.image_normal,
+                "image": fi.image_normal,
                 "mana_cost": f.mana_cost,
                 "type_line": f.type_line,
                 "loyalty": f.loyalty,  # for the Fixed-config editor (flipped planeswalkers)
             }
-            for f in c.faces
+            for f, fi in zip(c.faces, img_faces)
         ] if len(c.faces) > 1 else []
         agg[key] = {
             "name": c.name,
@@ -176,7 +191,7 @@ def card_view(deck: Deck) -> list[dict]:
             "mana_cost": c.mana_cost,
             "colors": c.colors,
             "color_identity": c.color_identity,
-            "image": c.image,
+            "image": cimg.image,
             "faces": faces,
             "implemented": is_implemented(c.name),
             "is_land": c.is_land,
@@ -902,12 +917,17 @@ _EXIT_GRACE_S = 8.0
 async def ws_presence(websocket: WebSocket) -> None:
     """Every open tab (home or session) holds one of these — the server counts
     them to know when the app is no longer open anywhere (see the auto-exit
-    monitor). Declared BEFORE /ws/{session_id} so it isn't captured as a session."""
+    monitor). Declared BEFORE /ws/{session_id} so it isn't captured as a session.
+
+    The tab pings every few seconds; if no ping arrives within the timeout the
+    connection is treated as dead and dropped. This catches a tab CLOSED abruptly
+    (which may not send a clean WS close, so plain receive() would hang until a
+    TCP timeout — the reason "closing the last tab didn't stop the server")."""
     await HUB.presence_connect(websocket)
     try:
         while True:
-            await websocket.receive_text()  # keep-alive; ignore content
-    except WebSocketDisconnect:
+            await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+    except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError):
         pass
     finally:
         HUB.presence_disconnect(websocket)
