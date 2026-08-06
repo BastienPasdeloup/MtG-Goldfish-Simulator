@@ -201,7 +201,7 @@ def card_view(deck: Deck) -> list[dict]:
             "is_land": c.is_land,
             "power": _int_or_none(c.power),        # printed P/T (for altered-stat badges)
             "toughness": _int_or_none(c.toughness),
-            "keywords": [k.lower() for k in (c.keywords or [])],  # printed keywords (menu init)
+            "keywords": _keywords_with_values(c),  # printed keywords + numbered values (menu init)
             "loyalty": c.loyalty,  # for the Fixed-config editor (planeswalkers)
             "enters_counters": _initial_counters(c),  # counters it enters play with
             "counter_kinds": _counter_kinds(c),       # counter kinds it can carry
@@ -239,6 +239,36 @@ def _int_or_none(v) -> int | None:
         return int(v)
     except (TypeError, ValueError):
         return None
+
+
+# Keywords that carry a NUMBER (must mirror app.js FC_NUMBERED_KEYWORDS).
+_NUMBERED_KEYWORDS = {
+    "ward", "rampage", "annihilator", "afflict", "absorb", "bushido", "fading",
+    "vanishing", "frenzy", "modular", "poisonous", "renown", "toxic", "crew", "devour",
+}
+
+
+def _keywords_with_values(card) -> list[str]:
+    """Printed keywords (lowercased), with the numeric value of a numbered keyword
+    (Ward {2}, Annihilator 3…) parsed from the oracle text. Scryfall's `keywords`
+    lists only the bare name, so the Fixed-config editor would otherwise default
+    the value to 1 (e.g. Emeritus of Ideation showed "ward 1" for its Ward {2})."""
+    oracle = "\n".join(
+        [card.oracle_text or ""] + [f.oracle_text or "" for f in (card.faces or [])]
+    )
+    out: list[str] = []
+    for kw in (card.keywords or []):
+        k = kw.lower()
+        if k in _NUMBERED_KEYWORDS:
+            # The value must immediately follow the keyword — "Ward {2}" / "Ward 2"
+            # / "Annihilator 3" — so "Ward—Pay 2 life" (a cost, not a number) and
+            # other trailing digits are NOT captured.
+            m = re.search(rf"\b{re.escape(k)}\b[ \t]*\{{?(\d+)\}}?", oracle, re.I)
+            if m:
+                out.append(f"{k} {m.group(1)}")
+                continue
+        out.append(k)
+    return out
 
 
 def deck_tokens(deck: Deck) -> list[dict]:
@@ -414,7 +444,7 @@ def card_search(q: str = "") -> dict:
                     "oracle_text": card.oracle_text or "",
                     "mana_cost": card.mana_cost or "",
                     "cmc": card.cmc or 0,
-                    "keywords": list(card.keywords or []),
+                    "keywords": _keywords_with_values(card),
                     "image": card.image,
                 })
                 if len(out) >= 40:

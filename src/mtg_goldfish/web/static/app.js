@@ -234,7 +234,6 @@ async function init() {
     hoverable(n, "https://api.scryfall.com/cards/named?exact=" +
       encodeURIComponent(n.dataset.card) + "&format=image&version=normal");
   }
-  $("delete-session").onclick = deleteSession;
   $("load-run-btn").onclick = openRunsModal;
   $("run-modal-close").onclick = closeRunsModal;
   $("run-modal").onclick = (e) => { if (e.target.id === "run-modal") closeRunsModal(); };
@@ -1912,7 +1911,9 @@ function fcCardKeywords(it) {
   // card's NAMED ability (e.g. Emet-Selch's "Echo of the Lost"), which is not a
   // keyword and must not appear in the keyword menu.
   const known = new Set(FC_KEYWORD_ABILITIES);
-  return raw.map((k) => k.toLowerCase()).filter((k) => known.has(k));
+  // Keep the FULL keyword (with its value: "ward 2", "protection from red") but
+  // match against the BASE, so a numbered/parameterised keyword isn't dropped.
+  return raw.map((k) => k.toLowerCase()).filter((k) => known.has(fcKeywordBase(k)));
 }
 // Every creature subtype / keyword that EXISTS in this game (across the deck's
 // cards) — offered by the "Add type…/Add keyword…" pickers (custom still allowed).
@@ -2286,8 +2287,11 @@ function fcPermMenu(p, e) {
     : fcFace(it.name, it.transformed);
   const items = [{ label: it.tapped ? "Untap" : "Tap", onClick: () => fcTogglePermTap(p) }];
 
-  // Flip — double-faced cards switch between their front and back face.
-  if (!it.token && fcIsDfc(it.name)) {
+  // Flip — only TRUE transforming double-faced cards (both faces are permanents)
+  // switch faces. A card whose back is a nonpermanent spell (e.g. a "prepare"
+  // card like Emeritus of Ideation // Ancestral Recall) never flips in play — the
+  // back is merely a spell it can cast, not a face it can become.
+  if (!it.token && fcIsDfc(it.name) && fcBattlefieldFaces(it.name).length >= 2) {
     const other = fcFaces(it.name)[it.transformed ? 0 : 1];
     items.push({ label: `Flip to ${other.name}`, onClick: () => { it.transformed = !it.transformed; renderConfigBuilder(); } });
   }

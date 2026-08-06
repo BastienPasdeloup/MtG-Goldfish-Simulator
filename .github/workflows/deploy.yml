@@ -15,9 +15,12 @@ permissions:
   pages: write
   id-token: write
 
+# Cancel a still-running older deploy when a newer push arrives: a deployment
+# wedged "in_progress" (the GitHub Pages timeout you hit) otherwise blocks every
+# later run. For a docs site we always just want the latest to win.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -49,3 +52,7 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+        with:
+          # Give the Pages backend longer before giving up (default 10 min) —
+          # provisioning can lag; a wedged deploy still surfaces, just later.
+          timeout: 900000
