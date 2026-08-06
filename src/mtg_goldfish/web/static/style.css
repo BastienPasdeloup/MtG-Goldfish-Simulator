@@ -128,10 +128,11 @@ body:has(#session-view:not(.hidden)) footer.appfooter { display: none; }
 /* Saved-sessions list caps at ~7 rows, then scrolls inside the box. */
 #session-list { max-height: 26rem; overflow-y: auto; }
 
-/* Session TITLE box (top of the left column): the deck name with the Previous-runs
-   button aligned right on the same row, badges on a row below. */
-.session-title .title-row { align-items: center; gap: .6rem; flex-wrap: nowrap; }
-.session-title .title-row > button { flex: 0 0 auto; white-space: nowrap; }
+/* Session TITLE box (top of the left column): deck name + badges on the left, the
+   Previous-runs button on the right spanning the FULL height of the box content. */
+.session-title { display: flex; align-items: stretch; gap: .6rem; }
+.title-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.session-title #load-run-btn { flex: 0 0 auto; align-self: stretch; white-space: nowrap; }
 .session-title h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-title .title-badges { gap: .35rem; flex-wrap: wrap; margin-top: .5rem; }
 .session-title .title-badges .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

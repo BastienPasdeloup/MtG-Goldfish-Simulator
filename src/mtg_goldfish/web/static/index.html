@@ -50,17 +50,16 @@
         <!-- LEFT: title box + decklist (a sticky column, decklist width) -->
         <div class="left-col">
           <div class="card-box session-title">
-            <div class="row title-row">
+            <div class="title-main">
               <h2 id="s-name" style="margin:0"></h2>
-              <span class="spacer"></span>
-              <button id="load-run-btn">Previous runs</button>
+              <div class="row title-badges">
+                <span id="s-format" class="pill"></span>
+                <span id="s-date" class="pill" title="session created on"></span>
+                <a id="s-source" class="pill hidden" target="_blank" rel="noopener"></a>
+              </div>
+              <div id="s-warnings" class="warnings"></div>
             </div>
-            <div class="row title-badges">
-              <span id="s-format" class="pill"></span>
-              <span id="s-date" class="pill" title="session created on"></span>
-              <a id="s-source" class="pill hidden" target="_blank" rel="noopener"></a>
-            </div>
-            <div id="s-warnings" class="warnings"></div>
+            <button id="load-run-btn" class="primary">Previous runs</button>
           </div>
           <div class="card-box decklist">
             <div class="deck-controls">
