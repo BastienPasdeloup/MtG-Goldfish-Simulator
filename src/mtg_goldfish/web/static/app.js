@@ -438,7 +438,14 @@ function enterSession(payload) {
   state.imageMap = {};
   for (const c of state.cards) {
     if (c.image) state.imageMap[c.name] = c.image;
-    for (const f of c.faces || []) if (f.image) state.imageMap[f.name] = f.image;
+    (c.faces || []).forEach((f, i) => {
+      if (!f.name) return;
+      if (f.image) state.imageMap[f.name] = f.image;
+      // Some multi-face layouts (adventure, "prepare"…) carry no per-face image —
+      // the single top-level image IS the front face, so let the front fall back
+      // to it (the back keeps no image; it's a nonpermanent spell face anyway).
+      else if (i === 0 && c.image && !state.imageMap[f.name]) state.imageMap[f.name] = c.image;
+    });
   }
   // Register token scans so tile() shows a real image in both viewers.
   state.deckTokens.forEach((t) => { if (t.image && !state.imageMap[t.name]) state.imageMap[t.name] = t.image; });
@@ -1263,11 +1270,24 @@ function fcBattlefieldCenter() {
 
 // front/back; if only one face is a valid permanent it is used silently
 // (Waterlogged Teachings → its land back). `x`/`y` position any chooser.
+// The DFC face indices that could exist as a battlefield PERMANENT. A "prepare"
+// or adventure card whose back is an Instant/Sorcery has only the front — so no
+// front/back choice is offered for it (only the permanent face is placed).
+function fcBattlefieldFaces(name) {
+  const isPerm = (tl) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"]
+    .some((k) => (tl || "").split("—")[0].toLowerCase().includes(k));
+  if (!fcIsDfc(name)) return isPerm(fcCardMeta(name).type_line) ? [0] : [];
+  const faces = fcFaces(name);
+  return [0, 1].filter((i) => isPerm(faces[i].type_line));
+}
+
 function fcPlaceOnBattlefield(name, x, y) {
-  // A double-faced card always prompts which face enters — and ALWAYS offers the
-  // FRONT first (L8), even when only the back is a normal permanent (the
-  // battlefield accepts either face for scenario testing).
-  if (fcIsDfc(name)) {
+  const valid = fcBattlefieldFaces(name);
+  // Only prompt front/back when BOTH faces can be a permanent — and then FRONT is
+  // always listed first (L8, sort:false). When only one face is a real permanent
+  // (e.g. Emeritus of Ideation // Ancestral Recall), place that face with no
+  // pointless choice.
+  if (fcIsDfc(name) && valid.length >= 2) {
     const faces = fcFaces(name);
     const ctr = fcBattlefieldCenter();  // choice menu in the middle of the field
     showContextMenu(ctr.x, ctr.y, [
@@ -1276,7 +1296,9 @@ function fcPlaceOnBattlefield(name, x, y) {
     ], { sort: false });  // keep Front first (L8)
     return;
   }
-  fcAfterPlace(fcPushPermanent(name, false), name, x, y);
+  // A DFC with only the BACK as a permanent enters transformed; otherwise front.
+  const transformed = fcIsDfc(name) && valid.length === 1 && valid[0] === 1;
+  fcAfterPlace(fcPushPermanent(name, transformed), name, x, y);
 }
 
 // ---- tokens (created on the battlefield, not deck cards) ----
