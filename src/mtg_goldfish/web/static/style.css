@@ -94,28 +94,40 @@ footer.appfooter a { color: var(--accent-2); }
 .warnings { color: var(--accent); font-size: 12px; }
 .problems { color: var(--bad); font-size: 12px; }
 
-/* session top bar: the title box takes the width, action buttons sit
-   OUTSIDE the box, at its right, vertically centred */
-.session-topbar { align-items: center; flex-wrap: nowrap; margin-bottom: 1rem; }
-.session-topbar .card-box { flex: 1; margin-bottom: 0; min-width: 0; }
-.session-topbar > button { flex: 0 0 auto; white-space: nowrap; }
-.session-head { flex-wrap: nowrap; }
-.session-head .pill { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 35%; flex: 0 1 auto; }
+/* Session TITLE box (top of the left column): deck name + Previous-runs / Delete
+   ragged left on one row, the badges on a row below. */
+.session-title .title-row { align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .1rem; }
+.session-title .title-row h2 { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-title .title-row > button { flex: 0 0 auto; white-space: nowrap; }
+.session-title .title-badges { gap: .35rem; flex-wrap: wrap; margin-top: .5rem; }
+.session-title .title-badges .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* one badge per commander (partner pairs show two), with hover minis */
 .cmd-pills { display: inline-flex; gap: .35rem; flex-wrap: wrap; align-items: center; min-width: 0; }
 .cmd-pills .pill { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
 
-/* session layout */
+/* session layout — the LEFT column (title + decklist) is STICKY, so it stays
+   fully visible while the page scrolls; the decklist scrolls inside it. */
 .session-grid { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.4fr); gap: 1rem; align-items: start; }
-@media (max-width: 900px) { .session-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .session-grid { grid-template-columns: 1fr; } .left-col { position: static; max-height: none; } }
+.left-col {
+  position: sticky; top: 1rem; align-self: start;
+  max-height: calc(100vh - 2rem);
+  display: flex; flex-direction: column; gap: 1rem; min-height: 0;
+}
+.left-col > .card-box { margin-bottom: 0; }
 
 .decklist { max-height: 78vh; overflow-y: auto; padding-top: 0; }
+.left-col .decklist { flex: 1 1 auto; min-height: 0; max-height: none; }
 .deck-controls { position: sticky; top: 0; background: var(--panel); padding: .9rem 0 .5rem; margin-bottom: .2rem; border-bottom: 1px solid var(--border); z-index: 3; }
 .card-group-title { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .5px; margin: .8rem 0 .3rem; }
 .card-row {
   display: flex; align-items: center; gap: .5rem; padding: .2rem .35rem; border-radius: 5px;
+  cursor: grab;  /* drag a card into a Fixed-config zone / the fixed hand */
 }
+.card-row:active { cursor: grabbing; }
 .card-row:hover { background: var(--panel-2); }
+.drag-hint { font-size: 12px; margin-bottom: .5rem; }
+.hand-minis.drop-hover { outline: 2px dashed var(--accent); outline-offset: 2px; border-radius: 6px; }
 .card-row .qty { color: var(--muted); width: 1.6rem; text-align: right; font-variant-numeric: tabular-nums; }
 .card-row .cname { flex: 1; }
 .card-row.unimpl .cname { color: var(--red-card); }

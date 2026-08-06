@@ -118,7 +118,7 @@ const FC_PROTECTIONS = [
   "all colors", "each color", "colorless", "multicolored", "monocolored",
   "creatures", "artifacts", "enchantments", "planeswalkers", "lands",
   "instants", "sorceries", "instants and sorceries",
-  "everything", "opponents", "the chosen color", "the color of your choice",
+  "everything", "opponents",
   "Dragons", "Demons", "Angels", "Zombies", "Goblins", "Humans", "Vampires",
 ];
 // Keywords that take a PARAMETER (chosen in the same picker window). `number`:
@@ -707,16 +707,19 @@ async function resumeRun() {
 const GROUP_ORDER = ["Commander", "Companion", "Creature", "Planeswalker", "Battle",
   "Instant", "Sorcery", "Artifact", "Enchantment", "Land", "Other", "Sideboard"];
 
+// A multi-type card (Enchantment Land, Artifact Creature, …) is filed under its
+// HIGHEST-priority type in this order: land, planeswalker, creature, artifact,
+// enchantment, instant, sorcery (then battle / other).
 function primaryType(typeLine) {
   const t = (typeLine || "").toLowerCase();
-  if (t.includes("creature")) return "Creature";
+  if (t.includes("land")) return "Land";
   if (t.includes("planeswalker")) return "Planeswalker";
-  if (t.includes("battle")) return "Battle";
-  if (t.includes("instant")) return "Instant";
-  if (t.includes("sorcery")) return "Sorcery";
+  if (t.includes("creature")) return "Creature";
   if (t.includes("artifact")) return "Artifact";
   if (t.includes("enchantment")) return "Enchantment";
-  if (t.includes("land")) return "Land";
+  if (t.includes("instant")) return "Instant";
+  if (t.includes("sorcery")) return "Sorcery";
+  if (t.includes("battle")) return "Battle";
   return "Other";
 }
 
@@ -766,6 +769,14 @@ function hoverable(node, img, meta = null) {
 
 function cardRow(c) {
   const row = el("div", { className: "card-row" + (c.implemented ? "" : " unimpl") });
+  // Drag a deck card straight into a Fixed-config zone / the fixed hand — the
+  // left decklist IS the card source (no separate picker). Carries the card name;
+  // the zone/hand drop handlers add it.
+  row.draggable = true;
+  row.ondragstart = (ev) => {
+    ev.dataTransfer.setData("text/plain", c.name);
+    ev.dataTransfer.effectAllowed = "copy";
+  };
   row.append(el("span", { className: "qty", textContent: c.quantity + "×" }));
 
   const nameWrap = el("span", { className: "cname" });
@@ -1833,7 +1844,11 @@ function fcCardColors(it) {
 // The card's printed keywords (lowercase).
 function fcCardKeywords(it) {
   const raw = (it.token || it.added) ? (it.keywords || []) : (fcCardMeta(it.name).keywords || []);
-  return raw.map((k) => k.toLowerCase());
+  // Keep only REAL keyword abilities — Scryfall's `keywords` sometimes lists a
+  // card's NAMED ability (e.g. Emet-Selch's "Echo of the Lost"), which is not a
+  // keyword and must not appear in the keyword menu.
+  const known = new Set(FC_KEYWORD_ABILITIES);
+  return raw.map((k) => k.toLowerCase()).filter((k) => known.has(k));
 }
 // Every creature subtype / keyword that EXISTS in this game (across the deck's
 // cards) — offered by the "Add type…/Add keyword…" pickers (custom still allowed).
@@ -1913,39 +1928,27 @@ function fcAllKeywords() {
 // A filterable picker modal for choosing one string from `options` (a custom
 // value can still be typed). `onPick(value)` receives the chosen string; if it
 // returns a truthy value the modal STAYS OPEN (so a second step — e.g. choosing
-// a keyword's parameter — happens IN THE SAME WINDOW; the follow-up just calls
-// fcStringPicker / fcStrNumberStep again from inside onPick).
+// "protection from …" — happens IN THE SAME WINDOW by calling fcStringPicker
+// again from inside onPick).
 function fcStrModal() {
   let ov = document.getElementById("fc-str-modal");
   if (ov) return ov;
   ov = el("div", { id: "fc-str-modal", className: "modal-overlay hidden" });
   const input = el("input", { id: "fc-str-q", type: "text", autocomplete: "off", placeholder: "Filter…" });
   const list = el("div", { id: "fc-str-results", className: "str-results" });
-  // Number-stepper step (hidden in list mode): − [value] + [Add].
-  const numInput = el("input", { id: "fc-str-num", type: "number", min: "1", value: "1", className: "num-popup-input" });
-  const stepper = el("div", { id: "fc-str-stepper", className: "str-stepper hidden" },
-    el("button", { className: "num-popup-step", textContent: "−",
-      onclick: () => { numInput.value = String(Math.max(1, (parseInt(numInput.value, 10) || 1) - 1)); numInput.focus(); } }),
-    numInput,
-    el("button", { className: "num-popup-step", textContent: "+",
-      onclick: () => { numInput.value = String((parseInt(numInput.value, 10) || 0) + 1); numInput.focus(); } }),
-    el("button", { className: "num-popup-add", textContent: "Add",
-      onclick: () => fcStrChoose(String(Math.max(1, parseInt(numInput.value, 10) || 1))) }));
   ov.append(el("div", { className: "modal" },
     el("div", { className: "modal-head" },
       el("b", { id: "fc-str-title" }, ""),
       el("span", { className: "spacer" }),
       el("button", { className: "modal-close", title: "Close (Esc)", textContent: "✕",
         onclick: () => ov.classList.add("hidden") })),
-    el("div", { className: "modal-body" }, input, list, stepper)));
+    el("div", { className: "modal-body" }, input, list)));
   ov.onclick = (e) => { if (e.target === ov) ov.classList.add("hidden"); };
   document.body.append(ov);
   input.oninput = () => fcStrRender();
   input.onkeydown = (e) => {
     if (e.key === "Enter") { const first = list.querySelector(".str-opt"); if (first) first.click(); }
   };
-  numInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault();
-    fcStrChoose(String(Math.max(1, parseInt(numInput.value, 10) || 1))); } };
   return ov;
 }
 function fcStringPicker(title, options, onPick) {
@@ -1953,25 +1956,9 @@ function fcStringPicker(title, options, onPick) {
   state._strOpts = options; state._strPick = onPick;
   document.getElementById("fc-str-title").textContent = title;
   document.getElementById("fc-str-q").value = "";
-  document.getElementById("fc-str-q").classList.remove("hidden");
-  document.getElementById("fc-str-results").classList.remove("hidden");
-  document.getElementById("fc-str-stepper").classList.add("hidden");
   ov.classList.remove("hidden");
   fcStrRender();
   setTimeout(() => document.getElementById("fc-str-q").focus(), 30);
-}
-// A numeric step in the SAME picker window (−/+ stepper). onPick gets the number.
-function fcStrNumberStep(title, initial, onPick) {
-  const ov = fcStrModal();
-  state._strPick = onPick;
-  document.getElementById("fc-str-title").textContent = title;
-  document.getElementById("fc-str-q").classList.add("hidden");
-  document.getElementById("fc-str-results").classList.add("hidden");
-  document.getElementById("fc-str-stepper").classList.remove("hidden");
-  const num = document.getElementById("fc-str-num");
-  num.value = String(initial || 1);
-  ov.classList.remove("hidden");
-  setTimeout(() => { num.focus(); num.select(); }, 30);
 }
 function fcStrRender() {
   const q = (document.getElementById("fc-str-q").value || "").trim().toLowerCase();
@@ -2735,32 +2722,7 @@ function renderConfigBuilder() {
     };
   });
 
-  // Card picker — each row is draggable onto a zone (drops add the card).
-  const picker = $("fc-card-picker");
-  picker.replaceChildren();
-  placeableCards().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
-    // A commander is normally in the command zone/in play (shown 1/grey). Once
-    // "removed from any area" it shows 0 and is draggable back into a zone.
-    const isCmd = c.board === "commander";
-    const removed = isCmd && (state.fixedConfig.commander_removed || []).includes(c.name);
-    const n = isCmd ? (removed ? 0 : c.quantity) : fcUsage(c.name);
-    const full = isCmd ? !removed : n >= c.quantity;
-    const nm = el("span", { className: "picker-name" }, c.name);
-    hoverable(nm, c.image);
-    const row = el("div", {
-      className: "picker-row draggable" + (n ? " chosen" : "") + (full ? " full" : ""),
-      draggable: !full,
-      title: isCmd
-        ? (removed ? "commander removed — drag onto a zone to bring it back"
-          : "commander — in the command zone (right-click it to remove)")
-        : full ? "all copies placed" : "drag onto a zone to add",
-    }, el("span", { className: "picker-count", textContent: String(n) }),
-      nm, el("span", { className: "muted picker-qty", textContent: `/${c.quantity}` }));
-    if (!full) {
-      row.ondragstart = (ev) => { ev.dataTransfer.setData("text/plain", c.name); ev.dataTransfer.effectAllowed = "copy"; };
-    }
-    picker.append(row);
-  });
+  // (Cards are dragged in from the LEFT decklist — no separate picker.)
 }
 
 // Only mainboard cards are drawable into an opening hand (commanders live in
@@ -2799,7 +2761,15 @@ function renderFixedBuilder() {
   $("fixed-count").textContent = padding ? `(${total}/${slots})` : `(${total})`;
   const minis = $("fixed-hand-minis");
   minis.replaceChildren();
-  if (!slots) minis.append(el("span", { className: "muted", textContent: "empty — add cards below" }));
+  // The hand is a DROP TARGET — drag cards in from the left decklist.
+  minis.ondragover = (ev) => { ev.preventDefault(); minis.classList.add("drop-hover"); };
+  minis.ondragleave = (ev) => { if (!minis.contains(ev.relatedTarget)) minis.classList.remove("drop-hover"); };
+  minis.ondrop = (ev) => {
+    ev.preventDefault(); minis.classList.remove("drop-hover");
+    const raw = ev.dataTransfer.getData("text/plain");
+    if (raw && !raw.startsWith("{")) addToFixedHand(raw);  // a plain card name from the decklist
+  };
+  if (!slots) minis.append(el("span", { className: "muted", textContent: "empty — drag cards here from the decklist" }));
   for (let i = 0; i < slots; i++) {
     const name = state.fixedHand[i];
     if (!name) {
@@ -2815,24 +2785,7 @@ function renderFixedBuilder() {
     minis.append(m);
   }
 
-  // Picker: one stepper row per distinct mainboard card.
-  const picker = $("fixed-card-picker");
-  picker.replaceChildren();
-  const full = total >= MAX_FIXED_HAND;
-  mainboardCards().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
-    const n = fixedHandCount(c.name);
-    const minus = el("button", { className: "step", textContent: "−" });
-    minus.disabled = n <= 0;
-    minus.onclick = () => removeFromFixedHand(c.name);
-    const plus = el("button", { className: "step", textContent: "+" });
-    plus.disabled = full || n >= c.quantity;
-    plus.onclick = () => addToFixedHand(c.name);
-    const nm = el("span", { className: "picker-name" }, c.name);
-    hoverable(nm, c.image);
-    picker.append(el("div", { className: "picker-row" + (n ? " chosen" : "") },
-      minus, el("span", { className: "picker-count", textContent: String(n) }), plus,
-      nm, el("span", { className: "muted picker-qty", textContent: `/${c.quantity}` })));
-  });
+  // (Cards are dragged in from the LEFT decklist — no separate picker.)
 }
 
 async function runSim() {

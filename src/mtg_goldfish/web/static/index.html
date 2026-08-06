@@ -45,42 +45,43 @@
 
     <!-- SESSION VIEW -->
     <section id="session-view" class="hidden">
-      <div class="row session-topbar">
-        <div class="card-box">
-          <div class="row session-head">
-            <h2 id="s-name" style="margin:0"></h2>
-            <span id="s-commanders" class="pill"></span>
-            <span id="s-format" class="pill"></span>
-            <span id="s-date" class="pill" title="session created on"></span>
-            <a id="s-source" class="pill hidden" target="_blank" rel="noopener"></a>
-          </div>
-          <div id="s-warnings" class="warnings"></div>
-        </div>
-        <button id="load-run-btn">Previous runs</button>
-        <button id="delete-session" class="danger">Delete session</button>
-      </div>
-
       <div class="session-grid">
-        <!-- LEFT: decklist -->
-        <div class="card-box decklist">
-          <div class="deck-controls">
-            <div class="row">
-              <h3 style="margin:0">Decklist</h3>
-              <span class="spacer"></span>
-              <label>Sort</label>
-              <select id="sort-select">
-                <option value="name">Name</option>
-                <option value="cmc">CMC</option>
-                <option value="color">Color</option>
-              </select>
+        <!-- LEFT: title box + decklist (a sticky column, decklist width) -->
+        <div class="left-col">
+          <div class="card-box session-title">
+            <div class="row title-row">
+              <h2 id="s-name" style="margin:0"></h2>
+              <button id="load-run-btn">Previous runs</button>
+              <button id="delete-session" class="danger">Delete session</button>
             </div>
-            <div class="muted" id="deck-summary" style="font-size:12px"></div>
+            <div class="row title-badges">
+              <span id="s-commanders" class="pill"></span>
+              <span id="s-format" class="pill"></span>
+              <span id="s-date" class="pill" title="session created on"></span>
+              <a id="s-source" class="pill hidden" target="_blank" rel="noopener"></a>
+            </div>
+            <div id="s-warnings" class="warnings"></div>
           </div>
-          <div id="deck-cards"></div>
+          <div class="card-box decklist">
+            <div class="deck-controls">
+              <div class="row">
+                <h3 style="margin:0">Decklist</h3>
+                <span class="spacer"></span>
+                <label>Sort</label>
+                <select id="sort-select">
+                  <option value="name">Name</option>
+                  <option value="cmc">CMC</option>
+                  <option value="color">Color</option>
+                </select>
+              </div>
+              <div class="muted" id="deck-summary" style="font-size:12px"></div>
+            </div>
+            <div id="deck-cards"></div>
+          </div>
         </div>
 
         <!-- RIGHT: properties + simulation -->
-        <div>
+        <div class="right-col">
           <div class="card-box">
             <div class="row">
               <h3 style="margin:0">Properties</h3>
@@ -104,8 +105,8 @@
 
             <!-- Fixed-config builder: a fully-specified starting state -->
             <div id="config-builder" class="hidden">
+              <div class="muted drag-hint">Drag cards from the decklist on the left onto a zone.</div>
               <div id="fc-zones"></div>
-              <div id="fc-card-picker" class="fixed-picker"></div>
               <div class="sep"></div>
             </div>
 
@@ -113,8 +114,7 @@
             <div id="fixed-builder" class="hidden">
               <label>Opening hand <span id="fixed-count" class="muted"></span></label>
               <div id="fixed-hand-minis" class="hand-minis"></div>
-              <label style="margin-top:.5rem;display:block">Add from the deck</label>
-              <div id="fixed-card-picker" class="fixed-picker"></div>
+              <div class="muted drag-hint" style="margin-top:.5rem">Drag cards from the decklist on the left to add them.</div>
               <div class="row pad-row">
                 <label style="display:inline-flex;align-items:center;gap:.35rem;cursor:pointer">
                   <input id="fixed-pad" type="checkbox" checked />
