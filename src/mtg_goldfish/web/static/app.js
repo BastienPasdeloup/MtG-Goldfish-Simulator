@@ -207,6 +207,12 @@ async function init() {
   // Software version badge next to the title.
   if (state.meta.version) $("app-version").textContent = "v" + state.meta.version;
 
+  // Pin --appbar-h to the header's ACTUAL height so the sticky left column's top
+  // offset (= --appbar-h + --appbar-gap) matches its natural position exactly and
+  // it never shifts as the page scrolls. Re-measure on resize (wrap / font zoom).
+  syncAppbarHeight();
+  window.addEventListener("resize", syncAppbarHeight);
+
   // Clicking the title/logo goes home (there is no separate Home button).
   const logo = $("home-logo");
   logo.onclick = showHome;
@@ -301,6 +307,12 @@ async function checkForUpdate() {
   close.onclick = () => { localStorage.setItem("mtg-update-dismissed", info.remote || "1"); bar.remove(); };
   bar.append(close);
   document.body.append(bar);
+}
+
+// Set --appbar-h to the sticky header's real pixel height (see the caller).
+function syncAppbarHeight() {
+  const h = document.querySelector("header.appbar");
+  if (h) document.documentElement.style.setProperty("--appbar-h", h.offsetHeight + "px");
 }
 
 function showHome() {
@@ -452,17 +464,7 @@ function enterSession(payload) {
   $("session-view").classList.remove("hidden");
   $("bug-btn").classList.remove("hidden");
   $("s-name").textContent = state.session.name;
-  // One badge per commander (a partner pair shows two), each with a hover mini.
-  const cmdWrap = $("s-commanders");
-  cmdWrap.className = "cmd-pills";
-  const cmdCards = state.cards.filter((c) => c.board === "commander");
-  if (!cmdCards.length) {
-    cmdWrap.replaceChildren(el("span", { className: "pill", textContent: "⚔ none" }));
-  } else {
-    cmdWrap.replaceChildren(...cmdCards.map((c) =>
-      hoverable(el("span", { className: "pill", textContent: "⚔ " + c.name }),
-                c.image || (c.faces && c.faces[0] && c.faces[0].image))));
-  }
+  // (No commander badge in the title box — the decklist shows the commander.)
   $("s-format").textContent = formatName(state.session.format_id);
   $("s-date").textContent = "📅 " + fmtDate(state.session.created_at).slice(0, 10);
   const srcLink = $("s-source");
@@ -2854,7 +2856,7 @@ function renderFixedBuilder() {
       minis.append(el("div", { className: "mini back", title: "random card — added when the game starts" }));
       continue;
     }
-    const m = el("div", { className: "mini", title: `${name} — click to remove` });
+    const m = el("div", { className: "mini", title: "click to remove" });
     const img = state.imageMap[name];
     if (img) m.append(el("img", { src: img, alt: name, loading: "lazy" }));
     else m.append(el("div", { className: "fallback", textContent: name }));
@@ -3730,9 +3732,9 @@ document.getElementById("wrap").addEventListener("wheel", (e) => {
 // ---- graphical board (MTGO-like) ----
 function tile(name, opts = {}) {
   const t = el("div", {
+    // No `title` — hovering shows only the zoom (not a native name tooltip).
     className: "tile" + (opts.tapped ? " tapped" : "") + (opts.sick ? " sick" : "") +
       (opts.commander ? " commander" : "") + (opts.attacking ? " attacking" : ""),
-    title: name + (opts.tapped ? " (tapped)" : "") + (opts.attacking ? " (attacking)" : ""),
   });
   // A token uses its real Scryfall scan when we have one; otherwise a composed
   // face. Non-token cards use their card image.
@@ -3896,10 +3898,11 @@ function pile(items, edit = {}) {
     const card = el("div", {
       className: "pile-img" + (isUnknown || isRestBack ? " card-back" : "")
         + (isRestBack ? " rest-back" : "") + (isUnknown ? " unknown-back" : ""),
-      title: isRestBack ? `${raw.count} more shuffled card${raw.count === 1 ? "" : "s"}`
-        : isUnknown ? (raw.count > 1 ? `${raw.count} unknown cards` : "unknown card (a random card at this depth)")
-        : item.name,
     });
+    // Card backs keep an informative tooltip; a real card shows NO name tooltip
+    // (just the zoom on hover).
+    if (isRestBack) card.title = `${raw.count} more shuffled card${raw.count === 1 ? "" : "s"}`;
+    else if (isUnknown) card.title = raw.count > 1 ? `${raw.count} unknown cards` : "unknown card (a random card at this depth)";
     if (isRestBack) card.append(el("div", { className: "back-count", textContent: String(raw.count) }));
     // A fused run shows just the number; a lone unknown shows nothing.
     else if (isUnknown) { if (raw.count > 1) card.append(el("div", { className: "back-count-run", textContent: String(raw.count) })); }

@@ -12,7 +12,9 @@
   --bad: #e05561;
   --red-card: #e05561;
   --appbar-h: 3.35rem;   /* sticky header height — offsets the sticky left column */
-  --appbar-gap: 1rem;    /* page-bg margin kept between the header and the boxes */
+  --appbar-gap: 1.2rem;  /* page-bg margin below the header — MUST equal main's top
+                            padding so the sticky left column pins at its natural
+                            position and never shifts as the page scrolls. */
 }
 
 * { box-sizing: border-box; }
@@ -352,7 +354,8 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .phase-seg {
   flex: 1 1 0; min-width: 0; text-align: center; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; font-size: 10px; line-height: 1.5; padding: .1rem .3rem;
-  background: var(--panel-2); color: var(--muted);
+  background: #3a4252; color: #d4d9e2;  /* lighter than panel-2 / muted — the upcoming
+                                           phases were too dark to read on the dark board */
   /* chevron: notch on the left, point on the right (interlocking arrows) */
   clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 50%, calc(100% - 9px) 100%, 0 100%, 9px 50%);
 }
