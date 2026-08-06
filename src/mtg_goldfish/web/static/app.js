@@ -1837,14 +1837,45 @@ function fcCardKeywords(it) {
 }
 // Every creature subtype / keyword that EXISTS in this game (across the deck's
 // cards) — offered by the "Add type…/Add keyword…" pickers (custom still allowed).
+// Common MTG counter types offered by "Add counter type…" (any other can still
+// be typed in the picker).
+const FC_COUNTER_TYPES = ["+1/+1", "-1/-1", "+1/+0", "+0/+1", "-1/-0", "-0/-1",
+  "loyalty", "charge", "oil", "stun", "shield", "energy", "poison", "experience",
+  "lore", "page", "time", "fade", "age", "spore", "quest", "blood", "gold", "ice",
+  "level", "verse", "growth", "ki", "muster", "wind", "corruption", "death",
+  "divinity", "doom", "dream", "echo", "egg", "elixir", "eon", "eyeball", "fate",
+  "feather", "flame", "flood", "fungus", "fury", "gem", "glyph", "hatchling",
+  "healing", "hour", "hunger", "incubation", "javelin", "knowledge", "magnet",
+  "mannequin", "mask", "mine", "mining", "music", "net", "omen", "pain", "petal",
+  "plague", "polyp", "pressure", "prey", "pupa", "rust", "scream", "shell", "shred",
+  "silver", "sleep", "slime", "slumber", "soul", "spark", "spite", "storage",
+  "strife", "study", "task", "theft", "tide", "tower", "training", "trap",
+  "treasure", "velocity", "vitality", "void", "volatile", "wage", "wish"];
+
+// Card TYPES / supertypes — NOT creature subtypes; excluded from the subtype list.
+const FC_CARD_TYPES = new Set(["Creature", "Artifact", "Enchantment", "Land",
+  "Planeswalker", "Instant", "Sorcery", "Battle", "Tribal", "Kindred", "Basic",
+  "Legendary", "Snow", "World", "Ongoing", "Token", "Card", "Scheme", "Plane",
+  "Phenomenon", "Conspiracy", "Vanguard", "Dungeon", "Emblem"]);
+// The creature SUBTYPES in a type line (the words right of the "—"), handling
+// split / DFC lines ("Creature — Human // Creature — Zombie" → Human, Zombie)
+// and dropping the "//" separator and any card types that leak in.
+function fcSubtypesOf(typeLine) {
+  const out = [];
+  String(typeLine || "").split("//").forEach((part) => {
+    const tail = part.split("—")[1];
+    if (!tail) return;
+    tail.trim().split(/\s+/).forEach((t) => {
+      if (t && t !== "//" && !FC_CARD_TYPES.has(t)) out.push(t);
+    });
+  });
+  return out;
+}
 function fcAllCreatureTypes() {
   const set = new Set();
   (state.cards || []).forEach((c) => {
     const faces = (c.faces && c.faces.length) ? c.faces : [c];
-    faces.forEach((f) => {
-      const tail = (f.type_line || "").split("—")[1];
-      if (tail) tail.trim().split(/\s+/).forEach((t) => { if (t) set.add(t); });
-    });
+    faces.forEach((f) => fcSubtypesOf(f.type_line).forEach((t) => set.add(t)));
   });
   return [...set].sort((a, b) => a.localeCompare(b));
 }
@@ -2136,15 +2167,35 @@ function fcKeywordSubmenu(idx, it) {
     renderConfigBuilder();
   };
   const isEot = (kw) => it.granted_eot.includes(kw) || it.removed_keywords_eot.includes(kw);
+  const replaceKw = (arrs, old, neu) => arrs.forEach((a) => {
+    const j = a.indexOf(old); if (j >= 0) a[j] = neu;
+  });
   const universe = [...new Set([...printed, ...it.granted, ...it.granted_eot,
     ...it.removed_keywords, ...it.removed_keywords_eot])].sort((a, b) => a.localeCompare(b));
-  const rows = universe.map((kw) => ({ kwrow: {
-    label: kw,
-    checked: () => has(kw),
-    eot: () => isEot(kw),
-    onToggle: () => toggle(kw),
-    onEot: () => toggleEot(kw),
-  } }));
+  const rows = universe.map((kw0) => {
+    const base = fcKeywordBase(kw0);
+    const numbered = FC_NUMBERED_KEYWORDS.includes(base);
+    let key = kw0;  // this row's CURRENT full keyword (mutated by the inline stepper)
+    const kwrow = {
+      label: numbered ? base : kw0,       // numbered rows label with the base; value in the stepper
+      checked: () => has(key),
+      eot: () => isEot(key),
+      onToggle: () => toggle(key),
+      onEot: () => toggleEot(key),
+    };
+    if (numbered) {
+      const val = () => { const m = /\s(\d+)$/.exec(key); return m ? parseInt(m[1], 10) : 1; };
+      const setVal = (n) => {
+        n = Math.max(1, n);
+        const neu = `${base} ${n}`;
+        replaceKw([it.granted, it.granted_eot, it.removed_keywords, it.removed_keywords_eot], key, neu);
+        key = neu;
+        renderConfigBuilder();  // update the board badge; the open menu updates in place
+      };
+      kwrow.num = { get: val, dec: () => setVal(val() - 1), inc: () => setVal(val() + 1) };
+    }
+    return { kwrow };
+  });
   const addKw = (full) => {
     drop(it.removed_keywords, full); drop(it.removed_keywords_eot, full);
     if (!printed.includes(full) && !inAny(full)) it.granted.push(full);
@@ -2156,11 +2207,11 @@ function fcKeywordSubmenu(idx, it) {
       const param = FC_KEYWORD_PARAMS[fcKeywordBase(kw)];
       const hasParam = /\s/.test(kw);  // already typed "ward 2" / "protection from red"
       if (param && !hasParam) {
-        // Ask for the parameter AFTER selecting, in the same window: a −/+ value
-        // step for numbered keywords, a "protection from…" choice for protection.
-        if (param.number) fcStrNumberStep(`${kw} — value`, 1, (n) => { addKw(`${kw} ${n}`); });
-        else if (param.from) fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); });
-        return true;  // keep the picker open for the parameter step
+        // A numbered keyword is added with a default value and adjusted via the
+        // INLINE per-row −/+ stepper (no separate stepper step). Protection needs
+        // a "from …" CHOICE, picked in the same window.
+        if (param.number) { addKw(`${kw} 1`); return; }
+        if (param.from) { fcStringPicker(`${kw} from…`, param.from, (v) => { addKw(`${kw} from ${v.trim()}`); }); return true; }
       }
       addKw(kw);
     }) });
@@ -2170,8 +2221,7 @@ function fcKeywordSubmenu(idx, it) {
 // The permanent's current creature subtypes (words RIGHT of the "—").
 function fcCurrentCreatureTypes(it) {
   const tl = (it.token || it.added) ? (it.type_line || "") : (fcCardMeta(it.name).type_line || "");
-  const tail = tl.split("—")[1] || "";
-  return tail.trim().split(/\s+/).filter(Boolean);
+  return fcSubtypesOf(tl);
 }
 
 function fcPermMenu(p, e) {
@@ -2239,10 +2289,11 @@ function fcPermMenu(p, e) {
     inc: () => fcSetCounter(idx, k, cval(k) + 1),
   } }));
   counterItems.push({
-    label: "Add counter type…", onClick: () => {
-      const kind = (prompt("Counter kind (e.g. charge, oil, page):", "") || "").trim();
-      if (kind) fcSetCounter(idx, kind, (it.counters && it.counters[kind] || 0) + 1);
-    },
+    label: "Add counter type…", onClick: () =>
+      fcStringPicker("Add a counter type", FC_COUNTER_TYPES, (kind) => {
+        kind = kind.trim();
+        if (kind) fcSetCounter(idx, kind, (it.counters && it.counters[kind] || 0) + 1);
+      }),
   });
   items.push({ label: "Add counter", submenu: counterItems });
 
@@ -2542,9 +2593,26 @@ function buildMenu(items) {
       const k = it.kwrow;
       const chk = el("span", { className: "ctx-check", textContent: k.checked() ? "✓" : "" });
       const eot = el("button", { className: "ctx-eot" + (k.eot() ? " on" : ""), title: "until end of turn", textContent: "EOT" });
-      const row = el("div", { className: "ctx-item ctx-kwrow" }, chk,
-        el("span", { className: "ctx-label", textContent: k.label }), eot);
-      const sync = () => { chk.textContent = k.checked() ? "✓" : ""; eot.classList.toggle("on", k.eot()); };
+      const parts = [chk, el("span", { className: "ctx-label", textContent: k.label })];
+      // A keyword that carries a value (ward N, rampage N, annihilator N…) shows
+      // an INLINE −/+ stepper on its own row; plain keywords show none.
+      let numVal = null;
+      const sync = () => {
+        chk.textContent = k.checked() ? "✓" : "";
+        eot.classList.toggle("on", k.eot());
+        if (numVal) numVal.textContent = String(k.num.get());
+      };
+      if (k.num) {
+        numVal = el("b", { className: "ctx-val", textContent: String(k.num.get()) });
+        const stepBtn = (sym, fn) => {
+          const b = el("button", { className: "ctx-step", textContent: sym });
+          b.onclick = (ev) => { ev.stopPropagation(); fn(); sync(); };
+          return b;
+        };
+        parts.push(stepBtn("−", k.num.dec), numVal, stepBtn("+", k.num.inc));
+      }
+      parts.push(eot);
+      const row = el("div", { className: "ctx-item ctx-kwrow" }, ...parts);
       row.onclick = (ev) => { ev.stopPropagation(); k.onToggle(); sync(); };
       eot.onclick = (ev) => { ev.stopPropagation(); k.onEot(); sync(); };
       menu.append(row);
