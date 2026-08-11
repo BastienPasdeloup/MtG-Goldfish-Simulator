@@ -1,6 +1,9 @@
-"""URL-dispatching deck import: pick the right source (Moxfield / MTGTop8)."""
+"""URL-dispatching deck import: pick the right source (Moxfield / MTGTop8 /
+Archidekt)."""
 from __future__ import annotations
 
+from .archidekt import (fetch_deck_signature as _arch_sig, import_archidekt_deck,
+                        is_archidekt)
 from .models import Deck
 from .moxfield import (ImportResult, deck_signature, fetch_deck_signature as _mox_sig,
                        import_moxfield_deck)
@@ -18,10 +21,12 @@ def import_deck(
     format_id: str | None = None,
     scryfall: ScryfallClient | None = None,
 ) -> ImportResult:
-    """Import a deck from a Moxfield or mtgtop8 URL, chosen by the URL host.
-    When `format_id` is None the format is inferred from the source deck."""
+    """Import a deck from a Moxfield, mtgtop8, or Archidekt URL, chosen by the URL
+    host. When `format_id` is None the format is inferred from the source deck."""
     if _is_mtgtop8(url):
         return import_mtgtop8_deck(url, name, format_id, scryfall)
+    if is_archidekt(url):
+        return import_archidekt_deck(url, name, format_id, scryfall)
     return import_moxfield_deck(url, name, format_id, scryfall)
 
 
@@ -29,6 +34,8 @@ def fetch_deck_signature(url: str, format_id: str | None = None) -> list:
     """Current content signature of the source deck (for change detection)."""
     if _is_mtgtop8(url):
         return _t8_sig(url, format_id)
+    if is_archidekt(url):
+        return _arch_sig(url)
     return _mox_sig(url)
 
 

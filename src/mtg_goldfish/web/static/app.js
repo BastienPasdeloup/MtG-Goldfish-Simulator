@@ -471,7 +471,8 @@ function enterSession(payload) {
   const srcUrl = state.session.deck && state.session.deck.source_url;
   srcLink.classList.toggle("hidden", !srcUrl);
   if (srcUrl) {
-    const src = /mtgtop8\.com/i.test(srcUrl) ? "MTGTop8" : "Moxfield";
+    const src = /mtgtop8\.com/i.test(srcUrl) ? "MTGTop8"
+      : /archidekt\.com/i.test(srcUrl) ? "Archidekt" : "Moxfield";
     srcLink.href = srcUrl;
     srcLink.textContent = src + " ↗";
     srcLink.title = srcUrl;
@@ -736,7 +737,11 @@ function groupLabel(c) {
   if (c.board === "commander") return "Commander";
   if (c.board === "companion") return "Companion";
   if (c.board === "sideboard") return "Sideboard";
-  return primaryType(c.type_line); // mainboard grouped by type
+  // A double-faced card is filed under its FRONT face's category (e.g. a
+  // Creature // Land goes under Creature, not Land).
+  const tl = (c.faces && c.faces.length > 1 && c.faces[0].type_line)
+    ? c.faces[0].type_line : c.type_line;
+  return primaryType(tl); // mainboard grouped by type
 }
 
 function renderDeck() {

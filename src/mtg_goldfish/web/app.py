@@ -18,7 +18,8 @@ from pydantic import BaseModel
 from .. import __version__, __version_base__
 from ..cards import build_card, is_implemented, load_all_cards
 from ..config import CONFIG
-from ..deck import MoxfieldError, MTGTop8Error, ScryfallError, import_deck
+from ..deck import (ArchidektError, MoxfieldError, MTGTop8Error, ScryfallError,
+                    import_deck)
 from ..deck.models import Deck
 from ..engine.phases import phase_labels
 from ..formats import get_format, list_formats
@@ -150,9 +151,21 @@ def _fresh_card(card):
     """The card RE-RESOLVED from the Scryfall cache (which now holds the earliest
     printing's art) if present, else the deck's stored copy. This corrects images
     on decks imported BEFORE the oldest-print change WITHOUT rewriting the (often
-    huge) session files — cache-only, never a network fetch."""
+    huge) session files.
+
+    Cards cached before the Alpha→Beta scan change (`set` is empty, or `set` is
+    "lea" = an Alpha scan) are re-fetched ONCE from Scryfall so their art becomes
+    the Beta scan and `set` is populated (self-healing on next view; every load
+    after is cache-only). Best-effort — a network failure falls back to the
+    cached copy."""
     from ..deck.scryfall import ScryfallClient
-    cached = ScryfallClient()._read_cache(card.name)
+    sc = ScryfallClient()
+    cached = sc._read_cache(card.name)
+    if cached is not None and getattr(cached, "set", "") in ("", "lea"):
+        try:
+            cached = sc.get_named(card.name, refresh=True)
+        except Exception:  # noqa: BLE001 - best effort; keep the cached copy
+            pass
     return cached or card
 
 
@@ -513,7 +526,7 @@ def version_check() -> dict:
 def deck_preview(req: ImportRequest) -> dict:
     try:
         result = import_deck(req.url, req.name, req.format_id)
-    except (MoxfieldError, MTGTop8Error, ScryfallError) as exc:
+    except (MoxfieldError, MTGTop8Error, ArchidektError, ScryfallError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     problems = get_format(result.deck.format_id).validate(result.deck)
     return {
@@ -528,7 +541,7 @@ def deck_preview(req: ImportRequest) -> dict:
 def create_session(req: ImportRequest) -> dict:
     try:
         result = import_deck(req.url, req.name, req.format_id)
-    except (MoxfieldError, MTGTop8Error, ScryfallError) as exc:
+    except (MoxfieldError, MTGTop8Error, ArchidektError, ScryfallError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session = Session(
         id=new_id(),
@@ -627,7 +640,7 @@ def deck_check(session_id: str) -> dict:
         return {"checked": False}
     try:
         current = fetch_deck_signature(url, session.deck.format_id)
-    except (MoxfieldError, MTGTop8Error) as exc:
+    except (MoxfieldError, MTGTop8Error, ArchidektError) as exc:
         return {"checked": False, "error": str(exc)}
     return {"checked": True, "changed": current != deck_signature(session.deck)}
 

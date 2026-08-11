@@ -74,6 +74,7 @@ def card_data_from_scryfall(raw: dict) -> CardData:
         image_normal=image,
         faces=faces,
         scryfall_id=raw.get("id"),
+        set=raw.get("set", "") or "",
         token_parts=token_parts,
     )
 
@@ -155,10 +156,15 @@ class ScryfallClient:
         """The EARLIEST paper printing of `name` (so images use the first
         published art). Oracle text on Scryfall is the current wording for every
         printing, so only the art/set differs. Returns None if the exact-name
-        prints search finds nothing (caller falls back to /cards/named)."""
+        prints search finds nothing (caller falls back to /cards/named).
+
+        Alpha (`lea`) is EXCLUDED: Alpha scans have the distinctive rounded
+        corners / off-centre art, so a card whose earliest printing is Alpha uses
+        its BETA (`leb`) scan instead (the next printing). Cards not in Alpha are
+        unaffected."""
         try:
             resp = self._get(client, "/cards/search", {
-                "q": f'!"{name}" game:paper', "unique": "prints",
+                "q": f'!"{name}" game:paper -set:lea', "unique": "prints",
                 "order": "released", "dir": "asc"})
             if resp.status_code == 200:
                 data = resp.json().get("data") or []

@@ -31,7 +31,7 @@ def _pt_counters(counters: dict) -> tuple[int, int]:
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
-from ..deck.models import CardData, Deck
+from ..deck.models import CardData, Deck, DeckBoard
 from .mana import ManaPool
 from .phases import Phase, phase_index
 
@@ -347,6 +347,9 @@ class GameState:
     graveyard: list[CardData] = field(default_factory=list)
     exile: list[CardData] = field(default_factory=list)
     command_zone: list[CardData] = field(default_factory=list)
+    # "Outside the game" cards (the deck's sideboard) — a wish target pool for
+    # Ring of Ma'rûf. Not part of any in-game zone; never shuffled/drawn.
+    sideboard: list[CardData] = field(default_factory=list)
     stack: list[CardData | StackAbility] = field(default_factory=list)
     # Cards exiled "you may play it" (source_uid, card); playable while source lives.
     exile_playable: list[tuple[int, CardData]] = field(default_factory=list)
@@ -538,6 +541,7 @@ class GameState:
             graveyard=list(self.graveyard),
             exile=list(self.exile),
             command_zone=list(self.command_zone),
+            sideboard=list(self.sideboard),
             stack=list(self.stack),
             exile_playable=list(self.exile_playable),
             exile_play_needs_source=dict(self.exile_play_needs_source),
@@ -2008,6 +2012,10 @@ def new_game_from_deck(deck: Deck, *, on_the_play: bool = True) -> GameState:
 
     for entry in deck.mainboard:
         state.library.extend([entry.card] * entry.quantity)
+
+    # The sideboard is "outside the game" — a wish pool (Ring of Ma'rûf).
+    for entry in deck.by_board(DeckBoard.SIDEBOARD):
+        state.sideboard.extend([entry.card] * entry.quantity)
 
     state.commander_color_identity = tuple(sorted(identity))
     state.commander_names = tuple(e.card.name for e in deck.commanders)

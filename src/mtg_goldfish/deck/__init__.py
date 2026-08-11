@@ -1,4 +1,5 @@
-"""Deck import and card metadata (Moxfield + MTGTop8 + Scryfall)."""
+"""Deck import and card metadata (Moxfield + MTGTop8 + Archidekt + Scryfall)."""
+from .archidekt import ArchidektError, import_archidekt_deck
 from .importer import fetch_deck_signature, import_deck
 from .models import CardData, CardFace, Deck, DeckEntry, DeckBoard
 from .moxfield import MoxfieldError, deck_signature, import_moxfield_deck
@@ -13,8 +14,10 @@ __all__ = [
     "DeckBoard",
     "MoxfieldError",
     "MTGTop8Error",
+    "ArchidektError",
     "import_moxfield_deck",
     "import_mtgtop8_deck",
+    "import_archidekt_deck",
     "import_deck",
     "deck_signature",
     "fetch_deck_signature",

@@ -53,6 +53,10 @@ class CardData(BaseModel):
     image_normal: str | None = None
     faces: list[CardFace] = Field(default_factory=list)
     scryfall_id: str | None = None
+    # Set code of the printing this card data came from (the earliest paper
+    # printing, excluding Alpha — see ScryfallClient._oldest_raw). Used for
+    # "originally printed in <set>" checks (City in a Bottle) and set-scoped logic.
+    set: str = ""
     # Related token permanents this card creates (from Scryfall `all_parts`):
     # each {name, type_line, scryfall_id}. Used to show real token scans.
     token_parts: list[dict] = Field(default_factory=list)
