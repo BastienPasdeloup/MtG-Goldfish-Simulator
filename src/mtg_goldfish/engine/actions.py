@@ -982,6 +982,11 @@ class DeclareAttackers(Action):
     label = "attack with all able creatures"
 
     def apply(self, state: GameState) -> None:
+        # First DECLARE every attacker (tap them, mark them) so the replay shows a
+        # single frame with ALL attackers — only THEN put the attack triggers on
+        # the stack (otherwise the first attacker's trigger emits a frame before
+        # the rest are declared, so attackers appear over two steps).
+        declared: list[Permanent] = []
         for perm in state.battlefield:
             if not perm.is_creature_now or perm.tapped:
                 continue
@@ -993,12 +998,16 @@ class DeclareAttackers(Action):
             perm.turn_flags["attacked"] = 1
             if not state.has_keyword(perm, "Vigilance"):
                 perm.tapped = True
-            state.queue_attack_triggers(perm)
+            declared.append(perm)
         if state.attackers:
             state.attacked_this_turn = True
             names = [p.name for p in state.battlefield if p.uid in state.attackers]
             state.emit(f"attack with {', '.join(names)}")
-            # Player-level "whenever you attack" triggers (Inti, Ellie), once each.
+            # Now that all attackers are shown, put the per-attacker attack triggers
+            # on the stack, then the player-level "whenever you attack" triggers
+            # (Inti, Ellie), once each.
+            for perm in declared:
+                state.queue_attack_triggers(perm)
             you_attack: list = []
             for perm in list(state.battlefield):
                 you_attack.extend(perm.impl.you_attack_stack_items(state, perm))
