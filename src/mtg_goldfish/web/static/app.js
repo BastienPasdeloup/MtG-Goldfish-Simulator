@@ -3868,6 +3868,8 @@ function normalizePileItem(raw) {
     suspend: typeof raw?.suspend === "number" ? raw.suspend : null,
     // What a spell/ability ON THE STACK targets (shown as a "→ target" badge).
     target: asName(raw?.target) || null,
+    // Exiled to the ante (Contract from Below, Darkpact, Demonic Attorney).
+    anted: raw?.anted === true,
   };
 }
 
@@ -3915,6 +3917,14 @@ function pile(items, edit = {}) {
       card.append(el("div", {
         className: "suspend-badge", textContent: "⧗" + item.suspend,
         title: `Suspended — ${item.suspend} time counter${item.suspend === 1 ? "" : "s"} left`,
+      }));
+    }
+    // Anted: exiled to the ante (leaves the game in a goldfish).
+    if (item.anted) {
+      card.classList.add("has-exile-src");
+      card.append(el("div", {
+        className: "ante-badge", textContent: "⚑ ante",
+        title: "Exiled to the ante (leaves the game)",
       }));
     }
     // A spell/ability on the stack that targets something: "→ target" badge.

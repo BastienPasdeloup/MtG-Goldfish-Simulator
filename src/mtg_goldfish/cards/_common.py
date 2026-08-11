@@ -1356,6 +1356,99 @@ def aura_on_creature_bestow_actions(
             for name, uid in hosts.items()]
 
 
+def aura_enchant_actions(
+    self: Card, state: "GameState", *, cost, pred: Callable | None = None,
+    tag: str = "aura", on_attach: Callable | None = None,
+) -> list[CardAction]:
+    """Cast this Aura, enchanting a permanent that matches `pred` (default: a
+    creature you control) — one branch per distinct legal host. It enters already
+    attached (attached_to = host); its continuous effect comes from the card's own
+    equip_mod / static_pt_bonus / battlefield_actions. `on_attach(st, aura, host)`
+    runs an extra step at attach time (e.g. animate the host, strip a keyword)."""
+    from ..engine.actions import begin_cast, can_afford
+
+    c = ManaCost.parse(cost) if isinstance(cost, str) else cost
+    if not can_afford(state, c):
+        return []
+    pred = pred or (lambda p: p.is_creature_now)
+    hosts: dict[str, int] = {}
+    for p in state.battlefield:
+        if pred(p) and p.name not in hosts:
+            hosts[p.name] = p.uid
+
+    def make(uid: int):
+        def fn(st: "GameState"):
+            card = next((x for x in st.hand if x.name == self.card_name), None)
+            host = st.find_permanent(uid)
+            if card is None or host is None or not begin_cast(st, card, c, tag=tag):
+                return None
+            if card in st.stack:
+                st.stack.remove(card)
+            aura = st.put_on_battlefield(card, fire_etb=False)
+            aura.attached_to = host.uid
+            st.emit(f"{self.card_name} resolves — enchant {host.name}")
+            if on_attach is not None:
+                on_attach(st, aura, host)
+            st.check_deaths()
+            return None
+        return fn
+
+    return [CardAction(f"cast {self.card_name} → {name}", make(uid))
+            for name, uid in hosts.items()]
+
+
+def ante_top_card(state: "GameState"):
+    """Ante the top card of your library — exile it with an "ante" badge. In a
+    goldfish the ante is never won back, so the card simply leaves the game."""
+    if not state.library:
+        return None
+    card = state.library.pop(0)
+    state.exile.append(card)
+    state.ante_ids.add(id(card))
+    state.emit(f"ante: exile {card.name}")
+    return card
+
+
+def recolor_permanent_spell(name: str, color: str) -> type[Card]:
+    """'Target spell or permanent becomes <color>' (Chaoslace = red, Deathlace =
+    black). Recolours one of your permanents — relevant for colour anthems (a
+    creature recoloured black gains Bad Moon's +1/+1, etc.). One branch per
+    distinct permanent you control."""
+
+    @register
+    class _Lace(Card):
+        card_name = name
+
+        def cast_actions(self, state):
+            from ..engine.actions import begin_cast, resolve_to_graveyard
+
+            acts: list[CardAction] = []
+            seen: set[str] = set()
+            for p in state.battlefield:
+                if p.name in seen:
+                    continue
+                seen.add(p.name)
+
+                def make(uid: int, nm: str):
+                    def fn(st: "GameState"):
+                        card = next((c for c in st.hand if c.name == name), None)
+                        tgt = st.find_permanent(uid)
+                        if card is None or tgt is None or not begin_cast(st, card, self.mana_cost):
+                            return None
+                        resolve_to_graveyard(st, card)
+                        tgt.color_override = [color]
+                        st.emit(f"{name}: {nm} becomes {color}")
+                        return None
+                    return fn
+
+                acts.append(CardAction(f"cast {name} → {p.name}", make(p.uid, p.name)))
+            return acts
+
+    _Lace.__name__ = name.replace(" ", "").replace("'", "")
+    _Lace.__doc__ = f"{name} — target permanent becomes {color}."
+    return _Lace
+
+
 def sac_fetch_land(name: str, types: tuple[str, ...]) -> type[Card]:
     """'When this land enters, sacrifice it. When you do, search your library
     for a basic <T1/T2/T3> card, put it onto the battlefield tapped, then

@@ -414,6 +414,10 @@ class GameState:
     # upkeeps, and when the last is removed the card is cast for free (its impl's
     # `on_suspend_resolve`). Persists across turns (NOT a per-turn counter).
     suspended: list = field(default_factory=list)
+    # Cards put into the ante (exiled with an "ante" badge — Contract from Below,
+    # Darkpact, Demonic Attorney). Ante is a real zone but a goldfish never wins
+    # one back, so an anted card just leaves the game (tracked by id() for badges).
+    ante_ids: set = field(default_factory=set)
     # Teferi, Time Raveler +1: until your next turn you may cast sorcery spells
     # as though they had flash (they become instant-speed in the search's
     # instant-speed windows). Cleared at your next untap.
@@ -526,6 +530,7 @@ class GameState:
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
             free_casts=[dict(g) for g in self.free_casts],
             suspended=[dict(g) for g in self.suspended],
+            ante_ids=set(self.ante_ids),
             cast_sorcery_as_flash=self.cast_sorcery_as_flash,
             untap_lands_end_step=self.untap_lands_end_step,
             extra_combats=self.extra_combats,
@@ -1713,6 +1718,8 @@ class GameState:
             n = suspend_by_id.get(id(card))
             if n is not None:
                 entry["suspend"] = n  # time counters remaining
+            if id(card) in self.ante_ids:
+                entry["anted"] = True  # exiled to the ante
             out.append(entry)
         return out
 

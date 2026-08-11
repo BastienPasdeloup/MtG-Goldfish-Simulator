@@ -431,6 +431,12 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
   border-radius: 4px; color: #fff; background: rgba(196, 92, 92, .95);
   border: 1px solid rgba(255,255,255,.25); box-shadow: 0 1px 2px rgba(0,0,0,.55);
 }
+.pile-img .ante-badge {
+  position: absolute; top: 2px; left: 2px; z-index: 2;
+  font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 4px;
+  border-radius: 4px; color: #1a1205; background: var(--accent);
+  border: 1px solid rgba(255,255,255,.25); box-shadow: 0 1px 2px rgba(0,0,0,.55);
+}
 .pile-img:hover { z-index: 5; outline: 2px solid var(--accent); }
 .pile-empty { color: var(--muted); font-size: 12px; }
 /* Library card backs: an "unknown card" pinned at a depth (a run of N fuses to

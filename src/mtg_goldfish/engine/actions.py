@@ -962,6 +962,8 @@ class DeclareAttackers(Action):
                 continue
             if perm.summoning_sick and not state.has_keyword(perm, "Haste"):
                 continue
+            if state.has_keyword(perm, "Defender"):  # defenders can't attack
+                continue
             state.attackers.append(perm.uid)
             perm.turn_flags["attacked"] = 1
             if not state.has_keyword(perm, "Vigilance"):
@@ -991,6 +993,7 @@ def combat_actions(state: GameState) -> list[Action]:
         p for p in state.battlefield
         if p.is_creature_now and not p.tapped
         and (not p.summoning_sick or state.has_keyword(p, "Haste"))
+        and not state.has_keyword(p, "Defender")  # defenders can't attack
     ]
     if not able:
         return []

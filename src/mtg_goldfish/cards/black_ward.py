@@ -1,0 +1,19 @@
+"""Black Ward — {W} Enchantment — Aura. Enchant creature.
+Enchanted creature has protection from black.
+
+Protection has no effect in a solitaire goldfish (no opposing black sources to
+be protected from), so this is an Aura that simply attaches to one of your
+creatures (one branch each)."""
+from __future__ import annotations
+
+from ._common import aura_enchant_actions
+from .base import Card
+from .registry import register
+
+
+@register
+class BlackWard(Card):
+    card_name = "Black Ward"
+
+    def cast_actions(self, state):
+        return aura_enchant_actions(self, state, cost="{W}")

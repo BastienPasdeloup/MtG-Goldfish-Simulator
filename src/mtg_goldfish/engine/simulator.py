@@ -425,6 +425,11 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
                 # Shallow Grave — temporary reanimation).
                 state.emit(f"{perm.name}: exile at beginning of end step")
                 state.leaves_battlefield(perm, "exile")
+            elif perm.counters.get("end_step_destroy") and perm.turn_flags.get("attacked"):
+                # "At the beginning of the next end step, destroy it if it
+                # attacked this turn" (Berserk).
+                state.emit(f"{perm.name}: destroyed at end step (attacked this turn)")
+                state.leaves_battlefield(perm, "graveyard", reason="destroy")
         # "At the beginning of the next end step, untap up to N lands" (Teferi,
         # Hero of Dominaria +1). Untap the tapped lands (up to N) so the mana is
         # available for the end-step instant-speed window / next turn.
