@@ -362,9 +362,11 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
         # cycle WITHOUT advancing the turn counter — modelling the tempo gain.
         if state.extra_turns > 0:
             state.extra_turns -= 1
-            state.emit(f"extra turn (turn stays {state.turn})")
+            state.extra_turn_index += 1
+            state.emit(f"extra turn (Turn {state.turn} +{state.extra_turn_index})")
         else:
             state.turn += 1
+            state.extra_turn_index = 0
         state.reset_turn_counters()
         # Untap restrictions (Winter Orb: ≤1 land while untapped; Winter Moon:
         # ≤1 nonbasic land). Limits are the min across all such permanents, read

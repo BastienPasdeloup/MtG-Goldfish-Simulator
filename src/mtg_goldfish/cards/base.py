@@ -374,6 +374,12 @@ class Card:
         dealt `amount` damage — Fungusaur ("whenever this creature is dealt
         damage, put a +1/+1 counter on it"). Fired by `GameState.damage_permanent`."""
 
+    def prevents_life_loss_defeat(self, state: "GameState", perm: "Permanent") -> bool:
+        """True while this permanent stops you losing the game for having 0 or less
+        life (Lich: "You don't lose the game for having 0 or less life"). Read by
+        `GameState.check_life_totals`."""
+        return False
+
     def replaces_lifegain_with_draw(self, state: "GameState", perm: "Permanent") -> bool:
         """True while this permanent replaces YOUR life gains with drawing that
         many cards instead (Lich). Read by `GameState.gain_life`."""

@@ -407,6 +407,12 @@ class GameState:
     #: mark_known_in_library). Cleared by every shuffle, real or fake.
     known_library_ids: set = field(default_factory=set)
 
+    # Rules-based game result for the replay indicator: "" (ongoing), "won", or
+    # "lost", with a human reason. The FIRST result sticks (game-level, not reset
+    # each turn). Informational only — it does not stop the property search.
+    game_result: str = ""
+    game_result_reason: str = ""
+
     # per-turn counters (reset at untap)
     lands_played_this_turn: int = 0
     bonus_land_drops: int = 0  # one-shot extras this turn (Summer Bloom)
@@ -462,6 +468,10 @@ class GameState:
     # turn counter (in a solitaire goldfish that models the tempo — more resources
     # by the same turn number). NOT reset each turn (persists until consumed).
     extra_turns: int = 0
+    # How many EXTRA turns have been taken at the current turn number (0 = a normal
+    # turn). Bumped when an extra turn is taken, reset when the turn counter
+    # advances normally — the replay shows "Turn X (+N)".
+    extra_turn_index: int = 0
     # "This turn, you may play lands and cast spells from your graveyard" and
     # "if a card would be put into your graveyard this turn, exile it instead"
     # (Yawgmoth's Will). Statics on permanents (Emet-Selch // Hades) grant the
@@ -562,6 +572,8 @@ class GameState:
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             deaths_this_turn=self.deaths_this_turn,
             damage_taken_this_turn=self.damage_taken_this_turn,
+            game_result=self.game_result,
+            game_result_reason=self.game_result_reason,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
             prevent_all_combat_damage=self.prevent_all_combat_damage,
             prevent_shields=list(self.prevent_shields),
@@ -572,6 +584,7 @@ class GameState:
             untap_lands_end_step=self.untap_lands_end_step,
             extra_combats=self.extra_combats,
             extra_turns=self.extra_turns,
+            extra_turn_index=self.extra_turn_index,
             gy_play_all=self.gy_play_all,
             gy_exile_replace=self.gy_exile_replace,
             cards_drawn=self.cards_drawn,
@@ -923,6 +936,7 @@ class GameState:
     def draw(self, n: int = 1) -> None:
         for _ in range(n):
             if not self.library:
+                self.set_lost("drew from an empty library")
                 return
             card = self.library.pop(0)
             self.hand.append(card)
@@ -943,6 +957,7 @@ class GameState:
         if amount > 0:
             dealt += sum(p.impl.noncombat_damage_bonus(self, p) for p in self.battlefield)
         self.opponent_life -= dealt
+        self.check_life_totals()
         return dealt
 
     def damage_self(self, amount: int, colors: tuple = ()) -> int:
@@ -980,7 +995,33 @@ class GameState:
             # battlefield permanent with the actual amount taken.
             for p in list(self.battlefield):
                 p.impl.on_owner_damaged(self, p, remaining)
+            self.check_life_totals()
         return remaining
+
+    # ---- rules-based game result (replay indicator only) --------------------
+    def set_won(self, reason: str) -> None:
+        """Record that YOU won the game (the first result sticks)."""
+        if not self.game_result:
+            self.game_result = "won"
+            self.game_result_reason = reason
+            self.emit(f"YOU WIN — {reason}")
+
+    def set_lost(self, reason: str) -> None:
+        """Record that YOU lost the game (the first result sticks)."""
+        if not self.game_result:
+            self.game_result = "lost"
+            self.game_result_reason = reason
+            self.emit(f"YOU LOSE — {reason}")
+
+    def check_life_totals(self) -> None:
+        """State-based game-result checks on life totals: the opponent at 0 or less
+        is a win; you at 0 or less is a loss UNLESS a permanent keeps you alive
+        (Lich: `prevents_life_loss_defeat`)."""
+        if self.opponent_life <= 0:
+            self.set_won("opponent reduced to 0 life")
+        elif self.life <= 0 and not any(
+                p.impl.prevents_life_loss_defeat(self, p) for p in self.battlefield):
+            self.set_lost("reduced to 0 life")
 
     def gain_life(self, amount: int) -> None:
         """Gain `amount` life — EXCEPT while a Lich is in play, where "if you
@@ -1885,7 +1926,10 @@ class GameState:
 
         return {
             "turn": self.turn,
+            "extra_turn": self.extra_turn_index,  # 0 = normal turn; N = "Turn X (+N)"
             "phase": self.phase.value,
+            "game_result": self.game_result,          # "" | "won" | "lost"
+            "game_result_reason": self.game_result_reason,
             "life": self.life,
             "opponent_life": self.opponent_life,
             "energy": self.energy,

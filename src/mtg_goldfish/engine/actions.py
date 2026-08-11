@@ -1055,6 +1055,7 @@ def deal_combat_damage(state: GameState) -> None:
         hits.append((perm, dmg))
     if total:
         state.emit(f"combat: {total} damage to opponent (opponent at {state.opponent_life})")
+        state.check_life_totals()
     for perm, dmg in hits:
         state.queue_combat_damage_triggers(perm, dmg)
     # Do NOT settle here. The COMBAT_DAMAGE step in simulator._apply_step_entry

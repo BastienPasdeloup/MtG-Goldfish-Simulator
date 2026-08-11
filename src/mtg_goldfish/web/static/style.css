@@ -336,6 +336,15 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 .board-header { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .3rem; }
 .board-header.step-line { flex-wrap: nowrap; align-items: baseline; margin-bottom: .5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
 .board-header .turn { font-weight: 700; color: var(--accent); white-space: nowrap; }
+/* Rules-based win/loss banner in the replay header. */
+.game-result { display: flex; align-items: baseline; gap: .25rem; margin: .25rem 0 .4rem;
+  padding: .25rem .5rem; border-radius: 4px; font-size: 12px; }
+.game-result .result-tag { font-weight: 800; letter-spacing: .03em; }
+.game-result.won { background: rgba(52, 168, 83, .16); border: 1px solid rgba(52, 168, 83, .5); }
+.game-result.won .result-tag { color: #3ea55b; }
+.game-result.lost { background: rgba(217, 48, 37, .14); border: 1px solid rgba(217, 48, 37, .5); }
+.game-result.lost .result-tag { color: #e0685f; }
+.game-result .result-reason { color: var(--muted); }
 /* The step stays to the RIGHT of the phase: it takes the remaining width and
    wraps inside its own column instead of dropping to a new line. */
 .board-header .action { flex: 1; min-width: 0; color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: break-word; }

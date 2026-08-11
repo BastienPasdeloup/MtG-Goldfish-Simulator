@@ -4116,7 +4116,8 @@ function renderBoard(f, edit = {}) {
   } else {
     // Replay: turn number + the phase timeline (current phase highlighted). The
     // action (what this step does) goes on its OWN line below (see actionLine).
-    line1.append(el("span", { className: "turn", textContent: `Turn ${f.turn}` }),
+    const turnLabel = `Turn ${f.turn}${f.extra_turn ? ` (+${f.extra_turn})` : ""}`;
+    line1.append(el("span", { className: "turn", textContent: turnLabel }),
       phaseTimeline(f.phase, {}));
   }
   // Replay only: the yellow "what this step does" line, BELOW the turn/phase line.
@@ -4152,6 +4153,16 @@ function renderBoard(f, edit = {}) {
     else extras.append(el("span", {}, el("span", { className: "k", textContent: "energy " }), energyPips(f.energy || 0)));
   }
   const header = el("div", {}, line1);
+  // Replay only: a rules-based win/loss banner (opponent at 0 = win; you at 0 or
+  // decked = loss; card effects like Lich set it too).
+  if (!ed && f.game_result) {
+    const won = f.game_result === "won";
+    header.append(el("div", { className: `game-result ${won ? "won" : "lost"}` },
+      el("span", { className: "result-tag", textContent: won ? "🏆 YOU WIN" : "☠ YOU LOSE" }),
+      f.game_result_reason
+        ? el("span", { className: "result-reason", textContent: ` — ${f.game_result_reason}` })
+        : null));
+  }
   if (actionLine) header.append(actionLine);  // the action, on its own line below
   header.append(ints, pools);
   if (extras.childNodes.length) header.append(extras);

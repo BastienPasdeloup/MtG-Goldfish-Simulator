@@ -29,14 +29,17 @@ class Lich(Card):
     def replaces_lifegain_with_draw(self, state, perm):
         return True
 
+    def prevents_life_loss_defeat(self, state, perm):
+        return True  # you don't lose the game for having 0 or less life
+
     def on_owner_damaged(self, state, perm, amount):
         # Sacrifice `amount` nontoken permanents (least valuable first: lands, then
-        # others), preferring not to sacrifice Lich itself.
+        # others), preferring not to sacrifice Lich itself. If you can't, you lose.
         for _ in range(amount):
             victims = [p for p in state.battlefield
                        if not p.is_token and p.uid != perm.uid]
             if not victims:
-                state.emit("Lich: no permanent to sacrifice — you would lose the game")
+                state.set_lost("Lich: couldn't sacrifice a permanent for damage taken")
                 return None
             victims.sort(key=lambda p: (0 if p.is_land else 1, state.effective_power(p)))
             v = victims[0]
@@ -45,4 +48,4 @@ class Lich(Card):
         return None
 
     def on_leave(self, state, permanent):
-        state.emit("Lich: put into graveyard — you would lose the game (not enforced)")
+        state.set_lost("Lich put into the graveyard from the battlefield")
