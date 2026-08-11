@@ -362,10 +362,22 @@ class Card:
         """Called at the beginning of each phase while on the battlefield
         (upkeep triggers, fading, ...)."""
 
+    def graveyard_upkeep(self, state: "GameState", card, gy_index: int) -> None:
+        """Called at the beginning of your upkeep for each card in your graveyard
+        (with its index; higher index = nearer the top / "above"). Lets a card act
+        from the graveyard — Nether Shadow ("if this card is in your graveyard with
+        3+ creature cards above it, you may put it onto the battlefield"). Mutate
+        `state` directly (non-branching). Fired by the simulator's UPKEEP step."""
+
     def on_dealt_damage(self, state: "GameState", perm: "Permanent", amount: int) -> None:
         """Called (immediately, before state-based checks) when THIS creature is
         dealt `amount` damage — Fungusaur ("whenever this creature is dealt
         damage, put a +1/+1 counter on it"). Fired by `GameState.damage_permanent`."""
+
+    def replaces_lifegain_with_draw(self, state: "GameState", perm: "Permanent") -> bool:
+        """True while this permanent replaces YOUR life gains with drawing that
+        many cards instead (Lich). Read by `GameState.gain_life`."""
+        return False
 
     def on_owner_damaged(self, state: "GameState", perm: "Permanent", amount: int) -> None:
         """Called (immediately) on every battlefield permanent when YOU are dealt
@@ -688,6 +700,12 @@ class Card:
         during its controller's untap step — Meekstone ("creatures with power 3 or
         greater don't untap"). Broadcast over the battlefield in the untap step."""
         return False
+
+    def cast_cost_increase(self, state: "GameState", card) -> int:
+        """Extra generic mana it costs to cast `card` while this permanent is in
+        play — Gloom ("White spells cost {3} more to cast"). Summed over the
+        battlefield and applied to the GENERIC cast path (`_effective_cast_cost`)."""
+        return 0
 
     def land_mana_bonus(self, state: "GameState", land: "Permanent") -> int:
         """Extra mana (of the colour being produced) EVERY land adds when tapped

@@ -33,7 +33,7 @@ class CollectiveBrutality(Card):
                         return None
                     resolve_to_graveyard(st, card)
                     st.opponent_life -= 2           # life loss, not damage
-                    st.life += 2
+                    st.gain_life(2)
                     st.note_crime()
                     st.emit(f"Collective Brutality: opponent loses 2, you gain 2 "
                             f"(you {st.life}, opp {st.opponent_life})")

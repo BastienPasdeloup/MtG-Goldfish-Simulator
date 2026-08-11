@@ -21,7 +21,7 @@ def _effect(state):
         st.leave_graveyard(c)
         st.exile.append(c)
         if c.is_creature:
-            st.life += 3
+            st.gain_life(3)
             st.emit(f"Cling to Dust: exile {name} (creature) — gain 3 life")
         else:
             # Draw BEFORE emitting so the replay frame's snapshot shows the drawn

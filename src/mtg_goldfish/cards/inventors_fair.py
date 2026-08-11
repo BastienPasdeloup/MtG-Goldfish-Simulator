@@ -27,7 +27,7 @@ class InventorsFair(Card):
     def on_phase(self, state, perm, phase):
         # "At the beginning of your upkeep, if you control 3+ artifacts, gain 1 life."
         if self._artifact_count(state) >= 3:
-            state.life += 1
+            state.gain_life(1)
             state.emit("Inventors' Fair: gain 1 life (3+ artifacts)")
         return None
 

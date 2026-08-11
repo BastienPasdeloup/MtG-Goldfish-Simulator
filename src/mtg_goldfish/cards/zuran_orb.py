@@ -33,7 +33,7 @@ class ZuranOrb(Card):
             return True
 
         def resolve(st):
-            st.life += 2
+            st.gain_life(2)
             st.emit("Zuran Orb: gain 2 life")
             return None
 

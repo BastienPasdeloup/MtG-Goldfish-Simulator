@@ -25,7 +25,7 @@ class IronStar(Card):
 
         def fn(st, opt):
             if opt == "pay" and pay_cost(st, cost):
-                st.life += 1
+                st.gain_life(1)
                 st.emit("Iron Star: pay {1}, gain 1 life")
             return None
 

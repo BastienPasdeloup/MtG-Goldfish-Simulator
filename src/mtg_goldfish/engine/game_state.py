@@ -420,6 +420,8 @@ class GameState:
     crimes_this_turn: int = 0  # times you committed a crime (targeted an opponent)
     attacked_this_turn: bool = False  # you declared one or more attackers this turn
     left_graveyard_this_turn: bool = False  # a card left your graveyard this turn
+    deaths_this_turn: int = 0  # creatures that died this turn (Scavenging Ghoul, Soul Net)
+    damage_taken_this_turn: int = 0  # damage dealt to YOU this turn (Simulacrum)
     # Moonmist: combat damage by creatures other than Werewolves/Wolves is
     # prevented this turn (checked in deal_combat_damage).
     prevent_nonwolf_combat_damage: bool = False
@@ -455,6 +457,11 @@ class GameState:
     # leaving END_COMBAT with this > 0, the turn loops back to BEGIN_COMBAT
     # (decrementing) instead of advancing to the postcombat main phase.
     extra_combats: int = 0
+    # Extra turns queued (Time Walk, Time Vault). Consumed at the UNTAP step: an
+    # extra turn takes a full untap/draw/main/combat cycle WITHOUT advancing the
+    # turn counter (in a solitaire goldfish that models the tempo — more resources
+    # by the same turn number). NOT reset each turn (persists until consumed).
+    extra_turns: int = 0
     # "This turn, you may play lands and cast spells from your graveyard" and
     # "if a card would be put into your graveyard this turn, exile it instead"
     # (Yawgmoth's Will). Statics on permanents (Emet-Selch // Hades) grant the
@@ -553,6 +560,8 @@ class GameState:
             crimes_this_turn=self.crimes_this_turn,
             attacked_this_turn=self.attacked_this_turn,
             left_graveyard_this_turn=self.left_graveyard_this_turn,
+            deaths_this_turn=self.deaths_this_turn,
+            damage_taken_this_turn=self.damage_taken_this_turn,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
             prevent_all_combat_damage=self.prevent_all_combat_damage,
             prevent_shields=list(self.prevent_shields),
@@ -562,6 +571,7 @@ class GameState:
             cast_sorcery_as_flash=self.cast_sorcery_as_flash,
             untap_lands_end_step=self.untap_lands_end_step,
             extra_combats=self.extra_combats,
+            extra_turns=self.extra_turns,
             gy_play_all=self.gy_play_all,
             gy_exile_replace=self.gy_exile_replace,
             cards_drawn=self.cards_drawn,
@@ -750,6 +760,8 @@ class GameState:
         self.crimes_this_turn = 0
         self.attacked_this_turn = False
         self.left_graveyard_this_turn = False
+        self.deaths_this_turn = 0
+        self.damage_taken_this_turn = 0
         self.prevent_nonwolf_combat_damage = False
         self.prevent_all_combat_damage = False
         self.prevent_shields = []
@@ -944,22 +956,44 @@ class GameState:
         for shield in list(self.prevent_shields):
             if remaining <= 0:
                 break
-            amt, col = shield
+            # Shields are (amount, colour) or (amount, colour, gain_life). A
+            # gain_life shield (Reverse Damage) is ONE-SHOT: it prevents the whole
+            # next damage instance and you gain that much life.
+            amt, col, *rest = shield
+            gain_life = bool(rest[0]) if rest else False
             if col is not None and col not in colset:
                 continue  # a colour-specific shield doesn't match this source
             use = min(remaining, amt)
             remaining -= use
             self.prevent_shields.remove(shield)
-            if amt - use > 0:
-                self.prevent_shields.append((amt - use, col))
-            self.emit(f"prevent {use} damage" + (f" from a {col} source" if col else ""))
+            if gain_life:
+                self.life += use
+                self.emit(f"prevent {use} damage and gain {use} life (Reverse Damage)")
+            else:
+                if amt - use > 0:
+                    self.prevent_shields.append((amt - use, col))
+                self.emit(f"prevent {use} damage" + (f" from a {col} source" if col else ""))
         if remaining > 0:
             self.life -= remaining
+            self.damage_taken_this_turn += remaining
             # "Whenever you're dealt damage ..." (Living Artifact) — fire on every
             # battlefield permanent with the actual amount taken.
             for p in list(self.battlefield):
                 p.impl.on_owner_damaged(self, p, remaining)
         return remaining
+
+    def gain_life(self, amount: int) -> None:
+        """Gain `amount` life — EXCEPT while a Lich is in play, where "if you
+        would gain life, draw that many cards instead". Card code that gains you
+        life (drains, lifelink payoffs modelled as gains, Stream of Life...) can
+        call this to respect Lich; plain `self.life += n` bypasses it."""
+        if amount <= 0:
+            return
+        if any(p.impl.replaces_lifegain_with_draw(self, p) for p in self.battlefield):
+            self.emit(f"Lich: gain {amount} life replaced — draw {amount}")
+            self.draw(amount)
+        else:
+            self.life += amount
 
     def damage_permanent(self, perm: "Permanent", amount: int) -> None:
         """Deal `amount` combat/noncombat damage to a creature, marking it and
@@ -1140,6 +1174,8 @@ class GameState:
             return
         self.battlefield.remove(perm)
         self.permanent_left_battlefield_this_turn = True
+        if perm.is_creature_now and to == "graveyard":  # a creature died this turn
+            self.deaths_this_turn += 1
         is_commander = perm.card.name in self.commander_names
         self.note_event("leave_battlefield", perm.name, to=to, reason=reason,
                         is_land=perm.is_land, is_creature=perm.is_creature_now,

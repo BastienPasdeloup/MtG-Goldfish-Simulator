@@ -378,6 +378,55 @@ def damage_any_target_options(state: "GameState", *, players_only: bool = False)
     return options
 
 
+def global_land_animator(card_name: str, land_subtype: str, color: str,
+                         power: int = 1, toughness: int = 1) -> type[Card]:
+    """A continuous static that makes ALL lands of a given basic type into P/T
+    creatures that are still lands (Kormus Bell: all Swamps are 1/1 black
+    creatures; Living Lands: all Forests are 1/1 creatures). Modelled with the
+    persistent `becomes` mechanism (permanent=True, survives cleanup): the source
+    animates every matching land on ETB and any that enter later; when the LAST
+    such source leaves, the animation is removed. Tag `{card_name}` marks lands it
+    animated so multiple copies don't double-revert."""
+    _cn = card_name
+    tag = f"animated_by:{card_name}"
+
+    def matches(p) -> bool:
+        return p.is_land and land_subtype.lower() in p.type_line.lower()
+
+    def animate(land) -> None:
+        if land.becomes is not None:
+            return
+        land.becomes = {"type_line": _creature_type_line(land.type_line),
+                        "power": power, "toughness": toughness,
+                        "permanent": True, tag: True}
+        if color:
+            land.color_override = list(color)
+
+    @register
+    class _Animator(Card):
+        card_name = _cn
+
+        def on_etb(self, state, permanent):
+            for p in list(state.battlefield):
+                if matches(p):
+                    animate(p)
+
+        def on_other_etb(self, state, perm, entering):
+            if matches(entering):
+                animate(entering)
+
+        def on_leave(self, state, permanent):
+            # Only revert once the LAST animator of this kind has left.
+            if any(o.name == _cn for o in state.battlefield):
+                return
+            for p in state.battlefield:
+                if p.becomes is not None and p.becomes.get(tag):
+                    p.becomes = None
+                    p.color_override = None
+
+    return _Animator
+
+
 def amass(state: "GameState", n: int, subtype: str = "Zombie") -> "Permanent":
     """Amass <subtype> N: put N +1/+1 counters on an Army you control; if you
     control none, create a 0/0 black Army creature token of that subtype first.
@@ -1533,14 +1582,14 @@ def sac_fetch_land(name: str, types: tuple[str, ...]) -> type[Card]:
             )
             if not targets:
                 state.shuffle_library()
-                state.life += 1
+                state.gain_life(1)
                 return None
 
             def fn(st: "GameState", nm: str):
                 card = next(c for c in st.library if c.name == nm)
                 st.take_from_library(card)
                 st.shuffle_library()
-                st.life += 1
+                st.gain_life(1)
                 enter_battlefield(
                     st,
                     card,
@@ -1647,7 +1696,7 @@ class FoodToken(Card):
             return True
 
         def resolve(st):
-            st.life += 3
+            st.gain_life(3)
             st.emit("sacrifice Food — gain 3 life")
             return None
 

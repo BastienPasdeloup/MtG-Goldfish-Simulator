@@ -14,5 +14,5 @@ class KayasGuile(Card):
 
     def on_resolve(self, state):
         state.make_token("Spirit", 1, 1, "Creature — Spirit", text="Flying")
-        state.life += 4
+        state.gain_life(4)
         state.emit(f"Kaya's Guile: create a 1/1 flying Spirit, gain 4 life ({state.life})")

@@ -37,7 +37,7 @@ class DrainLife(Card):
                     dealt = st.damage_opponent(xx)
                     st.note_crime()
                     gain = min(dealt, max(0, before))
-                    st.life += gain
+                    st.gain_life(gain)
                     st.emit(f"Drain Life: {dealt} damage to opponent, gain {gain} life")
                     return None
                 return fn
@@ -60,7 +60,7 @@ class DrainLife(Card):
                         tough = st.effective_toughness(tgt)
                         st.damage_permanent(tgt, xx)
                         gain = min(xx, max(0, tough))
-                        st.life += gain
+                        st.gain_life(gain)
                         st.emit(f"Drain Life: {xx} damage to {nm}, gain {gain} life")
                         st.check_deaths()
                         return None

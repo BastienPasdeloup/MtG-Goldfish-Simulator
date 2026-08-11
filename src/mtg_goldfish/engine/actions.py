@@ -292,6 +292,15 @@ def card_has_improvise(state: GameState, card) -> bool:
 # --------------------------------------------------------------------------
 # Casting helpers (used by generic actions AND by card implementations)
 # --------------------------------------------------------------------------
+def _effective_cast_cost(state: GameState, card, base: ManaCost) -> ManaCost:
+    """`base` cast cost plus any global increase from permanents in play
+    (Gloom: white spells cost {3} more). Applied on the generic cast path."""
+    inc = sum(p.impl.cast_cost_increase(state, card) for p in state.battlefield)
+    if inc:
+        return ManaCost(generic=base.generic + inc, pips=base.pips)
+    return base
+
+
 def begin_cast(
     state: GameState, card, cost: ManaCost, *,
     zone: list | None = None, extra_life: int = 0, tag: str = "", convoke: bool = False,
@@ -481,7 +490,8 @@ class CastDefault(Action):
     def apply(self, state: GameState):
         card = _find_in_zone(state.hand, self.card_name)
         impl = _impl(card)
-        if not begin_cast(state, card, impl.cast_cost(state), improvise=self.improvise):
+        cost = _effective_cast_cost(state, card, impl.cast_cost(state))
+        if not begin_cast(state, card, cost, improvise=self.improvise):
             return None
         if card.is_permanent:
             result = resolve_to_battlefield(state, card)
@@ -567,8 +577,9 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
                 actions.extend(_mark(list(custom), inst))
             elif impl.is_castable(state):
                 improvise = card_has_improvise(state, card)
-                afford = (can_afford_with_improvise(state, impl.cast_cost(state))
-                          if improvise else can_afford(state, impl.cast_cost(state)))
+                eff = _effective_cast_cost(state, card, impl.cast_cost(state))
+                afford = (can_afford_with_improvise(state, eff)
+                          if improvise else can_afford(state, eff))
                 if afford:
                     actions.append(
                         _mark([CastDefault(card.name, improvise=improvise)], inst)[0])

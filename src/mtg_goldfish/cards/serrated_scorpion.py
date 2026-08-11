@@ -12,6 +12,6 @@ class SerratedScorpion(Card):
 
     def on_leave(self, state, permanent):
         state.damage_opponent(2)  # noncombat -> amplifiers apply
-        state.life += 2
+        state.gain_life(2)
         state.emit(f"Serrated Scorpion dies: 2 damage to opponent "
                    f"({state.opponent_life}), gain 2 life ({state.life})")

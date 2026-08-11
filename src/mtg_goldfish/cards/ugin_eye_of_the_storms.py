@@ -34,7 +34,7 @@ class UginEyeOfTheStorms(Card):
         def resolve_plus2(st):
             p = st.find_permanent(perm.uid)
             loyalty = p.counters.get("loyalty", 0) if p is not None else 0
-            st.life += 3
+            st.gain_life(3)
             st.emit(f"Ugin +2 (loyalty {loyalty}): gain 3 life, draw")
             st.draw(1)
             return None

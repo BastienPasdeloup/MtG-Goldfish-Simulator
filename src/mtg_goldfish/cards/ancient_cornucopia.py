@@ -22,5 +22,5 @@ class AncientCornucopia(Card):
         colors = len(card.colors)
         if colors > 0:
             perm.turn_flags["cornucopia"] = 1
-            state.life += colors
+            state.gain_life(colors)
             state.emit(f"Ancient Cornucopia: gain {colors} life ({state.life})")

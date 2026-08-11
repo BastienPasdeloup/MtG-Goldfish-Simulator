@@ -25,7 +25,7 @@ def _etb_apply(st, uid):
     if p is not None:
         gained = max(0, st.effective_power(p))
         st.leaves_battlefield(p, "exile")
-        st.life += gained
+        st.gain_life(gained)
         st.emit(f"Solitude: exile {p.name}, gain {gained} life")
 
 

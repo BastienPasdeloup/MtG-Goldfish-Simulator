@@ -31,7 +31,7 @@ class Farmstead(Card):
 
         def fn(st, opt):
             if opt == "pay" and pay_cost(st, cost):
-                st.life += 1
+                st.gain_life(1)
                 st.emit("Farmstead: pay {W}{W}, gain 1 life")
             return None
 

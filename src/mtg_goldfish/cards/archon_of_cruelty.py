@@ -11,7 +11,7 @@ from .registry import register
 def _trigger(state):
     state.opponent_life -= 3
     state.draw(1)
-    state.life += 3
+    state.gain_life(3)
     state.note_crime()
     state.emit(f"Archon of Cruelty: opponent loses 3, you draw a card and gain 3 "
                f"(you {state.life}, opp {state.opponent_life})")

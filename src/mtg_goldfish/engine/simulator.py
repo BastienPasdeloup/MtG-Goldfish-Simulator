@@ -358,7 +358,13 @@ def _resolve_suspend(state: GameState) -> list[GameState] | None:
 def _apply_step_entry(state: GameState) -> list[GameState] | None:
     suspend_branches: list[GameState] | None = None
     if state.phase == Phase.UNTAP:
-        state.turn += 1
+        # An extra turn (Time Walk / Time Vault) takes a full untap/draw/main/combat
+        # cycle WITHOUT advancing the turn counter — modelling the tempo gain.
+        if state.extra_turns > 0:
+            state.extra_turns -= 1
+            state.emit(f"extra turn (turn stays {state.turn})")
+        else:
+            state.turn += 1
         state.reset_turn_counters()
         # Untap restrictions (Winter Orb: ≤1 land while untapped; Winter Moon:
         # ≤1 nonbasic land). Limits are the min across all such permanents, read
@@ -411,6 +417,10 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             state.pending_upkeep_draws = 0
             state.emit(f"delayed upkeep draw: draw {n} card(s)")
             state.draw(n)
+        # Graveyard-based upkeep abilities (Nether Shadow returns itself).
+        from ..cards import build_card
+        for i, card in enumerate(list(state.graveyard)):
+            build_card(card).graveyard_upkeep(state, card, i)
         suspend_branches = _resolve_suspend(state)
     elif state.phase == Phase.DRAW:
         skip = state.turn == 1 and state.on_the_play

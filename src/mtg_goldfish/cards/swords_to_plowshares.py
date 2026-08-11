@@ -18,7 +18,7 @@ class SwordsToPlowshares(Card):
         def effect(st, perm):
             gained = max(0, st.effective_power(perm))
             st.leaves_battlefield(perm, "exile")
-            st.life += gained
+            st.gain_life(gained)
             st.emit(f"Swords to Plowshares: exile {perm.name}, gain {gained} life")
 
         return targeted_instant_casts(self, state, targets, effect)

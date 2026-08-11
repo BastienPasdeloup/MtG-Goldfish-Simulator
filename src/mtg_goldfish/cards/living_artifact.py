@@ -39,7 +39,7 @@ class LivingArtifact(Card):
             live = st.find_permanent(perm.uid)
             if opt == "gain" and live is not None and live.counters.get("vitality", 0) > 0:
                 live.counters["vitality"] -= 1
-                st.life += 1
+                st.gain_life(1)
                 st.emit("Living Artifact: remove a vitality counter, gain 1 life")
             return None
 

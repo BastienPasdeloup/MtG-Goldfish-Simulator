@@ -16,7 +16,7 @@ class TendrilsOfAgony(Card):
         # every spell cast before it this turn (each a copy).
         n = max(1, state.spells_cast_this_turn)
         state.opponent_life -= 2 * n
-        state.life += 2 * n
+        state.gain_life(2 * n)
         state.note_crime()
         state.emit(f"Tendrils of Agony: storm {n} — opponent loses {2 * n}, you gain "
                    f"{2 * n} (you {state.life}, opp {state.opponent_life})")

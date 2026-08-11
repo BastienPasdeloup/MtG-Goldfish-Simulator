@@ -1,7 +1,9 @@
-"""Ivory Cup — {1} Artifact.
-Whenever a player casts a white spell, you may pay {1}. If you do, you gain 1 life.
+"""Soul Net — {1} Artifact.
+Whenever a creature dies, you may pay {1}. If you do, you gain 1 life.
 
-On each white spell you cast, a branch: pay {1} and gain 1 life, or decline."""
+On each creature death, a branch: pay {1} and gain 1 life, or decline. Fires via
+the death watcher (on_other_leave), which resolves as a normal branchable
+triggered ability."""
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
@@ -11,13 +13,13 @@ from .registry import register
 
 
 @register
-class IvoryCup(Card):
-    card_name = "Ivory Cup"
+class SoulNet(Card):
+    card_name = "Soul Net"
 
-    def on_cast_other(self, state, perm, card):
+    def on_other_leave(self, state, perm, left, to, reason):
         from ..engine.actions import can_afford, pay_cost
 
-        if "W" not in (card.colors or []):
+        if not (left.is_creature_now and to == "graveyard"):
             return None
         cost = ManaCost(generic=1)
         if not can_afford(state, cost):
@@ -26,7 +28,7 @@ class IvoryCup(Card):
         def fn(st, opt):
             if opt == "pay" and pay_cost(st, cost):
                 st.gain_life(1)
-                st.emit("Ivory Cup: pay {1}, gain 1 life")
+                st.emit("Soul Net: pay {1}, gain 1 life")
             return None
 
         return branch_over(state, ["decline", "pay"], fn)

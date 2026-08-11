@@ -29,7 +29,7 @@ class StreamOfLife(Card):
                     if card is None or not begin_cast(st, card, c):
                         return None
                     resolve_to_graveyard(st, card)
-                    st.life += xx
+                    st.gain_life(xx)
                     st.emit(f"Stream of Life: gain {xx} life")
                     return None
                 return fn

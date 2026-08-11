@@ -17,7 +17,7 @@ class ClawsOfGix(Card):
 
     def battlefield_actions(self, state, perm):
         def gain_life(st, src):
-            st.life += 1
+            st.gain_life(1)
             st.emit("Claws of Gix: gain 1 life")
             return None
 

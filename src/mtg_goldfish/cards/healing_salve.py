@@ -25,7 +25,7 @@ class HealingSalve(Card):
                     return None
                 resolve_to_graveyard(st, card)
                 if mode == "life":
-                    st.life += 3
+                    st.gain_life(3)
                     st.emit("Healing Salve: gain 3 life")
                 else:
                     st.prevent_shields.append((3, None))

@@ -39,7 +39,7 @@ class Spelunking(Card):
                 announce=f"Spelunking: put {name} onto the battlefield",
             )
             if "cave" in newp.type_line.lower():
-                st.life += 4
+                st.gain_life(4)
                 st.emit("Spelunking: Cave entered — gain 4 life")
 
         return branch_over(state, names + [None], fn)
