@@ -638,6 +638,22 @@ class Card:
         step.")."""
         return False
 
+    def untap_land_limit(self, state: "GameState", perm: "Permanent") -> int | None:
+        """Max number of LANDS their controller may untap during the untap step,
+        while this permanent is in play (Winter Orb: 1 while untapped). None = no
+        limit from this permanent (the untap step takes the min across all)."""
+        return None
+
+    def untap_nonbasic_limit(self, state: "GameState", perm: "Permanent") -> int | None:
+        """Like untap_land_limit but for NONBASIC lands (Winter Moon: 1)."""
+        return None
+
+    def artifact_mana_grant(self, state: "GameState", perm: "Permanent") -> "ManaAbility | None":
+        """A mana ability GRANTED to each untapped artifact you control while this
+        permanent is in play — "Tap an untapped artifact you control: Add {U}"
+        (Urza, Lord High Artificer). Read by `available_mana_sources`."""
+        return None
+
     def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
         """Additional land plays per turn granted while on the battlefield
         (Exploration, Icetill Explorer)."""

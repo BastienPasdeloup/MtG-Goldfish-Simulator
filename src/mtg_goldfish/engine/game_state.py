@@ -342,6 +342,10 @@ class GameState:
     # Names of artifact cards in your graveyard you MAY CAST this turn (Emry,
     # Lurker of the Loch). You still pay their costs; reset each turn.
     gy_castable: list[str] = field(default_factory=list)
+    # Cards to draw "at the beginning of the next turn's upkeep" (Mishra's/Urza's/
+    # Lodestone Bauble). NOT a per-turn counter: it survives untap and is drawn +
+    # cleared when the upkeep step is entered.
+    pending_upkeep_draws: int = 0
     # id(card) -> name of the permanent it was "exiled with" (Fixed-config setup),
     # so the exile-zone badge names the source regardless of which mechanism the
     # card was routed into (playable / airbend / return-on-leave / copy).
@@ -492,6 +496,7 @@ class GameState:
             exile_play_needs_source=dict(self.exile_play_needs_source),
             airbend_exile=list(self.airbend_exile),
             gy_castable=list(self.gy_castable),
+            pending_upkeep_draws=self.pending_upkeep_draws,
             exile_source=dict(self.exile_source),
             stack_face=dict(self.stack_face),
             stack_targets=dict(self.stack_targets),

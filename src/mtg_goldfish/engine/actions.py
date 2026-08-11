@@ -31,6 +31,12 @@ def available_mana_sources(
     that taps the source must pay its OWN mana cost (the source can't also help
     pay it, e.g. Castle Garenbrig's {2}{G}{G},{T}: add six {G})."""
     exclude_uids = exclude_uids or set()
+    # Mana abilities GRANTED to every untapped artifact you control (Urza, Lord
+    # High Artificer: "Tap an untapped artifact you control: Add {U}.").
+    artifact_grants = [
+        g for p in state.battlefield
+        for g in (p.impl.artifact_mana_grant(state, p),) if g is not None
+    ]
     sources: list[tuple[Permanent, ManaAbility]] = []
     for perm in state.battlefield:
         if perm.tapped or perm.uid in exclude_uids:
@@ -42,7 +48,10 @@ def available_mana_sources(
             att.impl.attached_mana_amount_bonus(state, att, perm)
             for att in state.battlefield if att.attached_to == perm.uid
         )
-        for ability in perm.impl.mana_abilities_perm(state, perm):
+        abilities = list(perm.impl.mana_abilities_perm(state, perm))
+        if artifact_grants and perm.is_artifact:
+            abilities.extend(artifact_grants)  # each untapped artifact can tap for the grant
+        for ability in abilities:
             if ability.life_cost and state.life <= ability.life_cost:
                 continue
             if bonus:
@@ -679,6 +688,9 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
 
 def _grant_matches(grant: dict, card) -> bool:
     """Whether a free-cast grant applies to `card`."""
+    name = grant.get("name")
+    if name is not None:  # a grant tied to one specific card (Urza's {5} impulse)
+        return card.name == name
     if grant.get("creature") and not card.is_creature:
         return False
     colors = grant.get("colors")

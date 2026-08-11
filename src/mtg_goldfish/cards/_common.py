@@ -1244,6 +1244,17 @@ def tutor_to_hand_branches(
     return branch_over(state, [t.name for t in targets], fn)
 
 
+def painter_colors(state: "GameState") -> frozenset:
+    """The colour(s) added to ALL cards by any Painter's Servant in play (its
+    chosen colour, stored on perm.chosen). Used by colour-matters effects such as
+    Grindstone's 'two cards that share a colour'."""
+    out = set()
+    for p in state.battlefield:
+        if p.name == "Painter's Servant" and p.chosen:
+            out.add(p.chosen)
+    return frozenset(out)
+
+
 def any_identity_color(state: "GameState") -> tuple[str, ...]:
     """'Add one mana of any color' — restricted to the commander identity
     (other colours are useless in a Commander goldfish)."""
@@ -1423,6 +1434,21 @@ class ClueToken(Card):
             source_name="Clue",
             ability_text="Draw a card",
         )]
+
+
+@register
+class ConstructToken(Card):
+    """Construct token — 0/0 that "gets +1/+1 for each artifact you control"
+    (Urza, Lord High Artificer; Urza's Saga). Its P/T is the number of artifacts
+    you control (it counts itself)."""
+
+    card_name = "Construct"
+
+    def dynamic_power(self, state, perm):
+        return sum(1 for p in state.battlefield if p.is_artifact)
+
+    def dynamic_toughness(self, state, perm):
+        return sum(1 for p in state.battlefield if p.is_artifact)
 
 
 @register

@@ -360,13 +360,43 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
     if state.phase == Phase.UNTAP:
         state.turn += 1
         state.reset_turn_counters()
+        # Untap restrictions (Winter Orb: ≤1 land while untapped; Winter Moon:
+        # ≤1 nonbasic land). Limits are the min across all such permanents, read
+        # BEFORE anything untaps (so Winter Orb's own tapped state still counts).
+        land_limit = nonbasic_limit = None
+        for p in state.battlefield:
+            ll = p.impl.untap_land_limit(state, p)
+            if ll is not None:
+                land_limit = ll if land_limit is None else min(land_limit, ll)
+            nl = p.impl.untap_nonbasic_limit(state, p)
+            if nl is not None:
+                nonbasic_limit = nl if nonbasic_limit is None else min(nonbasic_limit, nl)
+        lands_up = nonbasic_up = 0
         for perm in state.battlefield:
             perm.summoning_sick = False
             # Basalt Monolith & co. don't untap during the untap step.
-            if not perm.impl.skips_untap(state, perm):
+            if perm.impl.skips_untap(state, perm):
+                continue
+            if perm.is_land and perm.tapped and (land_limit is not None or nonbasic_limit is not None):
+                is_basic = "basic" in perm.type_line.lower()
+                if land_limit is not None and lands_up >= land_limit:
+                    continue
+                if not is_basic and nonbasic_limit is not None and nonbasic_up >= nonbasic_limit:
+                    continue
+                perm.tapped = False
+                lands_up += 1
+                if not is_basic:
+                    nonbasic_up += 1
+            else:
                 perm.tapped = False
         state.mana_pool.clear()
     elif state.phase == Phase.UPKEEP:
+        # "Draw a card at the beginning of the next turn's upkeep" (baubles).
+        if state.pending_upkeep_draws:
+            n = state.pending_upkeep_draws
+            state.pending_upkeep_draws = 0
+            state.emit(f"delayed upkeep draw: draw {n} card(s)")
+            state.draw(n)
         suspend_branches = _resolve_suspend(state)
     elif state.phase == Phase.DRAW:
         skip = state.turn == 1 and state.on_the_play
@@ -1269,6 +1299,32 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     return variant
 
 
+def _apply_start_of_game(state: GameState) -> None:
+    """Start-of-game replacement effects that depend on the opening hand.
+
+    Gemstone Caverns: if you're on the DRAW (not the starting player) and it's in
+    your opening hand, you begin the game with it on the battlefield with a luck
+    counter, exiling a card from your hand. On the play it stays a normal land in
+    hand. The exiled card is the highest-mana-value one (least useful early)."""
+    if state.on_the_play:
+        return
+    gem = next((c for c in state.hand if c.name == "Gemstone Caverns"), None)
+    if gem is None:
+        return
+    state.hand.remove(gem)
+    perm = state.put_on_battlefield(gem, fire_etb=False)
+    perm.counters["luck"] = 1
+    if state.hand:  # "If you do, exile a card from your hand."
+        victim = max(state.hand, key=lambda c: (c.cmc, c.name))
+        state.hand.remove(victim)
+        state.exile.append(victim)
+        state.emit(
+            f"Gemstone Caverns: begin in play with a luck counter (on the draw) — "
+            f"exile {victim.name}")
+    else:
+        state.emit("Gemstone Caverns: begin in play with a luck counter (on the draw)")
+
+
 def _seed_game(
     base_state: GameState,
     properties: list[CompiledProperty],
@@ -1357,6 +1413,9 @@ def _seed_game(
             )
         else:
             variant.emit(f"opening hand ({play_draw}): {[c.name for c in hand]}")
+        # Start-of-game replacements that depend on the opening hand (Gemstone
+        # Caverns beginning in play on the draw).
+        _apply_start_of_game(variant)
         hand_names = [c.name for c in hand]
         hand_node = ctx.new_tree_node(root, f"keep {hand_names}", variant)
         if hand_node is not None:

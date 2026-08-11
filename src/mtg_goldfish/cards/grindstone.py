@@ -8,7 +8,7 @@ while each milled pair shares a colour and the library holds another pair."""
 from __future__ import annotations
 
 from ..engine.mana import ManaCost
-from ._common import artifact_ability_cost
+from ._common import artifact_ability_cost, painter_colors
 from .base import Card, CardAction
 from .registry import register
 
@@ -39,7 +39,10 @@ class Grindstone(Card):
                 st.to_graveyard(a)
                 st.to_graveyard(b)
                 milled += 2
-                shared = bool(set(a.colors or []) & set(b.colors or []))
+                # Painter's Servant makes every card its chosen colour too, so
+                # any two cards then "share a colour" (mills the whole library).
+                pc = painter_colors(st)
+                shared = bool((set(a.colors or []) | pc) & (set(b.colors or []) | pc))
                 st.emit(f"Grindstone: mill {a.name} + {b.name}"
                         + (" — share a colour, repeat" if shared else ""))
                 if not shared:
