@@ -665,6 +665,12 @@ class Card:
         """Like untap_land_limit but for NONBASIC lands (Winter Moon: 1)."""
         return None
 
+    def untap_creature_limit(self, state: "GameState", perm: "Permanent") -> int | None:
+        """Max number of CREATURES their controller may untap during the untap
+        step, while this permanent is in play (Smoke: 1). None = no limit (the
+        untap step takes the min across all such permanents)."""
+        return None
+
     def artifact_mana_grant(self, state: "GameState", perm: "Permanent") -> "ManaAbility | None":
         """A mana ability GRANTED to each untapped artifact you control while this
         permanent is in play — "Tap an untapped artifact you control: Add {U}"
@@ -675,6 +681,26 @@ class Card:
         """Extra {R} each Mountain adds when tapped for mana while this permanent
         is in play (Gauntlet of Might). Read by `available_mana_sources`."""
         return 0
+
+    def prevents_untap(self, state: "GameState", source: "Permanent",
+                       perm: "Permanent") -> bool:
+        """True if the permanent `source` (running THIS impl) holds `perm` tapped
+        during its controller's untap step — Meekstone ("creatures with power 3 or
+        greater don't untap"). Broadcast over the battlefield in the untap step."""
+        return False
+
+    def land_mana_bonus(self, state: "GameState", land: "Permanent") -> int:
+        """Extra mana (of the colour being produced) EVERY land adds when tapped
+        while this permanent is in play (Mana Flare). Read by
+        `available_mana_sources`, so it feeds affordability like real ramp."""
+        return 0
+
+    def on_land_tapped_for_mana(self, state: "GameState", perm: "Permanent",
+                                land: "Permanent", color: str) -> None:
+        """Broadcast to EVERY battlefield permanent (`perm` = the watcher) each
+        time a LAND is tapped for mana — Manabarbs ("1 damage to that player"),
+        Psychic Venom ("2 damage when the enchanted land is tapped"). Fired by
+        `pay_cost`. Keep effects non-branching (they run mid-payment)."""
 
     def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
         """Additional land plays per turn granted while on the battlefield

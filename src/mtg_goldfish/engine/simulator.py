@@ -363,7 +363,7 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
         # Untap restrictions (Winter Orb: ≤1 land while untapped; Winter Moon:
         # ≤1 nonbasic land). Limits are the min across all such permanents, read
         # BEFORE anything untaps (so Winter Orb's own tapped state still counts).
-        land_limit = nonbasic_limit = None
+        land_limit = nonbasic_limit = creature_limit = None
         for p in state.battlefield:
             ll = p.impl.untap_land_limit(state, p)
             if ll is not None:
@@ -371,11 +371,25 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             nl = p.impl.untap_nonbasic_limit(state, p)
             if nl is not None:
                 nonbasic_limit = nl if nonbasic_limit is None else min(nonbasic_limit, nl)
-        lands_up = nonbasic_up = 0
+            cl = p.impl.untap_creature_limit(state, p)
+            if cl is not None:
+                creature_limit = cl if creature_limit is None else min(creature_limit, cl)
+        lands_up = nonbasic_up = creatures_up = 0
         for perm in state.battlefield:
             perm.summoning_sick = False
             # Basalt Monolith & co. don't untap during the untap step.
             if perm.impl.skips_untap(state, perm):
+                continue
+            # A static effect elsewhere can hold a permanent tapped (Meekstone:
+            # creatures with power 3+ don't untap).
+            if any(o.impl.prevents_untap(state, o, perm) for o in state.battlefield):
+                continue
+            # Smoke: untap at most N creatures.
+            if perm.is_creature_now and perm.tapped and creature_limit is not None:
+                if creatures_up >= creature_limit:
+                    continue
+                perm.tapped = False
+                creatures_up += 1
                 continue
             if perm.is_land and perm.tapped and (land_limit is not None or nonbasic_limit is not None):
                 is_basic = "basic" in perm.type_line.lower()

@@ -51,6 +51,9 @@ def available_mana_sources(
         # Gauntlet of Might: each Mountain taps for an extra {R} per Gauntlet.
         if perm.is_land and "mountain" in perm.type_line.lower():
             bonus += sum(o.impl.mountain_mana_bonus(state, o) for o in state.battlefield)
+        # Mana Flare: every land taps for one extra mana of the colour it produces.
+        if perm.is_land:
+            bonus += sum(o.impl.land_mana_bonus(state, perm) for o in state.battlefield)
         if perm.mana_override:
             # "Enchanted land is a Swamp" / "Mountains are Plains": the land taps
             # for one mana of the overridden colour instead of its printed ability.
@@ -145,6 +148,9 @@ def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0,
         if ability.life_cost:
             state.life -= ability.life_cost
         perm.impl.on_tap_for_mana(state, perm, color)  # e.g. pain-land damage
+        if perm.is_land:  # broadcast: Manabarbs / Psychic Venom watch land taps
+            for watcher in list(state.battlefield):
+                watcher.impl.on_land_tapped_for_mana(state, watcher, perm, color)
         taps.append(f"{perm.name}→{color}")
     if taps:
         state.emit(f"tap for mana: {', '.join(taps)}  pool={_pool_str(state.mana_pool)}")
