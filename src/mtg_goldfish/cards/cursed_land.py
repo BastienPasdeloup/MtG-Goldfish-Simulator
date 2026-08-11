@@ -22,6 +22,6 @@ class CursedLand(Card):
                                     pred=lambda p: p.is_land)
 
     def on_phase(self, state, perm, phase):
-        state.life -= 1
         state.emit("Cursed Land: deals 1 damage to you")
+        state.damage_self(1, colors=("B",))
         return None

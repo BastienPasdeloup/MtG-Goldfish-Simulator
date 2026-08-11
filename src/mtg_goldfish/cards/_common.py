@@ -1397,6 +1397,40 @@ def aura_enchant_actions(
             for name, uid in hosts.items()]
 
 
+def circle_of_protection(name: str, color: str) -> type[Card]:
+    """'{1}: The next time a <colour> source of your choice would deal damage to
+    you this turn, prevent that damage.' Adds a colour-matched prevention shield
+    (see GameState.damage_self) big enough to stop one full instance."""
+
+    @register
+    class _CoP(Card):
+        card_name = name
+
+        def battlefield_actions(self, state, perm):
+            from ..engine.actions import can_afford, pay_cost
+
+            cost = ManaCost(generic=1)
+            if not can_afford(state, cost):
+                return []
+
+            def pay(st):
+                return pay_cost(st, cost)
+
+            def resolve(st):
+                st.prevent_shields.append((10 ** 6, color))
+                st.emit(f"{name}: prevent the next damage from a {color} source this turn")
+                return None
+
+            return [CardAction.activated(
+                f"{name}: {{1}} — prevent the next damage from a {color} source",
+                pay, resolve, source_name=name,
+                ability_text="Prevent damage from a source of the chosen colour")]
+
+    _CoP.__name__ = name.replace(" ", "").replace(":", "")
+    _CoP.__doc__ = f"{name} — {{1}}: prevent the next damage from a {color} source this turn."
+    return _CoP
+
+
 def ante_top_card(state: "GameState"):
     """Ante the top card of your library — exile it with an "ante" badge. In a
     goldfish the ante is never won back, so the card simply leaves the game."""

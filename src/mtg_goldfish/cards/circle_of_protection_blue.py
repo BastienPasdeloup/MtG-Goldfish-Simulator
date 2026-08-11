@@ -1,12 +1,7 @@
-"""Circle of Protection: Blue
-{1}{W} Enchantment — {1}: prevent damage from a blue source.
-No opponent deals you damage in a goldfish — no effect."""
-from __future__ import annotations
+"""Circle of Protection: Blue — {1}{W} Enchantment.
+{1}: The next time a Blue source would deal damage to you this turn, prevent that
+damage. (Only prevents damage from a Blue source — e.g. one of your own Blue
+permanents pinging you.)"""
+from ._common import circle_of_protection
 
-from .base import Card
-from .registry import register
-
-
-@register
-class CircleOfProtectionBlue(Card):
-    card_name = "Circle of Protection: Blue"
+circle_of_protection("Circle of Protection: Blue", "U")

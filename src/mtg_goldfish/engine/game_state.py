@@ -403,6 +403,10 @@ class GameState:
     # Moonmist: combat damage by creatures other than Werewolves/Wolves is
     # prevented this turn (checked in deal_combat_damage).
     prevent_nonwolf_combat_damage: bool = False
+    # Damage-prevention shields for damage to YOU (Circle of Protection, Conservator):
+    # each (amount, colour-or-None); colour-specific shields only match that colour.
+    # Reset each turn (prevention lasts 'this turn').
+    prevent_shields: list = field(default_factory=list)
     # One-shot "cast without paying its mana cost this turn" grants (World War
     # Hulk chapter I). Each: {"colors": tuple|None, "creature": bool, "label": str}
     # — a matching hand spell may be cast for free, consuming the grant. Offered
@@ -528,6 +532,7 @@ class GameState:
             attacked_this_turn=self.attacked_this_turn,
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
+            prevent_shields=list(self.prevent_shields),
             free_casts=[dict(g) for g in self.free_casts],
             suspended=[dict(g) for g in self.suspended],
             ante_ids=set(self.ante_ids),
@@ -723,6 +728,7 @@ class GameState:
         self.attacked_this_turn = False
         self.left_graveyard_this_turn = False
         self.prevent_nonwolf_combat_damage = False
+        self.prevent_shields = []
         self.free_casts = []
         self.gy_castable = []
         self.cast_sorcery_as_flash = False
@@ -903,6 +909,30 @@ class GameState:
         self.opponent_life -= dealt
         return dealt
 
+    def damage_self(self, amount: int, colors: tuple = ()) -> int:
+        """Deal `amount` damage to YOU, applying prevention shields (Circle of
+        Protection — colour-matched; Conservator — any). `colors` are the source's
+        colours. Card code that pings you (Ankh, Copper Tablet, Cursed Land, Dingus
+        Egg...) should call this instead of `life -= n` so prevention can apply.
+        Returns the damage actually taken."""
+        colset = set(colors)
+        remaining = amount
+        for shield in list(self.prevent_shields):
+            if remaining <= 0:
+                break
+            amt, col = shield
+            if col is not None and col not in colset:
+                continue  # a colour-specific shield doesn't match this source
+            use = min(remaining, amt)
+            remaining -= use
+            self.prevent_shields.remove(shield)
+            if amt - use > 0:
+                self.prevent_shields.append((amt - use, col))
+            self.emit(f"prevent {use} damage" + (f" from a {col} source" if col else ""))
+        if remaining > 0:
+            self.life -= remaining
+        return remaining
+
     # ---- library search / shuffle -------------------------------------------
     def mark_known_in_library(self, *cards) -> None:
         """Record that the player knows WHERE these library cards sit (put on
@@ -1065,6 +1095,10 @@ class GameState:
         graveyard (to == "graveyard")."""
         if perm not in self.battlefield:
             return
+        # A "destroy" effect is stopped by indestructible / a regeneration shield
+        # (sacrifice, exile, bounce, and 0-toughness are NOT — they pass through).
+        if reason == "destroy" and self._survives_destruction(perm):
+            return
         self.battlefield.remove(perm)
         self.permanent_left_battlefield_this_turn = True
         is_commander = perm.card.name in self.commander_names
@@ -1121,13 +1155,37 @@ class GameState:
             if not known and not has_mods and not perm.damage:
                 continue
             tough = self.effective_toughness(perm)
-            if tough <= 0 or (perm.damage >= tough and tough > 0 and perm.damage > 0):
+            zero_tough = tough <= 0
+            lethal_damage = perm.damage >= tough and tough > 0 and perm.damage > 0
+            if zero_tough or lethal_damage:
+                # Lethal DAMAGE (not 0 toughness) can be prevented by indestructible
+                # or a regeneration shield; 0 toughness kills regardless.
+                if lethal_damage and not zero_tough and self._survives_destruction(perm):
+                    continue
                 # Equipment "equipped creature dies" triggers (e.g. Skullclamp).
                 holders = [eq for eq in self.battlefield if eq.attached_to == perm.uid]
                 self.emit(f"{perm.name} dies")
                 self.leaves_battlefield(perm, "graveyard", reason="dies")
                 for eq in holders:
                     self.queue_equipped_died_triggers(eq)
+
+    def _survives_destruction(self, perm: Permanent) -> bool:
+        """Whether a would-be DESTRUCTION of `perm` is prevented — it is
+        indestructible, or a regeneration shield is consumed (tap it, remove it
+        from combat, heal its damage). Not consulted for sacrifice / 0-toughness /
+        exile, which indestructible and regeneration don't stop."""
+        if self.has_keyword(perm, "Indestructible"):
+            self.emit(f"{perm.name} is indestructible — not destroyed")
+            return True
+        if perm.counters.get("regen_shield", 0) > 0:
+            perm.counters["regen_shield"] -= 1
+            perm.tapped = True
+            perm.damage = 0
+            if perm.uid in self.attackers:
+                self.attackers.remove(perm.uid)
+            self.emit(f"{perm.name} regenerates (shield used)")
+            return True
+        return False
 
     # ---- effective stats (counters, temp mods, equipment, dynamic P/T) ------
     def effective_power(self, perm: Permanent) -> int:

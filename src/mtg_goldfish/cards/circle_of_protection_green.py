@@ -1,11 +1,7 @@
-"""Circle of Protection: Green
-{1}{W} Enchantment — {1}: prevent damage from a green source. No effect (no opponent damage)."""
-from __future__ import annotations
+"""Circle of Protection: Green — {1}{W} Enchantment.
+{1}: The next time a Green source would deal damage to you this turn, prevent that
+damage. (Only prevents damage from a Green source — e.g. one of your own Green
+permanents pinging you.)"""
+from ._common import circle_of_protection
 
-from .base import Card
-from .registry import register
-
-
-@register
-class CircleOfProtectionGreen(Card):
-    card_name = "Circle of Protection: Green"
+circle_of_protection("Circle of Protection: Green", "G")

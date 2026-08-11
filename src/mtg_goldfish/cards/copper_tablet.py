@@ -14,6 +14,6 @@ class CopperTablet(Card):
     trigger_phase = Phase.UPKEEP
 
     def on_phase(self, state, perm, phase):
-        state.life -= 1
         state.emit("Copper Tablet: deals 1 damage to you")
+        state.damage_self(1)
         return None
