@@ -4224,16 +4224,15 @@ function renderBoard(f, edit = {}) {
     });
     cmdBox.append(tax);
   } else if (f.commander_cast && Object.keys(f.commander_cast).length) {
-    // Replay: show the commander tax that has accrued ({2} × times cast) — but
-    // only for a commander that is NOT currently in play (the tax applies to
-    // RE-casting it from the command zone; while it's on the battlefield there is
-    // nothing to recast, so showing its name/tax here is misleading).
+    // Replay: show the commander tax that has accrued ({2} × times cast), the same
+    // way the editor does — just "+{2}×N", WITHOUT the commander's name in front
+    // (the full name stays in the hover title).
     const tax = el("div", { className: "fc-tax" });
     for (const [name, count] of Object.entries(f.commander_cast)) {
-      if (!count || bfNames.has(name)) continue;
+      if (!count) continue;
       tax.append(el("div", { className: "fc-tax-row", title: `${name} — cast ${count}× (tax +{2}×${count})` },
-        el("span", { className: "fc-tax-name", textContent: name.split(",")[0].split(" // ")[0] + " " }),
-        el("span", { textContent: "+" }), manaCostEl("{2}"),
+        el("span", { className: "fc-tax-name", textContent: "+" }),
+        manaCostEl("{2}"),
         el("span", { className: "fc-tax-eq", textContent: "×" + count })));
     }
     cmdBox.append(tax);
