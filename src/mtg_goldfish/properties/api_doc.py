@@ -248,6 +248,17 @@ Life totals:
   state.opponent_life -> int        # the (phantom) opponent's current life; starts
                                     # at 20. It only goes DOWN in a goldfish.
 
+Game result (rules- and effect-based, not just life):
+  state.opponent_lost() -> bool     # the opponent has LOST the game (= you won) by
+                                    # ANY rule/effect: reduced to 0 life, or a
+                                    # "that player loses the game" effect. PREFER
+                                    # this over "opponent_life <= 0" for a
+                                    # "the opponent loses the game" property.
+  state.you_won() -> bool           # same as opponent_lost() (you won).
+  state.you_lost() -> bool          # YOU lost (0 life with nothing preventing it,
+                                    # decked out, a "you lose the game" effect).
+  state.game_over() -> bool         # the game has a decided result (win or loss).
+
 Game-long:
   state.cards_drawn -> int          # total cards drawn this game
   state.turn -> int

@@ -4027,8 +4027,11 @@ function energyPips(n) {
 
 // A permanent tile with any auras/equipment attached to it stacked BEHIND it
 // (peeking out from the top-right), so the enchanted/equipped card is on top.
-function permTile(p, attachedByHost, edit = {}) {
-  const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking, counters: p.counters,
+function permTile(p, attachedByHost, edit = {}, combat = true) {
+  // Only show the red "attacking" outline during a combat phase — a creature is
+  // not attacking in the main phases / upkeep / end step even if it attacked
+  // earlier this turn.
+  const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking && combat && p.is_creature !== false, counters: p.counters,
     granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness, colors: p.colors,
     recolored: p.recolored, face_down: p.face_down, copy: p.is_copy || p.copy,
     editable: edit.editable,
@@ -4079,7 +4082,11 @@ function renderBoard(f, edit = {}) {
     editable: true, onClick: edit.onPermClick, onMenu: edit.onPermMenu,
     drag: (p) => ({ move: true, from: "battlefield", idx: p._idx, name: p.name }),
   } : {};
-  const mkPerm = (p) => permTile(p, attachedByHost, permEdit);
+  // A creature only counts as attacking during a combat phase (matches the
+  // fixed-config editor, which gates its "attacking" state on `combat`).
+  const inCombat = ["begin_combat", "declare_attackers", "declare_blockers",
+    "combat_damage", "end_combat"].includes(f.phase);
+  const mkPerm = (p) => permTile(p, attachedByHost, permEdit, inCombat);
   const zoneMenu = (zone) => (ed && edit.onZoneMenu
     ? (idx, name, e) => edit.onZoneMenu(zone, idx, name, e) : null);
   const handTile = (n, idx) => tile(n, ed ? {
@@ -4193,9 +4200,15 @@ function renderBoard(f, edit = {}) {
 
   // Command zone — commanders are draggable out and the box is a drop target
   // (drag a commander back to return it here). Commander-tax number input each.
+  // In the replay, only show a commander that is ACTUALLY in the command zone:
+  // once it's on the battlefield (or elsewhere) its name must not linger here —
+  // same rule the fixed-config editor uses (only unplaced commanders show).
+  const bfNames = new Set(bf.map((p) => p.name));
+  const cmdZone = ed ? (f.command_zone || [])
+    : (f.command_zone || []).filter((n) => !bfNames.has(n));
   const cmdBox = dz(el("div", { className: "side-box" },
-    el("div", { className: "zlabel", textContent: `Command zone (${(f.command_zone || []).length})` }),
-    pile(f.command_zone, {
+    el("div", { className: "zlabel", textContent: `Command zone (${cmdZone.length})` }),
+    pile(cmdZone, {
       dragZone: ed ? "command" : null,
       onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
     })), "command");

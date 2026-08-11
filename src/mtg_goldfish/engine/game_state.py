@@ -1013,6 +1013,26 @@ class GameState:
             self.game_result_reason = reason
             self.emit(f"YOU LOSE — {reason}")
 
+    def you_won(self) -> bool:
+        """True once YOU have won the game by any rule/effect — equivalently, the
+        opponent has lost. Broader than a life check: covers the opponent reaching
+        0 life AND any future "that player loses the game" effect (set via
+        set_won). Use this for a "the opponent loses the game" property."""
+        return self.game_result == "won"
+
+    # "the opponent loses the game" reads more naturally as opponent_lost().
+    opponent_lost = you_won
+
+    def you_lost(self) -> bool:
+        """True once YOU have lost the game by any rule/effect (reduced to 0 or
+        less life with nothing preventing it, decked out, a "you lose the game"
+        card effect, ...). Set via set_lost."""
+        return self.game_result == "lost"
+
+    def game_over(self) -> bool:
+        """True once the game has a decided result (win or loss)."""
+        return bool(self.game_result)
+
     def check_life_totals(self) -> None:
         """State-based game-result checks on life totals: the opponent at 0 or less
         is a win; you at 0 or less is a loss UNLESS a permanent keeps you alive

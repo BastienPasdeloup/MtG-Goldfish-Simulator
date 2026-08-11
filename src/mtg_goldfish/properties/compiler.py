@@ -79,6 +79,10 @@ the storm value at the moment of casting.
 to the opponent this turn" -> state.opponent_life_lost_this_turn() >= N. For their \
 CURRENT total ("opponent at N or less", "opponent is dead") -> state.opponent_life \
 <= N (0 = dead). state.life is always YOUR life, never the opponent's.
+- Losing/winning the GAME: "the opponent loses the game" / "you win the game" -> \
+state.opponent_lost() (a rules- and effect-based check, broader than life — PREFER \
+it over "opponent_life <= 0" for a game-loss property). "you lose the game" / \
+"you deck out" -> state.you_lost(). "the game is over / decided" -> state.game_over().
 - Commander leaving play / the command zone: "the commander leaves play / dies / \
 is exiled" -> commander_left_play(...); "the commander leaves play AND returns \
 to the command zone" (or just "returns to the command zone") -> \
