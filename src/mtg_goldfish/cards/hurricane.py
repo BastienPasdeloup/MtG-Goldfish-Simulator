@@ -36,7 +36,7 @@ class Hurricane(Card):
                     st.damage_self(xx, colors=("G",))  # you are a player too
                     for p in list(st.battlefield):
                         if p.is_creature_now and st.has_keyword(p, "Flying"):
-                            p.damage += xx
+                            st.damage_permanent(p, xx)
                     st.emit(f"Hurricane: {xx} to each flyer and each player")
                     st.check_deaths()
                     return None

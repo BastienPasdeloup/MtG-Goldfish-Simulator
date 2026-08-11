@@ -36,7 +36,7 @@ class Earthquake(Card):
                     st.damage_self(xx)  # you are a player too
                     for p in list(st.battlefield):
                         if p.is_creature_now and not st.has_keyword(p, "Flying"):
-                            p.damage += xx
+                            st.damage_permanent(p, xx)
                     st.emit(f"Earthquake: {xx} to each non-flyer and each player")
                     st.check_deaths()
                     return None

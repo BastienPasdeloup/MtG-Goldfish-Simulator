@@ -362,6 +362,16 @@ class Card:
         """Called at the beginning of each phase while on the battlefield
         (upkeep triggers, fading, ...)."""
 
+    def on_dealt_damage(self, state: "GameState", perm: "Permanent", amount: int) -> None:
+        """Called (immediately, before state-based checks) when THIS creature is
+        dealt `amount` damage — Fungusaur ("whenever this creature is dealt
+        damage, put a +1/+1 counter on it"). Fired by `GameState.damage_permanent`."""
+
+    def on_owner_damaged(self, state: "GameState", perm: "Permanent", amount: int) -> None:
+        """Called (immediately) on every battlefield permanent when YOU are dealt
+        `amount` damage — Living Artifact ("whenever you're dealt damage, put that
+        many vitality counters on this Aura"). Fired by `GameState.damage_self`."""
+
     def on_attack(self, state: "GameState", perm: "Permanent") -> None:
         """Called when this permanent is declared as an attacker."""
 

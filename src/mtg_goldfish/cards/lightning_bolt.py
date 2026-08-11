@@ -39,7 +39,7 @@ class LightningBolt(Card):
         ]
 
         def creature_effect(st, perm):
-            perm.damage += 3
+            st.damage_permanent(perm, 3)
             st.emit(f"Lightning Bolt: 3 damage to {perm.name}")
 
         targets = [p.uid for p in state.battlefield if p.is_creature_now]

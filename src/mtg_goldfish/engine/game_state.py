@@ -955,7 +955,22 @@ class GameState:
             self.emit(f"prevent {use} damage" + (f" from a {col} source" if col else ""))
         if remaining > 0:
             self.life -= remaining
+            # "Whenever you're dealt damage ..." (Living Artifact) — fire on every
+            # battlefield permanent with the actual amount taken.
+            for p in list(self.battlefield):
+                p.impl.on_owner_damaged(self, p, remaining)
         return remaining
+
+    def damage_permanent(self, perm: "Permanent", amount: int) -> None:
+        """Deal `amount` combat/noncombat damage to a creature, marking it and
+        firing its "whenever this creature is dealt damage" trigger (Fungusaur)
+        BEFORE state-based checks. Card burn should call this instead of
+        `perm.damage += n` so damage-triggered abilities fire; the caller still
+        runs `check_deaths()` afterwards."""
+        if amount <= 0:
+            return
+        perm.damage += amount
+        perm.impl.on_dealt_damage(self, perm, amount)
 
     # ---- library search / shuffle -------------------------------------------
     def mark_known_in_library(self, *cards) -> None:

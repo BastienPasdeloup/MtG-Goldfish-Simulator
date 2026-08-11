@@ -20,7 +20,7 @@ class Earthbind(Card):
         def on_attach(st, aura, host):
             if st.has_keyword(host, "Flying"):
                 host.removed_keywords.add("flying")
-                host.damage += 2
+                st.damage_permanent(host, 2)
                 st.emit(f"Earthbind: {host.name} loses flying and takes 2 damage")
                 st.check_deaths()
 

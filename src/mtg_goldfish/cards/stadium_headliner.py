@@ -48,7 +48,7 @@ class StadiumHeadliner(Card):
                     tgt = st.find_permanent(tuid)
                     if tgt is not None:
                         x = st.creatures_in_play()
-                        tgt.damage += x
+                        st.damage_permanent(tgt, x)
                         st.emit(f"Stadium Headliner: {x} damage to {tgt.name}")
                         st.check_deaths()
                     return None

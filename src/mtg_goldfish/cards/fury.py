@@ -32,7 +32,7 @@ class Fury(Card):
                 return None
             t = st.find_permanent(uid)
             if t is not None:
-                t.damage += 4
+                st.damage_permanent(t, 4)
                 st.emit(f"Fury: 4 damage to {t.name}")
                 st.check_deaths()
             return None

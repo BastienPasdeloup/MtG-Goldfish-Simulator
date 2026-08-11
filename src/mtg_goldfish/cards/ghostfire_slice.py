@@ -32,7 +32,7 @@ class GhostfireSlice(Card):
         actions = [CardAction("cast Ghostfire Slice → opponent", to_opponent)]
 
         def creature_effect(st, perm):
-            perm.damage += 4
+            st.damage_permanent(perm, 4)
             st.emit(f"Ghostfire Slice: 4 damage to {perm.name}")
             st.check_deaths()
 

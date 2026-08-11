@@ -26,7 +26,7 @@ class Pyrokinesis(Card):
         def deal(st, uid):
             perm = st.find_permanent(uid)
             if perm is not None:
-                perm.damage += 4
+                st.damage_permanent(perm, 4)
                 st.emit(f"Pyrokinesis: 4 damage to {perm.name}")
                 st.check_deaths()
 

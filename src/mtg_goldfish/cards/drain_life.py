@@ -58,7 +58,7 @@ class DrainLife(Card):
                             return None
                         resolve_to_graveyard(st, card)
                         tough = st.effective_toughness(tgt)
-                        tgt.damage += xx
+                        st.damage_permanent(tgt, xx)
                         gain = min(xx, max(0, tough))
                         st.life += gain
                         st.emit(f"Drain Life: {xx} damage to {nm}, gain {gain} life")

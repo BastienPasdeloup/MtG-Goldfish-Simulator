@@ -369,7 +369,7 @@ def damage_any_target_options(state: "GameState", *, players_only: bool = False)
             def apply(st: "GameState", amount: int):
                 t = st.find_permanent(uid)
                 if t is not None:
-                    t.damage += amount
+                    st.damage_permanent(t, amount)
                     st.emit(f"{amount} damage to {t.name}")
                     st.check_deaths()
             return apply

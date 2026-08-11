@@ -19,7 +19,7 @@ class GalvanicDischarge(Card):
             st.add_energy(3)
             x = st.energy
             st.pay_energy(x)
-            perm.damage += x
+            st.damage_permanent(perm, x)
             st.emit(f"Galvanic Discharge: {x} damage to {perm.name}")
             st.check_deaths()
 
