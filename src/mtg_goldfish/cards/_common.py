@@ -1397,6 +1397,39 @@ def aura_enchant_actions(
             for name, uid in hosts.items()]
 
 
+def enter_as_copy(self: Card, state: "GameState", perm: "Permanent", pred: Callable):
+    """'You may have this permanent enter as a copy of any <pred> on the
+    battlefield' (Clone, Copy Artifact). Branches over distinct legal copy targets
+    plus declining; the copy is PERMANENT — this permanent's card+impl become the
+    target's copiable values (so the copied ETB then fires). Returns branch states
+    for `enter_choices`, or None when there is nothing to copy."""
+    from ..cards import build_card
+
+    targets: dict[str, int] = {}
+    for p in state.battlefield:
+        if pred(p) and p.uid != perm.uid and p.name not in targets:
+            targets[p.name] = p.uid
+    if not targets:
+        return None  # nothing to copy -> enters as itself
+    options = [("none", None)] + [(nm, uid) for nm, uid in targets.items()]
+
+    def fn(st: "GameState", opt):
+        _nm, uid = opt
+        me = st.find_permanent(perm.uid)
+        if uid is None or me is None:
+            st.emit(f"{self.card_name} enters as itself (copies nothing)")
+            return None
+        tgt = st.find_permanent(uid)
+        if tgt is None:
+            return None
+        me.card = tgt.card.model_copy()
+        me.impl = build_card(me.card)
+        st.emit(f"{self.card_name} enters as a copy of {tgt.name}")
+        return None
+
+    return branch_over(state, options, fn)
+
+
 def circle_of_protection(name: str, color: str) -> type[Card]:
     """'{1}: The next time a <colour> source of your choice would deal damage to
     you this turn, prevent that damage.' Adds a colour-matched prevention shield

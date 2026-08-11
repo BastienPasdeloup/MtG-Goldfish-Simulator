@@ -13,6 +13,21 @@ from __future__ import annotations
 
 import random
 import re
+
+# "+1/+1", "+1/+0", "-0/-1", ... counters that modify power/toughness.
+_PT_COUNTER_RE = re.compile(r"^([+-]\d+)/([+-]\d+)$")
+
+
+def _pt_counters(counters: dict) -> tuple[int, int]:
+    """Total (power, toughness) from every '+a/+b' style counter on a permanent
+    (covers +1/+1 and one-sided ones like +1/+0, -0/-1)."""
+    p = t = 0
+    for kind, n in counters.items():
+        m = _PT_COUNTER_RE.match(kind)
+        if m:
+            p += int(m.group(1)) * n
+            t += int(m.group(2)) * n
+    return p, t
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
@@ -137,6 +152,10 @@ class Permanent:
     # A colour override that lasts only until end of turn (Fixed-config "Set
     # color" with per-entry EOT) — cleared at cleanup along with temp P/T.
     color_override_eot: bool = False
+    # A land whose mana type is overridden — "Enchanted land is a Swamp" (Evil
+    # Presence), "all Mountains are Plains" (Conversion). When set, the land taps
+    # for one mana of this colour INSTEAD of its printed ability.
+    mana_override: str | None = None
     # Face-down (manifest / morph): a 2/2 colourless nameless creature. Its
     # printed name/characteristics are hidden in the viewer; the 2/2 body comes
     # from `becomes`. Turning it face up clears this + becomes + color_override.
@@ -242,6 +261,7 @@ class Permanent:
             becomes=dict(self.becomes) if self.becomes is not None else None,
             color_override=list(self.color_override) if self.color_override is not None else None,
             color_override_eot=self.color_override_eot,
+            mana_override=self.mana_override,
             face_down=self.face_down,
             is_copy=self.is_copy,
             uid=self.uid,
@@ -403,6 +423,8 @@ class GameState:
     # Moonmist: combat damage by creatures other than Werewolves/Wolves is
     # prevented this turn (checked in deal_combat_damage).
     prevent_nonwolf_combat_damage: bool = False
+    # Fog: ALL combat damage is prevented this turn (checked in deal_combat_damage).
+    prevent_all_combat_damage: bool = False
     # Damage-prevention shields for damage to YOU (Circle of Protection, Conservator):
     # each (amount, colour-or-None); colour-specific shields only match that colour.
     # Reset each turn (prevention lasts 'this turn').
@@ -532,6 +554,7 @@ class GameState:
             attacked_this_turn=self.attacked_this_turn,
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
+            prevent_all_combat_damage=self.prevent_all_combat_damage,
             prevent_shields=list(self.prevent_shields),
             free_casts=[dict(g) for g in self.free_casts],
             suspended=[dict(g) for g in self.suspended],
@@ -728,6 +751,7 @@ class GameState:
         self.attacked_this_turn = False
         self.left_graveyard_this_turn = False
         self.prevent_nonwolf_combat_damage = False
+        self.prevent_all_combat_damage = False
         self.prevent_shields = []
         self.free_casts = []
         self.gy_castable = []
@@ -1105,10 +1129,14 @@ class GameState:
         self.note_event("leave_battlefield", perm.name, to=to, reason=reason,
                         is_land=perm.is_land, is_creature=perm.is_creature_now,
                         is_token=perm.is_token, is_commander=is_commander, card=perm.card)
-        # Auras attached to it die; equipment merely unattaches.
+        # Auras attached to it die; equipment merely unattaches. An Aura gets to
+        # REACT to its host leaving first (Creature Bond: deal the host's
+        # toughness to its controller when the host dies), while the host object
+        # still carries its stats.
         for att in list(self.battlefield):
             if att.attached_to == perm.uid:
                 if "aura" in att.type_line.lower():
+                    att.impl.on_enchanted_leaves(self, att, perm, to, reason)
                     self.leaves_battlefield(att, "graveyard")
                 else:
                     att.attached_to = None
@@ -1192,22 +1220,22 @@ class GameState:
         base = (perm.pt_impl or perm.impl).dynamic_power(self, perm)
         if base is None:
             base = perm.base_power()
-        val = base + perm.counters.get("+1/+1", 0) + perm.temp_power
+        val = base + _pt_counters(perm.counters)[0] + perm.temp_power
         for other in self.battlefield:
             if other.attached_to == perm.uid:
                 val += other.impl.equip_mod(self, other)[0]
-            val += other.impl.static_pt_bonus(self, perm)[0]  # anthems (Bad Moon, lords)
+            val += other.impl.static_pt_bonus(self, other, perm)[0]  # anthems (Bad Moon, lords)
         return val
 
     def effective_toughness(self, perm: Permanent) -> int:
         base = (perm.pt_impl or perm.impl).dynamic_toughness(self, perm)
         if base is None:
             base = perm.base_toughness()
-        val = base + perm.counters.get("+1/+1", 0) + perm.temp_toughness
+        val = base + _pt_counters(perm.counters)[1] + perm.temp_toughness
         for other in self.battlefield:
             if other.attached_to == perm.uid:
                 val += other.impl.equip_mod(self, other)[1]
-            val += other.impl.static_pt_bonus(self, perm)[1]  # anthems (Bad Moon, lords)
+            val += other.impl.static_pt_bonus(self, other, perm)[1]  # anthems (Bad Moon, lords)
         return val
 
     def has_keyword(self, perm: Permanent, kw: str) -> bool:

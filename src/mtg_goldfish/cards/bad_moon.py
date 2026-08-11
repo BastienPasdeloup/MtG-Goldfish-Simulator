@@ -13,7 +13,7 @@ from .registry import register
 class BadMoon(Card):
     card_name = "Bad Moon"
 
-    def static_pt_bonus(self, state, perm):
+    def static_pt_bonus(self, state, source, perm):
         if perm.is_creature_now and "B" in perm.colors:
             return (1, 1)
         return (0, 0)

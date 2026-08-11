@@ -13,7 +13,7 @@ from .registry import register
 class Castle(Card):
     card_name = "Castle"
 
-    def static_pt_bonus(self, state, perm):
+    def static_pt_bonus(self, state, source, perm):
         if perm.is_creature_now and not perm.tapped:
             return (0, 2)
         return (0, 0)

@@ -48,7 +48,15 @@ def available_mana_sources(
             att.impl.attached_mana_amount_bonus(state, att, perm)
             for att in state.battlefield if att.attached_to == perm.uid
         )
-        abilities = list(perm.impl.mana_abilities_perm(state, perm))
+        # Gauntlet of Might: each Mountain taps for an extra {R} per Gauntlet.
+        if perm.is_land and "mountain" in perm.type_line.lower():
+            bonus += sum(o.impl.mountain_mana_bonus(state, o) for o in state.battlefield)
+        if perm.mana_override:
+            # "Enchanted land is a Swamp" / "Mountains are Plains": the land taps
+            # for one mana of the overridden colour instead of its printed ability.
+            abilities = [ManaAbility(amount=1, choices=(perm.mana_override,))]
+        else:
+            abilities = list(perm.impl.mana_abilities_perm(state, perm))
         if artifact_grants and perm.is_artifact:
             abilities.extend(artifact_grants)  # each untapped artifact can tap for the grant
         for ability in abilities:
@@ -1009,6 +1017,8 @@ def deal_combat_damage(state: GameState) -> None:
     for uid in list(state.attackers):
         perm = state.find_permanent(uid)
         if perm is None:
+            continue
+        if state.prevent_all_combat_damage:  # Fog
             continue
         # Moonmist: this turn only Werewolves and Wolves deal combat damage
         # ("Werewolf" contains "wolf", so one subtype check covers both).

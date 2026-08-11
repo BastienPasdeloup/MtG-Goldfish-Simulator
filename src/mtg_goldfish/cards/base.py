@@ -328,6 +328,13 @@ class Card:
     def on_leave(self, state: "GameState", permanent: "Permanent") -> None:
         """Called when this permanent leaves the battlefield."""
 
+    def on_enchanted_leaves(self, state: "GameState", perm: "Permanent",
+                            host: "Permanent", to: str, reason: str | None) -> None:
+        """Called on an AURA the moment the permanent it enchants leaves the
+        battlefield — BEFORE the Aura itself dies, while `host` still carries its
+        stats. `to`/`reason` describe how the host left (Creature Bond: on death,
+        deal the host's toughness to its controller)."""
+
     def link_exiled_card(self, state: "GameState", perm: "Permanent", card) -> None:
         """Associate an already-exiled `card` with THIS permanent's exile
         mechanism (used by the Fixed-config editor's "exiled with X"). Override to
@@ -654,6 +661,11 @@ class Card:
         (Urza, Lord High Artificer). Read by `available_mana_sources`."""
         return None
 
+    def mountain_mana_bonus(self, state: "GameState", perm: "Permanent") -> int:
+        """Extra {R} each Mountain adds when tapped for mana while this permanent
+        is in play (Gauntlet of Might). Read by `available_mana_sources`."""
+        return 0
+
     def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
         """Additional land plays per turn granted while on the battlefield
         (Exploration, Icetill Explorer)."""
@@ -698,11 +710,13 @@ class Card:
         """(power, toughness) bonus granted to the equipped creature."""
         return (0, 0)
 
-    def static_pt_bonus(self, state: "GameState", perm: "Permanent") -> tuple[int, int]:
-        """A CONTINUOUS (power, toughness) bonus THIS permanent grants to another
-        creature `perm` on the battlefield — a global static "anthem" (Bad Moon:
-        +1/+1 to every black creature; a lord: +1/+1 to creatures of a type).
-        Summed over every battlefield permanent in `effective_power/toughness`."""
+    def static_pt_bonus(self, state: "GameState", source: "Permanent",
+                        perm: "Permanent") -> tuple[int, int]:
+        """A CONTINUOUS (power, toughness) bonus the permanent `source` (running
+        THIS impl) grants to creature `perm` — a global static "anthem" (Bad Moon:
+        +1/+1 to every black creature) or a lord ("OTHER Goblins get +1/+1": check
+        `perm.uid != source.uid`). Summed over every battlefield permanent in
+        `effective_power/toughness`."""
         return (0, 0)
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
