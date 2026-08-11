@@ -1363,7 +1363,17 @@ class GameState:
                 if xl == k or xl.startswith(k + " "):
                     return True
             return False
-        return (_has(perm.card.keywords) or _has(perm.temp_keywords)
+        # PRINTED keywords: Scryfall lists them at the CARD level = the union of a
+        # DFC's faces. A permanent only has the ACTIVE face's keywords, so on a
+        # multi-faced card keep only the printed keywords that appear in the active
+        # face's text (else front-face Gwen Stacy inherits Ghost-Spider's flying /
+        # vigilance / haste and can attack while summoning-sick). Granted keywords
+        # (temp/extra) are unaffected — they apply whatever the face.
+        printed = perm.card.keywords
+        if len(perm.card.faces) > 1:
+            text = ((perm.face.oracle_text or "") + " " + (perm.face.type_line or "")).lower()
+            printed = [x for x in printed if x.lower() in text]
+        return (_has(printed) or _has(perm.temp_keywords)
                 or _has(perm.extra_keywords))
 
     # ---- energy (a pool: gained/spent, never emptied by phases) -------------
