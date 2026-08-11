@@ -698,6 +698,13 @@ class Card:
         """(power, toughness) bonus granted to the equipped creature."""
         return (0, 0)
 
+    def static_pt_bonus(self, state: "GameState", perm: "Permanent") -> tuple[int, int]:
+        """A CONTINUOUS (power, toughness) bonus THIS permanent grants to another
+        creature `perm` on the battlefield — a global static "anthem" (Bad Moon:
+        +1/+1 to every black creature; a lord: +1/+1 to creatures of a type).
+        Summed over every battlefield permanent in `effective_power/toughness`."""
+        return (0, 0)
+
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<{type(self).__name__} {self.name!r}>"
 

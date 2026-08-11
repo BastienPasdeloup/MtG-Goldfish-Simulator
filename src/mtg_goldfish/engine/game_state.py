@@ -1130,9 +1130,10 @@ class GameState:
         if base is None:
             base = perm.base_power()
         val = base + perm.counters.get("+1/+1", 0) + perm.temp_power
-        for eq in self.battlefield:
-            if eq.attached_to == perm.uid:
-                val += eq.impl.equip_mod(self, eq)[0]
+        for other in self.battlefield:
+            if other.attached_to == perm.uid:
+                val += other.impl.equip_mod(self, other)[0]
+            val += other.impl.static_pt_bonus(self, perm)[0]  # anthems (Bad Moon, lords)
         return val
 
     def effective_toughness(self, perm: Permanent) -> int:
@@ -1140,9 +1141,10 @@ class GameState:
         if base is None:
             base = perm.base_toughness()
         val = base + perm.counters.get("+1/+1", 0) + perm.temp_toughness
-        for eq in self.battlefield:
-            if eq.attached_to == perm.uid:
-                val += eq.impl.equip_mod(self, eq)[1]
+        for other in self.battlefield:
+            if other.attached_to == perm.uid:
+                val += other.impl.equip_mod(self, other)[1]
+            val += other.impl.static_pt_bonus(self, perm)[1]  # anthems (Bad Moon, lords)
         return val
 
     def has_keyword(self, perm: Permanent, kw: str) -> bool:
