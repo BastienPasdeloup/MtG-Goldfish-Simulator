@@ -988,6 +988,12 @@ class GameState:
                 if amt - use > 0:
                     self.prevent_shields.append((amt - use, col))
                 self.emit(f"prevent {use} damage" + (f" from a {col} source" if col else ""))
+        # Ali from Cairo: damage can't reduce your life below 1.
+        if remaining > 0 and any(p.impl.caps_life_at_one(self, p) for p in self.battlefield):
+            capped = max(0, self.life - 1)
+            if remaining > capped:
+                self.emit(f"Ali from Cairo: prevent {remaining - capped} (life can't go below 1)")
+                remaining = capped
         if remaining > 0:
             self.life -= remaining
             self.damage_taken_this_turn += remaining
@@ -1316,6 +1322,12 @@ class GameState:
         exile, which indestructible and regeneration don't stop."""
         if self.has_keyword(perm, "Indestructible"):
             self.emit(f"{perm.name} is indestructible — not destroyed")
+            return True
+        # Guardian Beast: your noncreature artifacts have indestructible while it's
+        # untapped.
+        if perm.is_artifact and not perm.is_creature_now and any(
+                o.impl.protects_artifacts(self, o) for o in self.battlefield):
+            self.emit(f"{perm.name} — protected (Guardian Beast); not destroyed")
             return True
         if perm.counters.get("regen_shield", 0) > 0:
             perm.counters["regen_shield"] -= 1

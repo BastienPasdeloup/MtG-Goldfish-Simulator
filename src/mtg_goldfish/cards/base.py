@@ -374,6 +374,17 @@ class Card:
         dealt `amount` damage — Fungusaur ("whenever this creature is dealt
         damage, put a +1/+1 counter on it"). Fired by `GameState.damage_permanent`."""
 
+    def protects_artifacts(self, state: "GameState", perm: "Permanent") -> bool:
+        """True while this permanent gives your noncreature artifacts
+        indestructible (Guardian Beast, while untapped). Read by
+        `GameState._survives_destruction`."""
+        return False
+
+    def caps_life_at_one(self, state: "GameState", perm: "Permanent") -> bool:
+        """True while this permanent stops damage reducing your life below 1 (Ali
+        from Cairo). Read by `GameState.damage_self`."""
+        return False
+
     def prevents_life_loss_defeat(self, state: "GameState", perm: "Permanent") -> bool:
         """True while this permanent stops you losing the game for having 0 or less
         life (Lich: "You don't lose the game for having 0 or less life"). Read by
