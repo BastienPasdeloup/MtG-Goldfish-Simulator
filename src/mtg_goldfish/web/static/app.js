@@ -1204,6 +1204,15 @@ function fcFace(name, transformed) {
   };
 }
 
+// Whether a (front/back) FACE is a permanent type that can normally exist in
+// play — used to warn when placing / flipping to a nonpermanent face (an
+// instant/sorcery face, e.g. an MDFC spell side or a "prepare" card's back).
+function fcFaceIsPermanent(face) {
+  const head = (face.type_line || "").split("—")[0].toLowerCase();
+  return ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"]
+    .some((k) => head.includes(k));
+}
+
 // Whether a card of `name` may be placed in `zone`. The battlefield accepts ANY
 // card — a nonpermanent is allowed for scenario testing (with a warning on
 // placement), just like an aura with no host.
@@ -1213,16 +1222,6 @@ function fcCanPlace(name, zone) {
   return ["hand", "graveyard", "exile", "library"].includes(zone);
 }
 
-// Whether `name` (a deck card) is a permanent that can normally exist in play.
-function fcIsPermanentType(name) {
-  const ok = (h) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"].some((k) => h.includes(k));
-  return ok(fcTypeHead(name))
-    || (fcIsDfc(name) && ok((fcFaces(name)[1].type_line || "").split("—")[0].toLowerCase()));
-}
-
-// Which face indices (0/1) of `name` are permanents that can be on the
-// battlefield. A single-faced permanent is [0]; a DFC returns the permanent
-// faces (an instant/sorcery face is excluded — e.g. Waterlogged Teachings).
 // Put a battlefield entry for `name` (on `transformed` face), initialised with
 // the counters that face enters play with (planeswalker loyalty, a Saga's lore,
 // Peter Parker's Camera's film, a flipped Tamiyo's loyalty, ...).
@@ -1246,8 +1245,12 @@ function fcPushPermanent(name, transformed = false) {
 // pick a host to enchant.
 function fcAfterPlace(idx, name, x, y) {
   renderConfigBuilder();
-  if (!fcIsPermanentType(name)) {
-    alert(`${name} is not a permanent — placed on the battlefield anyway (unusual, for scenario testing).`);
+  // Warn based on the ACTIVE face actually placed (a DFC may be placed on its
+  // nonpermanent face — an instant/sorcery — for scenario testing).
+  const it = fcPerm(idx);
+  const face = fcFace(name, it && it.transformed);
+  if (!fcFaceIsPermanent(face)) {
+    alert(`${face.name} is not a permanent — placed on the battlefield anyway (unusual, for scenario testing).`);
   }
   if (fcIsAura(name)) {
     const hosts = fcValidHosts(idx, "aura");
@@ -1269,37 +1272,21 @@ function fcBattlefieldCenter() {
   return { x: r.left + r.width / 2 - 95, y: r.top + r.height / 2 - 20 };
 }
 
-// front/back; if only one face is a valid permanent it is used silently
-// (Waterlogged Teachings → its land back). `x`/`y` position any chooser.
-// The DFC face indices that could exist as a battlefield PERMANENT. A "prepare"
-// or adventure card whose back is an Instant/Sorcery has only the front — so no
-// front/back choice is offered for it (only the permanent face is placed).
-function fcBattlefieldFaces(name) {
-  const isPerm = (tl) => ["creature", "land", "artifact", "enchantment", "planeswalker", "battle"]
-    .some((k) => (tl || "").split("—")[0].toLowerCase().includes(k));
-  if (!fcIsDfc(name)) return isPerm(fcCardMeta(name).type_line) ? [0] : [];
-  const faces = fcFaces(name);
-  return [0, 1].filter((i) => isPerm(faces[i].type_line));
-}
-
 function fcPlaceOnBattlefield(name, x, y) {
-  const valid = fcBattlefieldFaces(name);
-  // Only prompt front/back when BOTH faces can be a permanent — and then FRONT is
-  // always listed first (L8, sort:false). When only one face is a real permanent
-  // (e.g. Emeritus of Ideation // Ancestral Recall), place that face with no
-  // pointless choice.
-  if (fcIsDfc(name) && valid.length >= 2) {
+  // A double-faced card always lets you choose which face enters — EITHER face,
+  // even a nonpermanent one (an instant/sorcery side): you can put it on the
+  // battlefield for scenario testing, and fcAfterPlace warns if the chosen face
+  // isn't a permanent. Front is always listed first (sort:false).
+  if (fcIsDfc(name)) {
     const faces = fcFaces(name);
     const ctr = fcBattlefieldCenter();  // choice menu in the middle of the field
     showContextMenu(ctr.x, ctr.y, [
       { label: `Front — ${faces[0].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, false), name, x, y) },
       { label: `Back — ${faces[1].name}`, onClick: () => fcAfterPlace(fcPushPermanent(name, true), name, x, y) },
-    ], { sort: false });  // keep Front first (L8)
+    ], { sort: false });  // keep Front first
     return;
   }
-  // A DFC with only the BACK as a permanent enters transformed; otherwise front.
-  const transformed = fcIsDfc(name) && valid.length === 1 && valid[0] === 1;
-  fcAfterPlace(fcPushPermanent(name, transformed), name, x, y);
+  fcAfterPlace(fcPushPermanent(name, false), name, x, y);
 }
 
 // ---- tokens (created on the battlefield, not deck cards) ----
@@ -2289,13 +2276,19 @@ function fcPermMenu(p, e) {
     : fcFace(it.name, it.transformed);
   const items = [{ label: it.tapped ? "Untap" : "Tap", onClick: () => fcTogglePermTap(p) }];
 
-  // Flip — only TRUE transforming double-faced cards (both faces are permanents)
-  // switch faces. A card whose back is a nonpermanent spell (e.g. a "prepare"
-  // card like Emeritus of Ideation // Ancestral Recall) never flips in play — the
-  // back is merely a spell it can cast, not a face it can become.
-  if (!it.token && fcIsDfc(it.name) && fcBattlefieldFaces(it.name).length >= 2) {
+  // Flip — any double-faced card can switch to its other face, EVEN a
+  // nonpermanent one (an instant/sorcery side), for scenario testing; flipping
+  // to a nonpermanent face issues the usual warning.
+  if (!it.token && fcIsDfc(it.name)) {
     const other = fcFaces(it.name)[it.transformed ? 0 : 1];
-    items.push({ label: `Flip to ${other.name}`, onClick: () => { it.transformed = !it.transformed; renderConfigBuilder(); } });
+    const otherIsPerm = fcFaceIsPermanent(other);
+    items.push({ label: `Flip to ${other.name}`, onClick: () => {
+      it.transformed = !it.transformed;
+      renderConfigBuilder();
+      if (!otherIsPerm) {
+        alert(`${other.name} is not a permanent — flipped to it anyway (unusual, for scenario testing).`);
+      }
+    } });
   }
 
   // Summoning sickness — creatures (incl. creature tokens).

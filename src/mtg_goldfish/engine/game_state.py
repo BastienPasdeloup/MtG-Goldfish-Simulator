@@ -1521,6 +1521,40 @@ class GameState:
     def permanents_in_play(self) -> int:
         return len(self.battlefield)
 
+    def available_mana(self, colors: str | None = None) -> int:
+        """Mana you could produce RIGHT NOW: the floating pool plus the best mana
+        ability of each untapped source (at most one per permanent — a rock that
+        taps for {C}{C}{C} counts 3; a dual counts 1). This is the meaningful
+        notion of "mana you have" for a property, because the search taps sources
+        lazily (only when paying a cost), so the literal `mana_pool` is almost
+        always empty between plays. Ignores life-cost restrictions.
+
+        `colors` restricts to specific colours (letters from WUBRGC, e.g. "U" or
+        "WU"): only sources that can make one of those colours count, and only
+        that part of the floating pool — so `available_mana("U")` is the most blue
+        mana you could make. None counts all mana of any colour."""
+        from .actions import available_mana_sources
+
+        wanted = None if colors is None else {c.upper() for c in colors if c.strip()}
+        best: dict[int, int] = {}
+        for perm, ability in available_mana_sources(self):
+            if wanted is not None and not (wanted & {c.upper() for c in ability.choices}):
+                continue
+            best[perm.uid] = max(best.get(perm.uid, 0), ability.amount)
+        pool = (self.mana_pool.total() if wanted is None
+                else sum(self.mana_pool.amounts.get(c, 0) for c in wanted))
+        return pool + sum(best.values())
+
+    def can_produce(self, cost: str) -> bool:
+        """Whether you could pay a specific mana cost RIGHT NOW (colour pips AND
+        generic together), via the payment planner — the rigorous way to ask
+        "can you make {U}{U}{W}" where each pip needs a distinct able source.
+        `cost` is a Scryfall-style string, e.g. "{2}{U}{U}" or "{W}{U}{B}{R}{G}"."""
+        from .actions import can_afford
+        from .mana import ManaCost
+
+        return can_afford(self, ManaCost.parse(cost))
+
     def cards_in_hand(self) -> int:
         return len(self.hand)
 

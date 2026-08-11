@@ -225,6 +225,24 @@ Per-turn tallies (reset each turn):
   state.opponent_life_lost_this_turn() -> int   # life the opponent lost THIS turn
                                                 # (combat + burn + drain, net loss)
 
+Mana:
+  state.available_mana(colors=None) -> int   # mana you could produce RIGHT NOW:
+      # the floating pool PLUS the best mana ability of each untapped source (a
+      # rock that makes {C}{C}{C} counts 3; a dual counts 1). ALWAYS use this for
+      # "N mana in pool / N mana available / you have N mana / can make N mana".
+      # Do NOT use `state.mana_pool`: the search taps mana lazily (only when
+      # paying a cost), so the literal pool is almost always empty between plays.
+      # `colors` (letters from WUBRGC, e.g. "U" or "WU") restricts to those
+      # colours — only sources that can make one of them count. Omit for all mana.
+      #   "at least 10 mana in pool"         -> state.available_mana() >= 10
+      #   "at least 3 blue mana available"   -> state.available_mana("U") >= 3
+      #   "you can make 2 white or black"    -> state.available_mana("WB") >= 2
+  state.can_produce(cost: str) -> bool       # can you pay this exact cost NOW —
+      # colour pips AND generic together, each pip needing a distinct able source
+      # (the rigorous multi-colour check). `cost` is Scryfall-style, e.g.:
+      #   "you can pay {2}{U}{U}"            -> state.can_produce("{2}{U}{U}")
+      #   "you could cast a {W}{U}{B} spell" -> state.can_produce("{W}{U}{B}")
+
 Life totals:
   state.life -> int                 # YOUR life
   state.opponent_life -> int        # the (phantom) opponent's current life; starts
