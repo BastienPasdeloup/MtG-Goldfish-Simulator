@@ -73,6 +73,12 @@ class ImportRequest(BaseModel):
     format_id: str | None = None
 
 
+class MoveCardRequest(BaseModel):
+    name: str
+    from_board: str
+    to_board: str
+
+
 class PropertiesUpdate(BaseModel):
     properties: list[PropertySpec]
     mulligans: int = 0
@@ -151,22 +157,12 @@ def _fresh_card(card):
     """The card RE-RESOLVED from the Scryfall cache (which now holds the earliest
     printing's art) if present, else the deck's stored copy. This corrects images
     on decks imported BEFORE the oldest-print change WITHOUT rewriting the (often
-    huge) session files.
-
-    Cards cached before the Alpha→Beta scan change (`set` is empty, or `set` is
-    "lea" = an Alpha scan) are re-fetched ONCE from Scryfall so their art becomes
-    the Beta scan and `set` is populated (self-healing on next view; every load
-    after is cache-only). Best-effort — a network failure falls back to the
-    cached copy."""
+    huge) session files — CACHE-ONLY, no network (so session open/create stays
+    fast). New card fetches already prefer the Beta scan over Alpha; existing
+    cached Alpha scans heal when their cache entry is next re-fetched
+    (`ScryfallClient.refresh_alpha_scans`, or clearing the cache)."""
     from ..deck.scryfall import ScryfallClient
-    sc = ScryfallClient()
-    cached = sc._read_cache(card.name)
-    if cached is not None and getattr(cached, "set", "") in ("", "lea"):
-        try:
-            cached = sc.get_named(card.name, refresh=True)
-        except Exception:  # noqa: BLE001 - best effort; keep the cached copy
-            pass
-    return cached or card
+    return ScryfallClient()._read_cache(card.name) or card
 
 
 def card_view(deck: Deck) -> list[dict]:
@@ -576,6 +572,30 @@ def get_session(session_id: str) -> dict:
                 changed = True
         if changed:
             store.save(session)
+    return session_payload(session)
+
+
+@app.post("/api/sessions/{session_id}/move-card")
+def move_card(session_id: str, req: MoveCardRequest) -> dict:
+    """Move a card between the mainboard and the sideboard (dragged in the UI).
+    Sideboard cards are 'outside the game' — kept out of the library and only
+    reachable by wish effects (Ring of Ma'rûf)."""
+    from ..deck.models import DeckBoard
+
+    session = _load(session_id)
+    try:
+        from_b, to_b = DeckBoard(req.from_board), DeckBoard(req.to_board)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Bad board: {exc}") from exc
+    moved = 0
+    for entry in session.deck.entries:
+        if entry.card.name == req.name and entry.board == from_b:
+            entry.board = to_b
+            moved += 1
+    if not moved:
+        raise HTTPException(status_code=404,
+                            detail=f"{req.name!r} not found on {req.from_board}.")
+    store.save(session)
     return session_payload(session)
 
 

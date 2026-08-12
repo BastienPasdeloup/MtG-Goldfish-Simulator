@@ -424,12 +424,24 @@ function homeStatus(msg, isErr) {
 
 async function doCreate() {
   // The format is inferred server-side from the deck source.
+  const btn = $("create-btn");
+  if (btn.disabled) return;  // already creating — ignore double-clicks
   const body = JSON.stringify({ url: $("deck-url").value, name: $("deck-name").value });
+  btn.disabled = true;
   homeStatus("Creating session…");
+  // The FIRST import of a deck fetches every card from Scryfall (throttled), so
+  // it can take a while; reassure the user if it hasn't finished quickly.
+  const slow = setTimeout(() => homeStatus(
+    "Creating session… this can take a minute the first time (fetching each card from Scryfall)."), 2500);
   try {
     const payload = await api("/api/sessions", { method: "POST", body });
     enterSession(payload);
-  } catch (e) { homeStatus(e.message, true); }
+  } catch (e) {
+    homeStatus(e.message, true);
+  } finally {
+    clearTimeout(slow);
+    btn.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------- session
@@ -441,6 +453,9 @@ async function openSession(id) {
 function enterSession(payload) {
   state.session = payload.session;
   state.cards = payload.cards;
+  // Remember each card's board at load, so a card dragged between the maindeck
+  // and the sideboard shows an "MD"/"SB" badge (where it came from).
+  state.cards.forEach((c) => { c._origBoard = c.board; });
   state.deckFlags = payload.deck_flags || {};
   state.deckTokens = payload.tokens || [];
   // Always open with a single uninitialized property (a previous run's
@@ -744,21 +759,27 @@ function groupLabel(c) {
   return primaryType(tl); // mainboard grouped by type
 }
 
-function renderDeck() {
-  const sort = $("sort-select").value;
-  const cmp = {
+function deckSortCmp() {
+  return {
     name: (a, b) => a.name.localeCompare(b.name),
     cmc: (a, b) => a.cmc - b.cmc || a.name.localeCompare(b.name),
     color: (a, b) => colorRank(a) - colorRank(b) || colorKey(a).localeCompare(colorKey(b)) || a.cmc - b.cmc || a.name.localeCompare(b.name),
-  }[sort];
+  }[$("sort-select").value];
+}
+
+function renderDeck() {
+  const cmp = deckSortCmp();
+  // The sideboard renders in its own box below; the decklist holds the rest.
+  const main = state.cards.filter((c) => c.board !== "sideboard");
+  const side = state.cards.filter((c) => c.board === "sideboard");
 
   const groups = {};
-  for (const c of state.cards) (groups[groupLabel(c)] ||= []).push(c);
+  for (const c of main) (groups[groupLabel(c)] ||= []).push(c);
 
   const container = $("deck-cards");
   container.replaceChildren();
-  const total = state.cards.reduce((n, c) => n + c.quantity, 0);
-  const approx = state.cards.filter((c) => !c.implemented).length;
+  const total = main.reduce((n, c) => n + c.quantity, 0);
+  const approx = main.filter((c) => !c.implemented).length;
   $("deck-summary").textContent = `${total} cards` +
     (approx ? ` · ${approx} not yet implemented (in red)` : "");
 
@@ -771,7 +792,61 @@ function renderDeck() {
     container.append(el("div", { className: "card-group-title", textContent: `${label} (${n})` }));
     groups[label].sort(cmp).forEach((c) => container.append(cardRow(c)));
   });
+
+  renderSideboard(side, cmp);
+  setupDeckDrop();
   updateDeckDimming();  // reflect the current tab's placement state (L7)
+}
+
+// The sideboard box below the decklist: ONE flat list (no type categories),
+// sorted the same way as the decklist. Hidden when the deck has no sideboard.
+function renderSideboard(side, cmp) {
+  const box = $("sideboard-box");
+  const cont = $("sideboard-cards");
+  cont.replaceChildren();
+  if (!side.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const n = side.reduce((s, c) => s + c.quantity, 0);
+  $("sideboard-summary").textContent = `${n} cards`;
+  side.slice().sort(cmp).forEach((c) => cont.append(cardRow(c)));
+}
+
+// Where a card being dragged now lives (set on dragstart). Lets the maindeck /
+// sideboard boxes act as drop targets that MOVE the card between boards.
+let dragCardRef = null;
+
+// Persist + re-render a card moved between the maindeck and the sideboard.
+function moveCardTo(card, toBoard) {
+  if (!card || !state.session || card.board === toBoard) return;
+  const from = card.board;
+  card.board = toBoard;
+  renderDeck();
+  api(`/api/sessions/${state.session.id}/move-card`, {
+    method: "POST",
+    body: JSON.stringify({ name: card.name, from_board: from, to_board: toBoard }),
+  }).catch(() => { card.board = from; renderDeck(); });  // revert on failure
+}
+
+// Wire the decklist and sideboard boxes as drop targets (idempotent — uses
+// property assignment, so calling per render doesn't stack listeners).
+function setupDeckDrop() {
+  const deck = document.querySelector(".left-col .decklist");
+  const sb = $("sideboard-box");
+  const target = (box, onDrop) => {
+    if (!box) return;
+    box.ondragover = (e) => { if (dragCardRef) { e.preventDefault(); box.classList.add("drop-target"); } };
+    box.ondragleave = () => box.classList.remove("drop-target");
+    box.ondrop = (e) => {
+      box.classList.remove("drop-target");
+      if (!dragCardRef) return;
+      e.preventDefault();
+      onDrop(dragCardRef);
+    };
+  };
+  // Dropping on the decklist returns a card to its original non-sideboard board
+  // (so a commander dragged out and back stays a commander); default mainboard.
+  target(deck, (c) => moveCardTo(c, c._origBoard && c._origBoard !== "sideboard" ? c._origBoard : "mainboard"));
+  target(sb, (c) => moveCardTo(c, "sideboard"));
 }
 
 function hoverable(node, img, meta = null) {
@@ -791,9 +866,20 @@ function cardRow(c) {
   row.draggable = true;
   row.ondragstart = (ev) => {
     ev.dataTransfer.setData("text/plain", c.name);
-    ev.dataTransfer.effectAllowed = "copy";
+    ev.dataTransfer.effectAllowed = "copyMove";
+    dragCardRef = c;  // enables maindeck ↔ sideboard move on drop
   };
+  row.ondragend = () => { dragCardRef = null; document.querySelectorAll(".drop-target").forEach((n) => n.classList.remove("drop-target")); };
   row.append(el("span", { className: "qty", textContent: c.quantity + "×" }));
+  // Badge on a card that was dragged to the OTHER list: shows where it came from.
+  if (c._origBoard !== undefined && c.board !== c._origBoard) {
+    const wasSb = c._origBoard === "sideboard";
+    row.append(el("span", {
+      className: "moved-badge " + (wasSb ? "sb" : "md"),
+      title: wasSb ? "moved here from the sideboard" : "moved here from the maindeck",
+      textContent: wasSb ? "SB" : "MD",
+    }));
+  }
 
   const nameWrap = el("span", { className: "cname" });
   if (c.faces && c.faces.length === 2) {
@@ -3781,9 +3867,10 @@ function tile(name, opts = {}) {
   // hardcoded few. +1/+1 and -1/-1 get P/T formatting, loyalty a shield, and
   // any other kind (charge, oil, fade, page, lore, ...) shows "N×kind".
   const counters = opts.counters || {};
-  const kinds = Object.entries(counters).filter(([, v]) => v);
+  // The plain "deadpool" counter is superseded by the named exchange badge below.
+  const kinds = Object.entries(counters).filter(([k, v]) => v && k !== "deadpool");
   const granted = opts.granted || [];
-  if (kinds.length || granted.length || opts.chosen) {
+  if (kinds.length || granted.length || opts.chosen || opts.deadpoolFrom) {
     const row = el("div", { className: "ctr-row" });
     for (const [k, v] of kinds) {
       let label, cls = "badge ctr";
@@ -3791,12 +3878,18 @@ function tile(name, opts = {}) {
       else if (k === "-1/-1") { label = `−${v}/−${v}`; cls += " neg"; }
       else if (k === "loyalty") { label = `⟐${v}`; }
       else if (k === "powered_up") { label = "powered up"; }
-      else if (k === "deadpool") { label = "deadpool"; }
       else { label = `${v}×${k}`; }
       const title = k === "powered_up" ? "powered up"
-        : k === "deadpool" ? "text box exchanged with Deadpool, Trading Card"
         : `${v} ${k} counter${v === 1 ? "" : "s"}`;
       row.append(el("div", { className: cls, title, textContent: label }));
+    }
+    // Deadpool text-box exchange: the creature it swapped text boxes with.
+    if (opts.deadpoolFrom) {
+      row.append(el("div", {
+        className: "badge ctr deadpool",
+        title: `text box exchanged with ${opts.deadpoolFrom}`,
+        textContent: `↔ ${opts.deadpoolFrom.split(",")[0].split(" // ")[0]}`,
+      }));
     }
     // "As it enters, choose ..." (e.g. Multiversal Passage's basic land type).
     if (opts.chosen) {
@@ -4037,7 +4130,7 @@ function permTile(p, attachedByHost, edit = {}, combat = true) {
   // not attacking in the main phases / upkeep / end step even if it attacked
   // earlier this turn.
   const host = tile(p.name, { tapped: p.tapped, sick: p.sick, commander: p.commander, attacking: p.attacking && combat && p.is_creature !== false, counters: p.counters,
-    granted: p.granted, chosen: p.chosen, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness, colors: p.colors,
+    granted: p.granted, chosen: p.chosen, deadpoolFrom: p.deadpool_text_from, token: p.token, typeLine: p.type_line, text: p.text, power: p.power, toughness: p.toughness, colors: p.colors,
     recolored: p.recolored, face_down: p.face_down, copy: p.is_copy || p.copy,
     editable: edit.editable,
     onClick: edit.onClick ? () => edit.onClick(p) : null,

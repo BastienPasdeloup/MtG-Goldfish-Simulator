@@ -29,7 +29,7 @@
           </div>
           <div class="grow">
             <label>Deck URL</label><br />
-            <input id="deck-url" style="width:100%" placeholder="Moxfield, Archidekt, or MTGTop8 URL — e.g. https://www.moxfield.com/decks/xxxxxxxx  ·  https://archidekt.com/decks/1234567  ·  https://www.mtgtop8.com/event?e=..." />
+            <input id="deck-url" style="width:100%" placeholder="Moxfield, Archidekt, or MTGTop8" />
           </div>
         </div>
         <div class="row" style="margin-top:.6rem">
@@ -76,6 +76,16 @@
               <div class="muted" id="deck-summary" style="font-size:12px"></div>
             </div>
             <div id="deck-cards"></div>
+          </div>
+          <div class="card-box sideboard hidden" id="sideboard-box">
+            <div class="deck-controls">
+              <div class="row">
+                <h3 style="margin:0">Sideboard</h3>
+                <span class="spacer"></span>
+                <span class="muted" id="sideboard-summary" style="font-size:12px"></span>
+              </div>
+            </div>
+            <div id="sideboard-cards"></div>
           </div>
         </div>
 
@@ -177,7 +187,7 @@
   </main>
 
   <footer class="appfooter">
-    MtG Goldfish Simulator — <a href="https://github.com/BastienPasdeloup/MtG-Goldfish-Simulator" target="_blank" rel="noopener">source on GitHub</a>.
+    MtG Goldfish Simulator.
     Unofficial fan project; Magic: the Gathering is © Wizards of the Coast.
   </footer>
 

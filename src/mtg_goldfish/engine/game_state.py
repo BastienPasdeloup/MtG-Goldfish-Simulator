@@ -140,6 +140,9 @@ class Permanent:
     attached_to: int | None = None      # equipment: uid of the equipped creature
     exiled_with: list[CardData] = field(default_factory=list)  # e.g. Parallax Wave
     chosen: str | None = None           # "as ~ enters, choose ..." (Multiversal Passage)
+    # Name of the creature this permanent exchanged text boxes with (Deadpool
+    # Trading Card) — shown as a badge in the replay.
+    deadpool_text_from: str = ""
     # Until-end-of-turn "becomes a creature" animation (man-lands: Mishra's
     # Factory, Den of the Bugbear, ...). When set, it overrides the type line
     # and base P/T: {"type_line": str, "power": int, "toughness": int}. Cleared
@@ -258,6 +261,7 @@ class Permanent:
             attached_to=self.attached_to,
             exiled_with=list(self.exiled_with),
             chosen=self.chosen,
+            deadpool_text_from=self.deadpool_text_from,
             becomes=dict(self.becomes) if self.becomes is not None else None,
             color_override=list(self.color_override) if self.color_override is not None else None,
             color_override_eot=self.color_override_eot,
@@ -1883,6 +1887,9 @@ class GameState:
         # shown as a badge on the tile.
         if p.chosen:
             view["chosen"] = p.chosen
+        # Deadpool text-box exchange: badge naming the creature swapped with.
+        if p.deadpool_text_from:
+            view["deadpool_text_from"] = p.deadpool_text_from
         if p.is_token:
             # Tokens have no card image: ship what the tile needs to render a
             # composed card face (type, textbox, P/T) tinted by its colour.

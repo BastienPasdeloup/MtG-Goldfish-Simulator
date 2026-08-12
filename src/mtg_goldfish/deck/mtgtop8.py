@@ -26,7 +26,24 @@ _BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 _LINE_RE = re.compile(r"^(?:SB:\s*)?(\d+)\s+(.+)$")
-_COMMANDER_FORMATS = {"duel_commander", "commander", "edh"}
+#: MTGTop8 URLs carry the format as an `f=<CODE>` query param. Map the codes to
+#: our format ids; commander codes → Duel Commander, everything else → a
+#: constructed (non-Commander) format so the post-`Sideboard` cards stay in the
+#: sideboard rather than being read as commanders.
+_MTGTOP8_FORMAT = {
+    "EDH": "duel_commander", "DC": "duel_commander", "CEDH": "duel_commander",
+    "EDHM": "duel_commander", "EDHP": "duel_commander", "PEDH": "duel_commander",
+    "ST": "standard", "MO": "modern", "LE": "legacy", "VI": "vintage",
+    "PAU": "pauper", "PI": "pioneer", "PREM": "premodern", "PEA": "pauper",
+    "EXT": "modern", "EX": "modern", "BL": "standard", "HI": "legacy",
+}
+
+
+def _format_from_url(url: str) -> str | None:
+    """The format id implied by an mtgtop8 URL's `f=<CODE>` param (None if
+    absent/unknown)."""
+    m = re.search(r"[?&]f=([A-Za-z0-9]+)", url or "")
+    return _MTGTOP8_FORMAT.get(m.group(1).upper()) if m else None
 #: On an event page the currently-displayed deck's id appears in a handful of
 #: single-deck script URLs (the Arena/MTGO export links and the price widget),
 #: unlike the sibling-deck ids which only occur in listing anchors.
@@ -144,9 +161,11 @@ def import_mtgtop8_deck(
     scryfall: ScryfallClient | None = None,
 ) -> ImportResult:
     """Import a public mtgtop8 deck and enrich it with Scryfall data. The MTGO
-    text export carries no format, so we default to Duel Commander (the only
-    modelled format) unless an explicit `format_id` is given."""
-    format_id = format_id or "duel_commander"
+    text export carries no format, so the format is taken from the URL's `f=`
+    param, then a content heuristic, unless an explicit `format_id` is given."""
+    from ..formats import get_format
+
+    format_id = format_id or _format_from_url(url)
     scryfall = scryfall or ScryfallClient()
     deck_id = resolve_deck_id(url)
     text = _fetch_mtgtop8_decklist(deck_id)
@@ -155,8 +174,16 @@ def import_mtgtop8_deck(
         raise MTGTop8Error("mtgtop8 export contained no cards.")
 
     index, warnings = _resolve_names(scryfall, [n for _, n in main + side])
-    # In a commander format the "sideboard" holds the commander(s).
-    side_board = (DeckBoard.COMMANDER if format_id in _COMMANDER_FORMATS
+    if format_id is None:
+        # No format on the URL: a real commander deck's "sideboard" is just its
+        # 1–2 commander(s); a constructed deck's is a full sideboard. Guess from
+        # the post-`Sideboard` cards so a Legacy sideboard isn't read as commanders.
+        side_cards = [index.get(n) for _, n in side]
+        looks_commander = 0 < len(side) <= 2 and all(
+            c is not None and c.can_be_commander for c in side_cards)
+        format_id = "duel_commander" if looks_commander else "constructed"
+    # In a commander format the "sideboard" slot holds the commander(s).
+    side_board = (DeckBoard.COMMANDER if get_format(format_id).uses_commander
                   else DeckBoard.SIDEBOARD)
 
     entries: list[DeckEntry] = []
@@ -188,12 +215,19 @@ def fetch_deck_signature(url: str, format_id: str | None = None,
     `CardData.name` is already canonical. mtgtop8 prints modal/transform DFCs
     front-face only, so without this the signature would never match and the
     deck would always look 'changed'."""
+    from ..formats import get_format
+
     scryfall = scryfall or ScryfallClient()
-    format_id = format_id or "duel_commander"
+    format_id = format_id or _format_from_url(url)
     text = _fetch_mtgtop8_decklist(resolve_deck_id(url))
     main, side = _parse_decklist(text)
     index, _ = _resolve_names(scryfall, [n for _, n in main + side])
-    side_board = (DeckBoard.COMMANDER if format_id in _COMMANDER_FORMATS
+    if format_id is None:
+        side_cards = [index.get(n) for _, n in side]
+        looks_commander = 0 < len(side) <= 2 and all(
+            c is not None and c.can_be_commander for c in side_cards)
+        format_id = "duel_commander" if looks_commander else "constructed"
+    side_board = (DeckBoard.COMMANDER if get_format(format_id).uses_commander
                   else DeckBoard.SIDEBOARD)
     rows: list[tuple[str, str, int]] = []
     for board, entries in ((DeckBoard.MAINBOARD, main), (side_board, side)):

@@ -103,9 +103,12 @@ class DeadpoolTradingCard(Card):
             # Deadpool NEVER enters with a powered-up marker of his own.
             me.counters.pop("powered_up", None)
             me.counters.pop("_powered_up", None)
-            # Board-viz marker: the chosen creature shows a "deadpool" badge
-            # (its text box is now Deadpool's).
+            # Board-viz markers: each shows a badge naming the creature it
+            # exchanged text boxes with (Deadpool now has the other's text; the
+            # other now has Deadpool's).
             other.counters["deadpool"] = 1
+            me.deadpool_text_from = other.name
+            other.deadpool_text_from = me.name
             st.emit(f"Deadpool enters: exchange text boxes with {other.name}")
 
         # Exchange targets first, declining last (nicer first-found replays).

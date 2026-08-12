@@ -110,6 +110,29 @@ class ScryfallClient:
         except Exception:
             pass  # cache is best-effort
 
+    def refresh_alpha_scans(self, *, only_missing_set: bool = True) -> int:
+        """One-time cache migration: re-fetch cached cards so Alpha (`lea`) scans
+        become Beta and the `set` field is populated. By default re-fetches only
+        cards whose cached `set` is empty (pre-`set`-field cache) or "lea"; pass
+        `only_missing_set=False` to re-fetch everything. Returns how many were
+        re-fetched. Network-heavy and throttled — run deliberately, not per view."""
+        n = 0
+        for path in sorted(self.cache_dir.glob("*.json")):
+            try:
+                card = CardData.model_validate_json(path.read_text())
+            except Exception:
+                continue
+            if not card.name or card.name.startswith("__id__"):
+                continue
+            if only_missing_set and getattr(card, "set", "") not in ("", "lea"):
+                continue
+            try:
+                self.get_named(card.name, refresh=True)
+                n += 1
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+        return n
+
     # ---- public API --------------------------------------------------------
     def get_by_id(self, scryfall_id: str) -> CardData | None:
         """Resolve a card (e.g. a token) by its Scryfall id, cached by id."""

@@ -23,6 +23,17 @@ _BROWSER_UA = (
 )
 
 
+#: Archidekt's `deckFormat` is a numeric id. Map the common ones to our format
+#: ids (commander variants → Duel Commander; the rest → constructed formats).
+_ARCHIDEKT_FORMAT = {
+    1: "standard", 2: "modern", 3: "duel_commander", 4: "legacy", 5: "vintage",
+    6: "pauper", 10: "penny", 11: "duel_commander", 12: "duel_commander",
+    13: "duel_commander", 14: "duel_commander", 15: "pioneer", 16: "historic",
+    17: "duel_commander", 18: "alchemy", 19: "explorer", 20: "duel_commander",
+    22: "premodern",
+}
+
+
 class ArchidektError(RuntimeError):
     pass
 
@@ -120,11 +131,10 @@ def import_archidekt_deck(
 
     scryfall = scryfall or ScryfallClient()
     raw = _fetch_archidekt_json(extract_deck_id(url))
-    # Archidekt's `deckFormat` is a numeric id (not a format name), so it never
-    # maps — resolve_format_id defaults it (Duel Commander), same as Moxfield's
-    # unknown formats. Pass a string so it doesn't choke on the int.
+    # Archidekt's `deckFormat` is a numeric id — map it directly; fall back to
+    # resolve_format_id (defaults to Duel Commander) for anything unrecognised.
     fmt = raw.get("deckFormat")
-    format_id = format_id or resolve_format_id(str(fmt) if fmt is not None else None)
+    format_id = format_id or _ARCHIDEKT_FORMAT.get(fmt) or resolve_format_id(None)
 
     board_cards = _iter_board_cards(raw)
     if not board_cards:

@@ -156,6 +156,19 @@ body:has(#session-view:not(.hidden)) footer.appfooter { display: none; }
 
 .decklist { max-height: 78vh; overflow-y: auto; padding-top: 0; }
 .left-col .decklist { flex: 1 1 auto; min-height: 0; max-height: none; }
+/* Sideboard box under the decklist: capped height + scroll, so the decklist
+   shrinks to keep the whole left column inside the viewport. */
+.sideboard { flex: 0 1 auto; min-height: 5rem; max-height: 32vh; overflow-y: auto; padding-top: 0; }
+/* Drag-and-drop between the two lists: highlight the drop target. */
+.decklist.drop-target, .sideboard.drop-target { outline: 2px dashed var(--accent); outline-offset: -5px; }
+/* "moved between boards" badge on a card row (SB = was sideboard, MD = was mainboard). */
+.card-row .moved-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .5px; padding: 0 .28rem;
+  border-radius: 3px; margin-right: .35rem; background: var(--panel-2);
+  border: 1px solid var(--border); color: var(--muted);
+}
+.card-row .moved-badge.sb { color: #e0a54f; border-color: #e0a54f88; }
+.card-row .moved-badge.md { color: #6fb3a6; border-color: #6fb3a688; }
 .deck-controls { position: sticky; top: 0; background: var(--panel); padding: .9rem 0 .5rem; margin-bottom: .2rem; border-bottom: 1px solid var(--border); z-index: 3; }
 .card-group-title { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .5px; margin: .8rem 0 .3rem; }
 .card-row {
