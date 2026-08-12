@@ -1297,18 +1297,18 @@ function placeableCards() {
 }
 
 // L7: whether a decklist card can still be placed in the CURRENT tab's target.
-// Random-hand mode places nothing (never dims). Fixed-hand: only mainboard
-// cards, until the hand is full or all copies are in it. Fixed-config: mainboard
-// + commanders, until all copies are placed across the zones.
+// Random-hand mode places nothing (never dims). Fixed-hand: mainboard cards (and
+// the companion), until the hand is full or all copies are in it. Fixed-config:
+// mainboard + commanders + the companion, until all copies are placed.
 function cardPlaceableInTab(c) {
   const mode = state.simMode;
   if (mode === "fixed") {
-    return c.board === "mainboard"
+    return (c.board === "mainboard" || c.is_companion)
       && state.fixedHand.length < MAX_FIXED_HAND
       && fixedHandCount(c.name) < c.quantity;
   }
   if (mode === "config") {
-    return (c.board === "mainboard" || c.board === "commander")
+    return (c.board === "mainboard" || c.board === "commander" || c.is_companion)
       && fcUsage(c.name) < c.quantity;
   }
   return true;  // random-hand mode: nothing is placed, nothing is dimmed
@@ -1317,13 +1317,21 @@ function cardPlaceableInTab(c) {
 // Grey out decklist rows whose copies can no longer be placed in the current
 // tab (re-run on tab switch and after every hand/config change).
 function updateDeckDimming() {
+  const rowCard = (row) =>
+    state.cards.find((x) => x.name === row.dataset.cname && x.board === row.dataset.board)
+    || state.cards.find((x) => x.name === row.dataset.cname);
+  // Match on BOTH name and board: after a partial maindeck↔sideboard move the same
+  // name exists in two rows, and a name-only lookup could grab the sideboard copy
+  // (never placeable) and wrongly grey out the maindeck row.
   $("deck-cards").querySelectorAll(".card-row").forEach((row) => {
-    // Match on BOTH name and board: after a partial maindeck↔sideboard move the
-    // same name exists in two rows, and a name-only lookup could grab the
-    // sideboard copy (never placeable) and wrongly grey out the maindeck row.
-    const c = state.cards.find((x) => x.name === row.dataset.cname && x.board === row.dataset.board)
-      || state.cards.find((x) => x.name === row.dataset.cname);
+    const c = rowCard(row);
     row.classList.toggle("unplaceable", !!c && !cardPlaceableInTab(c));
+  });
+  // The sideboard's only placeable card is the companion — dim ONLY it once it has
+  // been placed; regular sideboard cards are never greyed.
+  $("sideboard-cards").querySelectorAll(".card-row").forEach((row) => {
+    const c = rowCard(row);
+    if (c && c.is_companion) row.classList.toggle("unplaceable", !cardPlaceableInTab(c));
   });
 }
 
@@ -2974,7 +2982,9 @@ function mainboardCards() {
 const fixedHandCount = (name) => state.fixedHand.filter((n) => n === name).length;
 
 function addToFixedHand(name) {
-  const card = mainboardCards().find((c) => c.name === name);
+  // Mainboard cards are drawn from the library; the companion (a sideboard card)
+  // may ALSO be placed into the opening hand, even though it's not in the library.
+  const card = state.cards.find((c) => c.name === name && (c.board === "mainboard" || c.is_companion));
   if (!card || state.fixedHand.length >= MAX_FIXED_HAND || fixedHandCount(name) >= card.quantity) return;
   state.fixedHand.push(name);
   renderFixedBuilder();
