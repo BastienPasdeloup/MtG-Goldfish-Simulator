@@ -537,6 +537,31 @@ def test_fixed_config_unknown_library_slots():
     assert len(filled) > 1  # the unknown slot draws a DIFFERENT card across seeds
 
 
+def test_fixed_config_places_companion_from_sideboard():
+    # The companion lives in the sideboard ("outside the game"), but a fixed-config
+    # run may place it into any game area: it is taken from the sideboard wish pool
+    # (not the library) and no longer appears in that pool.
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+
+    comp = _cd("Lurrus of the Dream-Den", "{1}{W}{B}", "Legendary Creature — Cat Nightmare")
+    comp.keywords = ["Companion"]
+    entries = [DeckEntry(quantity=20, board=DeckBoard.MAINBOARD, card=_cd("Island", "", "Basic Land — Island")),
+               DeckEntry(quantity=1, board=DeckBoard.SIDEBOARD, card=comp)]
+    base = new_game_from_deck(Deck(name="t", format_id="legacy", entries=entries))
+    assert [c.name for c in base.sideboard] == ["Lurrus of the Dream-Den"]
+
+    # Placed on the battlefield: it is present, gone from the wish pool, not in the library.
+    v = _build_fixed_variant(base, {"battlefield": [{"name": "Lurrus of the Dream-Den"}]}, seed=1)
+    assert [p.card.name for p in v.battlefield] == ["Lurrus of the Dream-Den"]
+    assert v.sideboard == []
+    assert "Lurrus of the Dream-Den" not in [c.name for c in v.library]
+
+    # Placeable into other zones too (hand here).
+    v2 = _build_fixed_variant(base, {"hand": ["Lurrus of the Dream-Den"]}, seed=1)
+    assert [c.name for c in v2.hand] == ["Lurrus of the Dream-Den"] and v2.sideboard == []
+
+
 def test_progress_score_prioritizes_on_track_lines():
     # A line whose pending "at end of X" condition ALREADY holds is scored better
     # (lower) than an equivalent line where it doesn't, so best-first drives the

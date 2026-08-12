@@ -1063,9 +1063,12 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     variant = base_state.clone()
     lib_pool = list(base_state.library)          # deck cards
     cmd_pool = list(base_state.command_zone)     # commander(s)
+    sb_pool = list(base_state.sideboard)         # "outside the game" (the companion)
 
     def take(name: str):
-        for pool in (lib_pool, cmd_pool):
+        # The companion is in the sideboard, so the editor can place it into a game
+        # area; a taken sideboard card leaves the wish pool (set below).
+        for pool in (lib_pool, cmd_pool, sb_pool):
             for i, c in enumerate(pool):
                 if c.name == name:
                     return pool.pop(i)
@@ -1288,6 +1291,7 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     ordered = [c for c in ordered if c is not None]
     variant.library = ordered + lib_pool  # set top (known + filled unknowns), then rest
     variant.command_zone = cmd_pool       # commanders not placed on the battlefield
+    variant.sideboard = sb_pool           # wish pool minus any placed sideboard card (companion)
     if known:
         variant.mark_known_in_library(*known)
 

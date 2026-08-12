@@ -1289,9 +1289,11 @@ function setSimMode(mode) {
   updateDeckDimming();  // dim cards that can't be placed in this tab (L7)
 }
 
-// Cards that can be placed in a zone: mainboard cards + the commander(s).
+// Cards that can be placed in a zone: mainboard cards, the commander(s), and the
+// companion (a sideboard card with the companion ability — droppable into any game
+// area from the sideboard list or the companion zone, even though it's "outside").
 function placeableCards() {
-  return state.cards.filter((c) => c.board === "mainboard" || c.board === "commander");
+  return state.cards.filter((c) => c.board === "mainboard" || c.board === "commander" || c.is_companion);
 }
 
 // L7: whether a decklist card can still be placed in the CURRENT tab's target.
@@ -4114,7 +4116,17 @@ function pile(items, edit = {}) {
       card.classList.add("editable");
       card.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); hideHover(); edit.onMenu(idx, item.name, e); };
     }
-    if (edit.dragZone && !isRestBack) {  // the rest card back is fixed at the bottom
+    if (edit.addDrag && !isUnknown && !isRestBack) {
+      // Drag this card into a fixed-config zone by NAME (like a decklist row) —
+      // used by the companion zone, whose card lives "outside" the game and is
+      // COPIED into a zone (not moved from one), so no fcDrag / remove-on-dragend.
+      card.draggable = true;
+      card.ondragstart = (e) => {
+        e.dataTransfer.setData("text/plain", item.name);  // bare name -> fcAddToZone
+        e.dataTransfer.effectAllowed = "copy"; hideHover();
+        state.fcDrag = null; state.fcDropped = false; dragCardRef = null;
+      };
+    } else if (edit.dragZone && !isRestBack) {  // the rest card back is fixed at the bottom
       card.dataset.idx = idx;
       card.draggable = true;
       card.ondragstart = (e) => {
@@ -4395,11 +4407,14 @@ function renderBoard(f, edit = {}) {
   // The companion zone (non-commander formats): show the deck's companion (a
   // sideboard card with the companion ability), or a striped "unused" box if the
   // deck has none. The "companion" tag lives in the decklist row, not on the card.
+  // In the editor the companion is a DRAG SOURCE — drag it into any game area; once
+  // placed it leaves this zone (like a commander leaving the command zone).
   const companionZoneBox = () => {
     const comp = (state.cards || []).find((c) => c.is_companion);
-    const box = el("div", { className: "side-box companion-box" + (comp ? "" : " companion-empty") },
-      el("div", { className: "zlabel", textContent: `Companion (${comp ? 1 : 0})` }));
-    if (comp) box.append(pile([comp.name]));
+    const shown = comp && !(ed && fcUsage(comp.name) >= comp.quantity);
+    const box = el("div", { className: "side-box companion-box" + (shown ? "" : " companion-empty") },
+      el("div", { className: "zlabel", textContent: `Companion (${shown ? 1 : 0})` }));
+    if (shown) box.append(pile([comp.name], ed ? { addDrag: true } : {}));
     return box;
   };
   // Commander formats show a command zone; formats without a commander repurpose
