@@ -383,13 +383,10 @@ function renderSessionList() {
 
   const rows = sorted.map((s) => {
     const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
-    if (s.commanders.length) {
-      for (const c of s.commanders) {
-        const name = hoverable(el("span", { textContent: "⚔ " + c.name }), c.image);
-        fmtCell.append(el("div", { className: "muted sub" }, name));
-      }
-    } else {
-      fmtCell.append(el("div", { className: "muted sub", textContent: "no commander" }));
+    // Commander subline(s) only for decks that have one (no "no commander" line).
+    for (const c of s.commanders) {
+      const name = hoverable(el("span", { textContent: "⚔ " + c.name }), c.image);
+      fmtCell.append(el("div", { className: "muted sub" }, name));
     }
     const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
     delBtn.onclick = (e) => { e.stopPropagation(); deleteSessionRow(s.id, s.name); };
@@ -453,9 +450,10 @@ async function openSession(id) {
 function enterSession(payload) {
   state.session = payload.session;
   state.cards = payload.cards;
-  // Remember each card's board at load, so a card dragged between the maindeck
-  // and the sideboard shows an "MD"/"SB" badge (where it came from).
-  state.cards.forEach((c) => { c._origBoard = c.board; });
+  // Badge (MD/SB) a card whose current board differs from its ORIGINAL import
+  // board. This is persistent — a fresh import has orig_board == board (no
+  // badges), and moves survive reloads / loading a previous run.
+  state.cards.forEach((c) => { c._origBoard = c.orig_board != null ? c.orig_board : c.board; });
   state.deckFlags = payload.deck_flags || {};
   state.deckTokens = payload.tokens || [];
   // Always open with a single uninitialized property (a previous run's
@@ -780,8 +778,13 @@ function renderDeck() {
   container.replaceChildren();
   const total = main.reduce((n, c) => n + c.quantity, 0);
   const approx = main.filter((c) => !c.implemented).length;
-  $("deck-summary").textContent = `(${total} cards` +
-    (approx ? ` · ${approx} not yet implemented (in red)` : "") + ")";
+  const summary = $("deck-summary");
+  summary.replaceChildren(document.createTextNode(`(${total} cards`));
+  if (approx) {
+    summary.append(document.createTextNode(" · "));
+    summary.append(el("span", { className: "unimpl-count", textContent: `${approx} not implemented` }));
+  }
+  summary.append(document.createTextNode(")"));
 
   const order = Object.keys(groups).sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
@@ -4096,10 +4099,14 @@ function pile(items, edit = {}) {
         state.fcSort = null;
       };
     }
-    wrap.append(hoverable(card, img, {
-      title: item.kind === "spell" || item.kind === "card" ? item.name : source,
+    // Hovering shows ONLY the zoomed image for a plain card (command zone,
+    // graveyard, exile, hand, a spell on the stack) — no name box under it. The
+    // meta box is kept solely for stack ABILITIES (which have no card image), to
+    // say what's triggering / on the stack.
+    const isPlainCard = item.kind === "spell" || item.kind === "card";
+    wrap.append(hoverable(card, img, isPlainCard ? null : {
       trigger: item.kind === "triggered" ? item.trigger : (item.kind === "activated" ? "Activated ability" : null),
-      ability: item.kind === "spell" || item.kind === "card" ? null : item.ability,
+      ability: item.ability,
     }));
   });
   // Live vertical sortable: while a same-zone card is dragged, insert it before

@@ -212,6 +212,9 @@ def card_view(deck: Deck) -> list[dict]:
             "name": c.name,
             "quantity": e.quantity,
             "board": e.board.value,
+            # Original import board (for the MD/SB "moved" badge). Falls back to
+            # the current board for decks imported before orig_board existed.
+            "orig_board": (e.orig_board or e.board).value,
             "type_line": c.type_line,
             "cmc": c.cmc,
             "mana_cost": c.mana_cost,
@@ -622,10 +625,12 @@ def move_card(session_id: str, req: MoveCardRequest) -> dict:
         session.deck.entries = [e for e in session.deck.entries if e.quantity > 0]
         merged = next((e for e in session.deck.entries
                        if e.card.name == req.name and e.board == to_b), None)
+        orig = from_entries[0].orig_board or from_b  # remember the import board
         if merged is not None:
             merged.quantity += n
         else:
-            session.deck.entries.append(DeckEntry(quantity=n, board=to_b, card=card))
+            session.deck.entries.append(
+                DeckEntry(quantity=n, board=to_b, card=card, orig_board=orig))
     store.save(session)
     return session_payload(session)
 

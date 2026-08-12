@@ -24,10 +24,17 @@ def import_deck(
     """Import a deck from a Moxfield, mtgtop8, or Archidekt URL, chosen by the URL
     host. When `format_id` is None the format is inferred from the source deck."""
     if _is_mtgtop8(url):
-        return import_mtgtop8_deck(url, name, format_id, scryfall)
-    if is_archidekt(url):
-        return import_archidekt_deck(url, name, format_id, scryfall)
-    return import_moxfield_deck(url, name, format_id, scryfall)
+        result = import_mtgtop8_deck(url, name, format_id, scryfall)
+    elif is_archidekt(url):
+        result = import_archidekt_deck(url, name, format_id, scryfall)
+    else:
+        result = import_moxfield_deck(url, name, format_id, scryfall)
+    # Record each card's ORIGINAL board so later maindeck↔sideboard drags can be
+    # badged (MD/SB) against the import.
+    for entry in result.deck.entries:
+        if entry.orig_board is None:
+            entry.orig_board = entry.board
+    return result
 
 
 def fetch_deck_signature(url: str, format_id: str | None = None) -> list:

@@ -129,6 +129,11 @@ class DeckEntry(BaseModel):
     quantity: int = 1
     board: DeckBoard = DeckBoard.MAINBOARD
     card: CardData
+    # The board this card was ORIGINALLY imported into. Stays put when the card
+    # is later dragged between the maindeck and the sideboard, so the UI can badge
+    # (MD/SB) cards that differ from the import. None on decks imported before this
+    # field existed — treat as `board` (no badge).
+    orig_board: DeckBoard | None = None
 
 
 class Deck(BaseModel):

@@ -91,7 +91,7 @@
         <!-- RIGHT: properties + simulation -->
         <div class="right-col">
           <div class="card-box">
-            <div class="row">
+            <div class="row box-head">
               <h3 style="margin:0">Properties</h3>
               <button id="prop-help-btn" class="help-btn" title="Tips: writing properties the LLM understands, and interpreting the resulting probabilities">?</button>
               <button id="add-prop">+ Add property</button>
@@ -104,7 +104,7 @@
           </div>
 
           <div class="card-box">
-            <h3 style="margin:0 0 .5rem 0">Simulation</h3>
+            <h3 class="box-head" style="margin:0">Simulation</h3>
             <div class="tabs">
               <button id="tab-sim" class="tab active" data-mode="sim">Random hand</button>
               <button id="tab-fixed" class="tab" data-mode="fixed">Fixed hand</button>
@@ -113,8 +113,8 @@
 
             <!-- Fixed-config builder: a fully-specified starting state -->
             <div id="config-builder" class="hidden">
-              <div class="muted drag-hint">Drag cards from the decklist on the left onto a zone.</div>
               <div id="fc-zones"></div>
+              <div class="muted drag-hint" style="margin-top:.5rem">Drag cards from the decklist on the left onto a zone.</div>
               <div class="sep"></div>
             </div>
 
@@ -168,14 +168,14 @@
           </div>
 
           <div class="card-box hidden" id="progress-box">
-            <h3>Progress</h3>
+            <h3 class="box-head">Progress</h3>
             <div id="sim-seed" class="muted" style="font-size:12px"></div>
             <div id="sim-stats" style="margin-top:.4rem"></div>
           </div>
 
 
           <div class="card-box hidden" id="viz-box">
-            <h3>Games</h3>
+            <h3 class="box-head">Games</h3>
             <div class="muted" style="font-size:12px">One row per game (✓ success, ✗ not; ⏱ = timed out). Hover ✋ for the opening hand, 🌳 opens the explored-states graph, click a ✓ row to replay its winning line below.</div>
             <div id="viz-list"></div>
             <div id="viz-log" class="log hidden"></div>
