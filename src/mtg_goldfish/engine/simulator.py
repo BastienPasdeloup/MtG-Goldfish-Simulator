@@ -1412,14 +1412,10 @@ def _seed_game(
     if config.fixed_hand:
         # Fixed-hand mode: the opening hand is chosen by the user (optionally
         # padded with random cards up to a chosen size); only the rest of the
-        # library varies (per game seed). No mulligan branching. The companion is
-        # in the sideboard ("outside the game"); if the user put it in the fixed
-        # hand, make it available (prepended so it's found by name) — it leaves the
-        # wish pool per keep (below). It is NOT in the library, so padding, which
-        # fills from the returned library remainder, never draws it.
-        wanted = set(config.fixed_hand)
-        companions = [c for c in base_state.sideboard if c.is_companion and c.name in wanted]
-        keeps = _fixed_opening_hand(companions + shuffled, config.fixed_hand, config.fixed_hand_pad_to)
+        # library varies (per game seed). No mulligan branching. Only maindeck
+        # cards are eligible — the opening hand is drawn from the library, so a
+        # sideboard card named here is simply not found and skipped.
+        keeps = _fixed_opening_hand(shuffled, config.fixed_hand, config.fixed_hand_pad_to)
     else:
         keeps = _opening_hands(shuffled, hand_size, config.mulligans)
         if config.search_mode == "best_first":
@@ -1437,12 +1433,6 @@ def _seed_game(
         variant = base_state.clone()
         variant.library = list(library)
         variant.hand = list(hand)
-        if config.fixed_hand and variant.sideboard:
-            # A companion pulled into the opening hand leaves the wish pool (it
-            # can't be both in hand and "outside the game" for Ring of Ma'rûf).
-            in_hand = {c.name for c in hand}
-            variant.sideboard = [c for c in variant.sideboard
-                                 if not (c.is_companion and c.name in in_hand)]
         variant.turn = 0
         variant.phase = Phase.UNTAP
         variant.rng_seed = config.base_seed + game_index  # mid-game shuffles

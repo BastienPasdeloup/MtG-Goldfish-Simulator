@@ -562,10 +562,24 @@ def test_fixed_config_places_companion_from_sideboard():
     assert [c.name for c in v2.hand] == ["Lurrus of the Dream-Den"] and v2.sideboard == []
 
 
-def test_fixed_hand_can_include_companion_from_sideboard():
-    # Fixed-HAND mode: the companion (a sideboard card) may be placed in the opening
-    # hand. It is pulled in, does NOT appear in the library, and leaves the wish pool;
-    # padding fills only from the library, never re-drawing it.
+def test_companion_starts_outside_the_game_even_from_mainboard():
+    # A companion behaves like a sideboard card ("outside the game" / wish pool),
+    # never in the library — even when the import filed it in the maindeck.
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+
+    comp = _cd("Lurrus of the Dream-Den", "{1}{W}{B}", "Legendary Creature — Cat Nightmare")
+    comp.keywords = ["Companion"]
+    for board in (DeckBoard.MAINBOARD, DeckBoard.SIDEBOARD, DeckBoard.COMPANION):
+        entries = [DeckEntry(quantity=40, board=DeckBoard.MAINBOARD, card=_cd("Island", "", "Basic Land — Island")),
+                   DeckEntry(quantity=1, board=board, card=comp)]
+        s = new_game_from_deck(Deck(name="t", format_id="legacy", entries=entries))
+        assert "Lurrus of the Dream-Den" not in [c.name for c in s.library], board
+        assert "Lurrus of the Dream-Den" in [c.name for c in s.sideboard], board
+
+
+def test_fixed_hand_excludes_sideboard_cards():
+    # Fixed-HAND mode is maindeck-only: a sideboard card (even a companion) named in
+    # the fixed hand is NOT drawn (it's not in the library) and stays in the wish pool.
     from mtg_goldfish.engine.game_state import new_game_from_deck
     from mtg_goldfish.engine.simulator import SimulationConfig, _seed_game
 
@@ -574,14 +588,12 @@ def test_fixed_hand_can_include_companion_from_sideboard():
     entries = [DeckEntry(quantity=30, board=DeckBoard.MAINBOARD, card=_cd("Island", "", "Basic Land — Island")),
                DeckEntry(quantity=1, board=DeckBoard.SIDEBOARD, card=comp)]
     base = new_game_from_deck(Deck(name="t", format_id="legacy", entries=entries))
-    cfg = SimulationConfig(num_games=1, fixed_hand=["Lurrus of the Dream-Den", "Island"],
-                           fixed_hand_pad_to=7)
+    cfg = SimulationConfig(num_games=1, fixed_hand=["Lurrus of the Dream-Den", "Island"])
     _ctx, _root, items, _keeps, _shuffled = _seed_game(base, [], cfg, 0)
     v = items[0][0]
-    hand = [c.name for c in v.hand]
-    assert "Lurrus of the Dream-Den" in hand and len(hand) == 7
-    assert "Lurrus of the Dream-Den" not in [c.name for c in v.library]
-    assert "Lurrus of the Dream-Den" not in [c.name for c in v.sideboard]
+    assert "Lurrus of the Dream-Den" not in [c.name for c in v.hand]      # not drawable
+    assert "Lurrus of the Dream-Den" not in [c.name for c in v.library]   # never in the library
+    assert "Lurrus of the Dream-Den" in [c.name for c in v.sideboard]     # stays in the wish pool
 
 
 def test_progress_score_prioritizes_on_track_lines():

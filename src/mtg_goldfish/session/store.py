@@ -152,6 +152,8 @@ class SessionStore:
                     "created_at": s.created_at,
                     "commanders": [{"name": e.card.name, "image": e.card.image}
                                    for e in s.deck.commanders],
+                    "companions": [{"name": e.card.name, "image": e.card.image}
+                                   for e in s.deck.entries if e.card.is_companion],
                     "num_properties": len(s.properties),
                     "num_results": len(s.results),
                     "last_run": last_run,

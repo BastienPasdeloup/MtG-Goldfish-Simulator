@@ -130,6 +130,10 @@ const FC_KEYWORD_PARAMS = {
 FC_NUMBERED_KEYWORDS.forEach((k) => { FC_KEYWORD_PARAMS[k] = { number: true }; });
 
 const MAX_FIXED_HAND = 7;
+// Role icons shown as sublines / badges: the commander (crossed swords) and the
+// companion (an animal — a paw print).
+const COMMANDER_ICON = "⚔";
+const COMPANION_ICON = "🐾";
 
 const PIP_COLORS = { W: 0, U: 1, B: 2, R: 3, G: 4 };
 
@@ -392,9 +396,13 @@ function renderSessionList() {
 
   const rows = sorted.map((s) => {
     const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
-    // Commander subline(s) only for decks that have one (no "no commander" line).
+    // Commander / companion subline(s) — only for decks that have them.
     for (const c of s.commanders) {
-      const name = hoverable(el("span", { textContent: "⚔ " + c.name }), c.image);
+      const name = hoverable(el("span", { textContent: COMMANDER_ICON + " " + c.name }), c.image);
+      fmtCell.append(el("div", { className: "muted sub" }, name));
+    }
+    for (const c of (s.companions || [])) {
+      const name = hoverable(el("span", { textContent: COMPANION_ICON + " " + c.name }), c.image);
       fmtCell.append(el("div", { className: "muted sub" }, name));
     }
     const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
@@ -759,6 +767,9 @@ function primaryType(typeLine) {
 
 function groupLabel(c) {
   if (c.board === "commander") return "Commander";
+  // In a commander format the companion is listed in the Commander section (after
+  // the commanders); otherwise it keeps its own group / the sideboard box.
+  if (c.is_companion) return boardUsesCommander() ? "Commander" : "Companion";
   if (c.board === "companion") return "Companion";
   if (c.board === "sideboard") return "Sideboard";
   // A double-faced card is filed under its FRONT face's category (e.g. a
@@ -778,9 +789,15 @@ function deckSortCmp() {
 
 function renderDeck() {
   const cmp = deckSortCmp();
-  // The sideboard renders in its own box below; the decklist holds the rest.
-  const main = state.cards.filter((c) => c.board !== "sideboard");
-  const side = state.cards.filter((c) => c.board === "sideboard");
+  // The companion is "outside the game" (wish pool) but WHERE it's listed depends on
+  // the format: a commander deck lists it in the COMMANDER section (after the
+  // commanders); a non-commander deck lists it in the sideboard box below. Regular
+  // sideboard cards always go in the sideboard box; everything else in the decklist.
+  const companionInCmdSection = (c) => boardUsesCommander() && c.is_companion;
+  const inSideboardBox = (c) =>
+    !companionInCmdSection(c) && (c.board === "sideboard" || c.board === "companion" || c.is_companion);
+  const main = state.cards.filter((c) => !inSideboardBox(c));
+  const side = state.cards.filter(inSideboardBox);
 
   const groups = {};
   for (const c of main) (groups[groupLabel(c)] ||= []).push(c);
@@ -804,7 +821,11 @@ function renderDeck() {
   order.forEach((label) => {
     const n = groups[label].reduce((s, c) => s + c.quantity, 0);
     container.append(el("div", { className: "card-group-title", textContent: `${label} (${n})` }));
-    groups[label].sort(cmp).forEach((c) => container.append(cardRow(c)));
+    let items = groups[label].sort(cmp);
+    // In the Commander section the companion is listed AFTER the commander(s)
+    // (stable sort keeps the cmp order within each of the two subgroups).
+    if (label === "Commander") items = items.slice().sort((a, b) => (a.is_companion ? 1 : 0) - (b.is_companion ? 1 : 0));
+    items.forEach((c) => container.append(cardRow(c)));
   });
 
   renderSideboard(side, cmp);
@@ -944,12 +965,12 @@ function cardRow(c) {
       textContent: wasSb ? "SB" : "MD",
     }));
   }
-  // The deck's companion gets a "companion" tag in the decklist (à la MTGTop8).
+  // The deck's companion gets an animal-icon tag in the decklist (à la MTGTop8).
   if (c.is_companion) {
     row.append(el("span", {
       className: "role-badge companion",
       title: "This deck's companion",
-      textContent: "companion",
+      textContent: COMPANION_ICON,
     }));
   }
 
@@ -1298,14 +1319,14 @@ function placeableCards() {
 }
 
 // L7: whether a decklist card can still be placed in the CURRENT tab's target.
-// Random-hand mode places nothing (never dims). Fixed-hand: mainboard cards (and
-// the companion from the sideboard), until the hand is full or all copies are in
-// it. Fixed-config: ANY card (maindeck, commander, or sideboard), until all copies
-// are placed across the zones.
+// Random-hand mode places nothing (never dims). Fixed-hand: ONLY maindeck cards
+// (no sideboard card, not even the companion), until the hand is full or all
+// copies are in it. Fixed-config: ANY card (maindeck, commander, or sideboard),
+// until all copies are placed across the zones.
 function cardPlaceableInTab(c) {
   const mode = state.simMode;
   if (mode === "fixed") {
-    return (c.board === "mainboard" || c.is_companion)
+    return c.board === "mainboard"
       && state.fixedHand.length < MAX_FIXED_HAND
       && fixedHandCount(c.name) < c.quantity;
   }
@@ -1328,14 +1349,13 @@ function updateDeckDimming() {
     const c = rowCard(row);
     row.classList.toggle("unplaceable", !!c && !cardPlaceableInTab(c));
   });
-  // Sideboard rows: in fixed-config ANY sideboard card is placeable into a game
-  // area (dim it once placed); in fixed-hand only the companion is (dim only it).
-  // In every other case a sideboard row is never greyed.
+  // Sideboard rows are placeable ONLY in fixed-config (any card into a game area):
+  // dim one once it has been placed. In fixed-hand / random mode no sideboard card
+  // is placeable, so none is greyed.
   $("sideboard-cards").querySelectorAll(".card-row").forEach((row) => {
     const c = rowCard(row);
     if (!c) return;
-    const relevant = state.simMode === "config" || c.is_companion;
-    row.classList.toggle("unplaceable", relevant && !cardPlaceableInTab(c));
+    row.classList.toggle("unplaceable", state.simMode === "config" && !cardPlaceableInTab(c));
   });
 }
 
@@ -2978,17 +2998,18 @@ function renderConfigBuilder() {
   updateDeckDimming();  // dim decklist cards fully placed across the zones (L7)
 }
 
-// Only mainboard cards are drawable into an opening hand (commanders live in
-// the command zone, sideboard/companions aren't in the library).
+// The library / opening-hand pool: mainboard cards only. A companion is EXCLUDED
+// even if the import filed it in the maindeck — it starts outside the game (wish
+// pool), like the sideboard; commanders live in the command zone.
 function mainboardCards() {
-  return state.cards.filter((c) => c.board === "mainboard");
+  return state.cards.filter((c) => c.board === "mainboard" && !c.is_companion);
 }
 const fixedHandCount = (name) => state.fixedHand.filter((n) => n === name).length;
 
 function addToFixedHand(name) {
-  // Mainboard cards are drawn from the library; the companion (a sideboard card)
-  // may ALSO be placed into the opening hand, even though it's not in the library.
-  const card = state.cards.find((c) => c.name === name && (c.board === "mainboard" || c.is_companion));
+  // Only maindeck cards may be placed into a fixed opening hand — no sideboard
+  // card (the opening hand is drawn from the library, which is the maindeck).
+  const card = mainboardCards().find((c) => c.name === name);
   if (!card || state.fixedHand.length >= MAX_FIXED_HAND || fixedHandCount(name) >= card.quantity) return;
   state.fixedHand.push(name);
   renderFixedBuilder();
@@ -4411,12 +4432,24 @@ function renderBoard(f, edit = {}) {
   const commandZoneBox = () => {
     const cmdZone = ed ? (f.command_zone || [])
       : (f.command_zone || []).filter((n) => !bfNames.has(n));
-    return dz(el("div", { className: "side-box" },
-      el("div", { className: "zlabel", textContent: `Command zone (${cmdZone.length})` }),
-      pile(cmdZone, {
-        dragZone: ed ? "command" : null,
-        onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
-      })), "command");
+    const box = dz(el("div", { className: "side-box" },
+      el("div", { className: "zlabel", textContent: `Command zone (${cmdZone.length})` })), "command");
+    // A commander deck may ALSO have a companion: it sits BEHIND the commander(s)
+    // here (a display reminder — drag it into play from the sideboard box below,
+    // not from here); it disappears once placed in the editor.
+    const comp = (state.cards || []).find((c) => c.is_companion);
+    const showComp = comp && !(ed && fcUsage(comp.name) >= comp.quantity);
+    const stack = el("div", { className: "cmd-stack" });
+    if (showComp) {
+      stack.append(el("div", { className: "companion-behind", title: `${comp.name} — companion` },
+        pile([comp.name])));
+    }
+    stack.append(el("div", { className: "cmd-front" }, pile(cmdZone, {
+      dragZone: ed ? "command" : null,
+      onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
+    })));
+    box.append(stack);
+    return box;
   };
   // The companion zone (non-commander formats): show the deck's companion (a
   // sideboard card with the companion ability), or a striped "unused" box if the
@@ -4437,13 +4470,22 @@ function renderBoard(f, edit = {}) {
   const cmdBox = boardUsesCommander()
     ? commandZoneBox()
     : companionZoneBox();
+  // Decks with TWO commanders (partners) show a SINGLE tax row — only one commander
+  // is cast per game, so a per-commander tax would be misleading. The editor input
+  // then drives the tax for BOTH names (whichever is cast carries it).
+  const multiCmd = (state.cards || []).filter((c) => c.board === "commander").length > 1;
   if (boardUsesCommander() && ed && edit.commanderTax && edit.commanderTax.length) {
     const tax = el("div", { className: "fc-tax" });
-    edit.commanderTax.forEach((t) => {
-      const inp = el("input", { type: "number", min: "0", value: String(t.count), className: "fc-num" });
-      inp.onchange = () => edit.onSetTax(t.name, inp.value);
+    const groups = multiCmd
+      ? [{ names: edit.commanderTax.map((t) => t.name), count: Math.max(0, ...edit.commanderTax.map((t) => t.count)) }]
+      : edit.commanderTax.map((t) => ({ names: [t.name], count: t.count }));
+    groups.forEach((g) => {
+      const inp = el("input", { type: "number", min: "0", value: String(g.count), className: "fc-num" });
+      inp.onchange = () => g.names.forEach((n) => edit.onSetTax(n, inp.value));
       // Tax = {2} per prior cast, shown compactly as "+{2} × <casts>".
-      tax.append(el("div", { className: "fc-tax-row", title: `${t.name} — commander tax` },
+      const title = g.names.length > 1 ? "commander tax — one commander is cast per game"
+                                       : `${g.names[0]} — commander tax`;
+      tax.append(el("div", { className: "fc-tax-row", title },
         el("span", { className: "fc-tax-name", textContent: "+" }),
         manaCostEl("{2}"), el("span", { className: "fc-tax-eq", textContent: "×" }), inp));
     });
@@ -4451,10 +4493,14 @@ function renderBoard(f, edit = {}) {
   } else if (f.commander_cast && Object.keys(f.commander_cast).length) {
     // Replay: show the commander tax that has accrued ({2} × times cast), the same
     // way the editor does — just "+{2}×N", WITHOUT the commander's name in front
-    // (the full name stays in the hover title).
+    // (the full name stays in the hover title). With two commanders, collapse to a
+    // single row (max count) — only one is cast per game.
     const tax = el("div", { className: "fc-tax" });
-    for (const [name, count] of Object.entries(f.commander_cast)) {
-      if (!count) continue;
+    const cast = Object.entries(f.commander_cast).filter(([, c]) => c);
+    const rows = multiCmd && cast.length
+      ? [[cast.map(([n]) => n).join(" / "), Math.max(...cast.map(([, c]) => c))]]
+      : cast;
+    for (const [name, count] of rows) {
       tax.append(el("div", { className: "fc-tax-row", title: `${name} — cast ${count}× (tax +{2}×${count})` },
         el("span", { className: "fc-tax-name", textContent: "+" }),
         manaCostEl("{2}"),

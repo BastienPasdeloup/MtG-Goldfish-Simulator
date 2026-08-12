@@ -2018,10 +2018,15 @@ def new_game_from_deck(deck: Deck, *, on_the_play: bool = True) -> GameState:
         state.command_zone.extend([entry.card] * entry.quantity)
 
     for entry in deck.mainboard:
-        state.library.extend([entry.card] * entry.quantity)
+        # A companion starts OUTSIDE the game (in its own zone), so it behaves like a
+        # sideboard card — never in the library — even if the import filed it in the
+        # maindeck. Non-companion maindeck cards form the library.
+        pool = state.sideboard if entry.card.is_companion else state.library
+        pool.extend([entry.card] * entry.quantity)
 
-    # The sideboard is "outside the game" — a wish pool (Ring of Ma'rûf).
-    for entry in deck.by_board(DeckBoard.SIDEBOARD):
+    # The sideboard is "outside the game" — a wish pool (Ring of Ma'rûf). The
+    # COMPANION board is treated the same (a companion in its own zone).
+    for entry in deck.by_board(DeckBoard.SIDEBOARD) + deck.by_board(DeckBoard.COMPANION):
         state.sideboard.extend([entry.card] * entry.quantity)
 
     state.commander_color_identity = tuple(sorted(identity))
