@@ -333,6 +333,15 @@ function formatName(id) {
   return (id || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Whether the current session's format uses a commander (from /api/meta). Decides
+// the board's right-column top slot: command zone vs. companion zone. Defaults to
+// true when the format is unknown, so commander decks keep their command zone.
+function boardUsesCommander() {
+  const id = state.session?.format_id;
+  const f = (state.meta?.formats || []).find((x) => x.id === id);
+  return f ? f.uses_commander !== false : true;
+}
+
 async function loadSessionList() {
   const box = $("session-list");
   try {
@@ -673,6 +682,8 @@ function loadRun(r) {
     renderProps();
   }
   $("sim-seed").textContent = `seed: ${cfg.base_seed}`;
+  // Reproduce this run's maindeck/sideboard reorganisation (with MD/SB badges).
+  applyDeckLayout(cfg.deck_layout || []);
   renderStats(r.stats || {});
   renderViz(r); // offers to visualize the games (shows the board viewer)
   setResumable(r); // stopped/interrupted runs with missing games offer Resume
@@ -834,11 +845,12 @@ function promptMove(card, toBoard, ev) {
   }
 }
 
-// Persist + re-render `n` copies of a card moved between the maindeck and the
-// sideboard (n omitted / ≥ quantity moves every copy).
+// Move `n` copies of a card between the maindeck and the sideboard. This is a
+// CLIENT-only reorganisation: the session's deck is never changed (opening it
+// always shows the import layout). The arrangement is captured into a RUN when
+// the user simulates (see deckLayoutForRun) and reproduced by loadRun.
 function moveCardTo(card, toBoard, n) {
   if (!card || !state.session || card.board === toBoard) return;
-  const from = card.board;
   const moveAll = (n == null || n >= card.quantity);
   n = moveAll ? card.quantity : Math.max(1, Math.min(n, card.quantity));
   if (moveAll) {
@@ -850,11 +862,31 @@ function moveCardTo(card, toBoard, n) {
     else state.cards.push(Object.assign({}, card, { board: toBoard, quantity: n }));
   }
   renderDeck();
-  api(`/api/sessions/${state.session.id}/move-card`, {
-    method: "POST",
-    body: JSON.stringify({ name: card.name, from_board: from, to_board: toBoard,
-                           quantity: moveAll ? null : n }),
-  }).catch(() => openSession(state.session.id));  // resync from server on failure
+}
+
+// The current maindeck/sideboard arrangement as [[name, board, qty], …] — sent
+// with a simulation ONLY when the user has actually moved cards (else empty, so
+// the run uses the deck as imported).
+function deckLayoutForRun() {
+  const moved = state.cards.some((c) => c._origBoard != null && c.board !== c._origBoard);
+  if (!moved) return [];
+  return state.cards.filter((c) => c.quantity > 0).map((c) => [c.name, c.board, c.quantity]);
+}
+
+// Reproduce a previous run's arrangement: put each card on the board the run's
+// deck_layout gives it (rebuilding split rows), so its MD/SB badges reappear.
+function applyDeckLayout(layout) {
+  if (!layout || !layout.length) return;  // that run used the import layout
+  const info = {};  // name -> a representative card row (image/faces/orig_board)
+  for (const c of state.cards) if (!info[c.name]) info[c.name] = c;
+  const rebuilt = [];
+  for (const [name, board, qty] of layout) {
+    const base = info[name];
+    if (!base || qty <= 0) continue;
+    rebuilt.push(Object.assign({}, base, { board, quantity: qty }));
+  }
+  if (rebuilt.length) state.cards = rebuilt;
+  renderDeck();
 }
 
 // Wire the decklist and sideboard boxes as drop targets (idempotent — uses
@@ -3025,6 +3057,7 @@ async function runSim() {
       ? Math.max(state.fixedHand.length, parseInt($("fixed-pad-size").value) || 7)
       : null,
     fixed_config: config ? JSON.parse(JSON.stringify(state.fixedConfig)) : null,
+    deck_layout: deckLayoutForRun(),  // maindeck/sideboard drags (empty = import)
   });
   try {
     const r = await api(`/api/sessions/${state.session.id}/simulate`, { method: "POST", body });
@@ -3999,6 +4032,8 @@ function normalizePileItem(raw) {
     target: asName(raw?.target) || null,
     // Exiled to the ante (Contract from Below, Darkpact, Demonic Attorney).
     anted: raw?.anted === true,
+    // The deck's companion — rendered with a "companion" badge in the companion zone.
+    companion: raw?.companion === true,
   };
 }
 
@@ -4046,6 +4081,14 @@ function pile(items, edit = {}) {
       card.append(el("div", {
         className: "suspend-badge", textContent: "⧗" + item.suspend,
         title: `Suspended — ${item.suspend} time counter${item.suspend === 1 ? "" : "s"} left`,
+      }));
+    }
+    // The deck's companion (shown in the companion zone for non-commander formats).
+    if (item.companion) {
+      card.classList.add("has-exile-src");
+      card.append(el("div", {
+        className: "companion-badge", textContent: "companion",
+        title: "This deck's companion",
       }));
     }
     // Anted: exiled to the ante (leaves the game in a goldfish).
@@ -4331,21 +4374,38 @@ function renderBoard(f, edit = {}) {
     el("div", { className: "zlabel", textContent: `Hand (${(f.hand || []).length})` }),
     el("div", { className: "tiles hand" }, ...(f.hand || []).map(handTile))), "hand");
 
-  // Command zone — commanders are draggable out and the box is a drop target
-  // (drag a commander back to return it here). Commander-tax number input each.
-  // In the replay, only show a commander that is ACTUALLY in the command zone:
-  // once it's on the battlefield (or elsewhere) its name must not linger here —
-  // same rule the fixed-config editor uses (only unplaced commanders show).
   const bfNames = new Set(bf.map((p) => p.name));
-  const cmdZone = ed ? (f.command_zone || [])
-    : (f.command_zone || []).filter((n) => !bfNames.has(n));
-  const cmdBox = dz(el("div", { className: "side-box" },
-    el("div", { className: "zlabel", textContent: `Command zone (${cmdZone.length})` }),
-    pile(cmdZone, {
-      dragZone: ed ? "command" : null,
-      onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
-    })), "command");
-  if (ed && edit.commanderTax && edit.commanderTax.length) {
+  // The command zone: commanders are draggable out and it is a drop target (drag a
+  // commander back to return it here). In the replay, only show a commander that is
+  // ACTUALLY in the command zone: once it's on the battlefield its name must not
+  // linger here — the same rule the fixed-config editor uses.
+  const commandZoneBox = () => {
+    const cmdZone = ed ? (f.command_zone || [])
+      : (f.command_zone || []).filter((n) => !bfNames.has(n));
+    return dz(el("div", { className: "side-box" },
+      el("div", { className: "zlabel", textContent: `Command zone (${cmdZone.length})` }),
+      pile(cmdZone, {
+        dragZone: ed ? "command" : null,
+        onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
+      })), "command");
+  };
+  // The companion zone (non-commander formats): show the deck's companion (a
+  // sideboard card with the companion ability) with a badge, or a striped "unused"
+  // box if the deck has none.
+  const companionZoneBox = () => {
+    const comp = (state.cards || []).find((c) => c.is_companion);
+    const box = el("div", { className: "side-box companion-box" + (comp ? "" : " companion-empty") },
+      el("div", { className: "zlabel", textContent: `Companion (${comp ? 1 : 0})` }));
+    if (comp) box.append(pile([{ name: comp.name, companion: true }]));
+    return box;
+  };
+  // Commander formats show a command zone; formats without a commander repurpose
+  // that slot as a COMPANION zone — the deck's companion (in the sideboard) shown
+  // with a badge, or a striped "unused" box if the deck has none.
+  const cmdBox = boardUsesCommander()
+    ? commandZoneBox()
+    : companionZoneBox();
+  if (boardUsesCommander() && ed && edit.commanderTax && edit.commanderTax.length) {
     const tax = el("div", { className: "fc-tax" });
     edit.commanderTax.forEach((t) => {
       const inp = el("input", { type: "number", min: "0", value: String(t.count), className: "fc-num" });

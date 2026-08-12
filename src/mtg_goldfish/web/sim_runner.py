@@ -24,9 +24,30 @@ from ..engine.simulator import (
     dumps_tree,  # noqa: F401 - re-exported (historical home of this helper)
     run_simulation,
 )
+from ..deck.models import DeckBoard, DeckEntry
 from ..properties import compile_all
 from ..session import Session, SessionCorrupt, SessionStore, SimConfig, SimResult, new_id, now_iso
 from .hub import HUB
+
+
+def _deck_for_run(deck, layout):
+    """The deck this run actually plays: the imported `deck`, or — when a per-run
+    maindeck/sideboard `layout` was captured (the user dragged cards before
+    running) — a copy with each card re-assigned to the board the layout gives it.
+    Sideboard cards are 'outside the game' (not shuffled into the library)."""
+    if not layout:
+        return deck
+    by_name = {e.card.name: e.card for e in deck.entries}
+    entries: list[DeckEntry] = []
+    for item in layout:
+        try:
+            name, board, qty = item[0], DeckBoard(item[1]), int(item[2])
+        except (IndexError, ValueError, TypeError):
+            continue
+        card = by_name.get(name)
+        if card is not None and qty > 0:
+            entries.append(DeckEntry(quantity=qty, board=board, card=card))
+    return deck.model_copy(update={"entries": entries}) if entries else deck
 
 
 class RunHandle:
@@ -287,7 +308,7 @@ class SimulationRunner:
             status = "stopped"
             try:
                 stats = run_simulation(
-                    session.deck,
+                    _deck_for_run(session.deck, config.deck_layout),
                     compiled,
                     sim_config,
                     on_game=on_game,

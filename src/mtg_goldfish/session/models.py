@@ -145,6 +145,13 @@ class SimConfig(BaseModel):
     fixed_hand_pad_to: int | None = None
     # Fixed-config mode: a fully-specified starting state; None = normal.
     fixed_config: FixedConfig | None = None
+    # Per-run maindeck/sideboard arrangement, captured when the user has dragged
+    # cards between the decklist and the sideboard before running. Each item is
+    # [card_name, board, quantity]; EMPTY means "use the deck as imported". The
+    # session's own deck is never changed by these drags — the arrangement lives
+    # with the run, so opening the session shows the import layout and loading a
+    # previous run reproduces its reorganisation.
+    deck_layout: list[list] = Field(default_factory=list)
 
 
 class SimResult(BaseModel):

@@ -240,6 +240,9 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
 
 /* Simulation / Fixed-hand tabs */
 .tabs { display: flex; gap: .3rem; margin-bottom: .8rem; border-bottom: 1px solid var(--border); }
+/* Simulation header: the tabs sit next to the title, the box-head line under both. */
+.sim-head { margin-bottom: .8rem; }
+.sim-head .tabs { margin: 0 0 -1px auto; border-bottom: none; }
 .tabs .tab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; color: var(--muted); margin-bottom: -1px; }
 .tabs .tab:hover { color: var(--text); border-color: var(--border); }
 .tabs .tab.active { color: var(--text); font-weight: 600; background: var(--panel-2); border-color: var(--border); border-bottom-color: var(--panel); }
@@ -463,6 +466,20 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
   font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 4px;
   border-radius: 4px; color: #1a1205; background: var(--accent);
   border: 1px solid rgba(255,255,255,.25); box-shadow: 0 1px 2px rgba(0,0,0,.55);
+}
+.pile-img .companion-badge {
+  position: absolute; bottom: 2px; left: 2px; right: 2px; z-index: 2;
+  font-size: 8px; line-height: 1.25; font-weight: 600; text-align: center;
+  padding: 1px 3px; border-radius: 4px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; color: #fff; text-transform: uppercase; letter-spacing: .5px;
+  background: rgba(92, 148, 120, .95); border: 1px solid rgba(255,255,255,.25);
+  box-shadow: 0 1px 2px rgba(0,0,0,.55);
+}
+/* Companion zone with no companion: striped background marking the slot unused. */
+.side-box.companion-empty {
+  background: repeating-linear-gradient(
+    45deg, rgba(255,255,255,.02), rgba(255,255,255,.02) 6px,
+    rgba(255,255,255,.05) 6px, rgba(255,255,255,.05) 12px);
 }
 .pile-img:hover { z-index: 5; outline: 2px solid var(--accent); }
 .pile-empty { color: var(--muted); font-size: 12px; }

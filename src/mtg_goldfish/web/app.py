@@ -106,6 +106,9 @@ class SimulateRequest(BaseModel):
     fixed_hand_pad_to: int | None = None
     # Fixed-config mode: a fully-specified starting state; None = normal.
     fixed_config: FixedConfig | None = None
+    # Per-run maindeck/sideboard arrangement ([name, board, quantity] items) —
+    # the drags the user made before running. Empty = the deck as imported.
+    deck_layout: list[list] = []
 
 
 # --------------------------------------------------------------------------
@@ -224,6 +227,7 @@ def card_view(deck: Deck) -> list[dict]:
             "faces": faces,
             "implemented": is_implemented(c.name),
             "is_land": c.is_land,
+            "is_companion": c.is_companion,  # marks the companion for the board's companion zone
             "power": _int_or_none(c.power),        # printed P/T (for altered-stat badges)
             "toughness": _int_or_none(c.toughness),
             "keywords": _keywords_with_values(c),  # printed keywords + numbered values (menu init)
@@ -484,7 +488,10 @@ def card_search(q: str = "") -> dict:
 def meta() -> dict:
     return {
         "version": __version__,
-        "formats": [{"id": f.id, "name": f.name} for f in list_formats()],
+        "formats": [
+            {"id": f.id, "name": f.name, "uses_commander": f.uses_commander}
+            for f in list_formats()
+        ],
         "phases": phase_labels(),
         "property_api_doc": STATE_API_DOC,
         "llm_provider": get_provider().name,
@@ -573,9 +580,24 @@ def list_sessions() -> dict:
     return {"sessions": store.list_sessions()}
 
 
+def _reset_to_import_layout(session) -> bool:
+    """Put every card back on its ORIGINAL import board (maindeck / sideboard).
+    Maindeck↔sideboard drags are per-RUN (stored in a run's `deck_layout`), so
+    the session's own deck always opens in its import layout. Returns True if the
+    stored deck changed (an old session where drags were persisted)."""
+    changed = False
+    for e in session.deck.entries:
+        if e.orig_board is not None and e.board != e.orig_board:
+            e.board = e.orig_board
+            changed = True
+    return changed
+
+
 @app.get("/api/sessions/{session_id}")
 def get_session(session_id: str) -> dict:
     session = _load(session_id)
+    if _reset_to_import_layout(session):
+        store.save(session)
     # A result still marked "running" while no simulation is live means the
     # app (or the run) crashed mid-flight. The run is persisted after every
     # completed game, so KEEP what was saved: mark it "interrupted" — it stays
@@ -974,6 +996,7 @@ async def simulate(session_id: str, req: SimulateRequest) -> dict:
         fixed_hand=(req.fixed_hand or None),
         fixed_hand_pad_to=(req.fixed_hand_pad_to if req.fixed_hand else None),
         fixed_config=req.fixed_config,
+        deck_layout=req.deck_layout or [],
     )
     try:
         result_id = runner.start(session, config, loop)
