@@ -1418,7 +1418,7 @@ def _seed_game(
         # wish pool per keep (below). It is NOT in the library, so padding, which
         # fills from the returned library remainder, never draws it.
         wanted = set(config.fixed_hand)
-        companions = [c for c in base_state.sideboard if c.name in wanted]
+        companions = [c for c in base_state.sideboard if c.is_companion and c.name in wanted]
         keeps = _fixed_opening_hand(companions + shuffled, config.fixed_hand, config.fixed_hand_pad_to)
     else:
         keeps = _opening_hands(shuffled, hand_size, config.mulligans)

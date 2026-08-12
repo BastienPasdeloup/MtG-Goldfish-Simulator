@@ -1289,17 +1289,19 @@ function setSimMode(mode) {
   updateDeckDimming();  // dim cards that can't be placed in this tab (L7)
 }
 
-// Cards that can be placed in a zone: mainboard cards, the commander(s), and the
-// companion (a sideboard card with the companion ability — droppable into any game
-// area from the sideboard list or the companion zone, even though it's "outside").
+// Cards that can be placed into a fixed-config game area: the maindeck, the
+// commander(s), AND the whole sideboard (any sideboard card — including the
+// companion — may be dropped into any zone from the sideboard list, even though
+// it's "outside the game"). Only used by fcAddToZone (fixed-config mode).
 function placeableCards() {
-  return state.cards.filter((c) => c.board === "mainboard" || c.board === "commander" || c.is_companion);
+  return state.cards.slice();
 }
 
 // L7: whether a decklist card can still be placed in the CURRENT tab's target.
 // Random-hand mode places nothing (never dims). Fixed-hand: mainboard cards (and
-// the companion), until the hand is full or all copies are in it. Fixed-config:
-// mainboard + commanders + the companion, until all copies are placed.
+// the companion from the sideboard), until the hand is full or all copies are in
+// it. Fixed-config: ANY card (maindeck, commander, or sideboard), until all copies
+// are placed across the zones.
 function cardPlaceableInTab(c) {
   const mode = state.simMode;
   if (mode === "fixed") {
@@ -1308,8 +1310,7 @@ function cardPlaceableInTab(c) {
       && fixedHandCount(c.name) < c.quantity;
   }
   if (mode === "config") {
-    return (c.board === "mainboard" || c.board === "commander" || c.is_companion)
-      && fcUsage(c.name) < c.quantity;
+    return fcUsage(c.name) < c.quantity;  // any card is placeable in a game area
   }
   return true;  // random-hand mode: nothing is placed, nothing is dimmed
 }
@@ -1327,11 +1328,14 @@ function updateDeckDimming() {
     const c = rowCard(row);
     row.classList.toggle("unplaceable", !!c && !cardPlaceableInTab(c));
   });
-  // The sideboard's only placeable card is the companion — dim ONLY it once it has
-  // been placed; regular sideboard cards are never greyed.
+  // Sideboard rows: in fixed-config ANY sideboard card is placeable into a game
+  // area (dim it once placed); in fixed-hand only the companion is (dim only it).
+  // In every other case a sideboard row is never greyed.
   $("sideboard-cards").querySelectorAll(".card-row").forEach((row) => {
     const c = rowCard(row);
-    if (c && c.is_companion) row.classList.toggle("unplaceable", !cardPlaceableInTab(c));
+    if (!c) return;
+    const relevant = state.simMode === "config" || c.is_companion;
+    row.classList.toggle("unplaceable", relevant && !cardPlaceableInTab(c));
   });
 }
 
