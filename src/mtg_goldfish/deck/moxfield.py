@@ -164,5 +164,3 @@ def _validate_roles(deck: Deck, warnings: list[str]) -> None:
                 f"{entry.card.name!r} is marked as a companion but has no "
                 "companion ability."
             )
-    if not deck.commanders:
-        warnings.append("No commander detected in this deck.")

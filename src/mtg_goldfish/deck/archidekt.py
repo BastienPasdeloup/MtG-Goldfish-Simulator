@@ -113,10 +113,28 @@ def _iter_board_cards(raw: dict) -> list[tuple[DeckBoard, str, int]]:
     return out
 
 
-def fetch_deck_signature(url: str) -> list[tuple[str, str, int]]:
-    """The deck's CURRENT content signature (matches `deck_signature`'s shape)."""
+def fetch_deck_signature(url: str, scryfall: ScryfallClient | None = None
+                         ) -> list[tuple[str, str, int]]:
+    """The deck's CURRENT content signature (matches `deck_signature`'s shape).
+
+    Names are resolved through Scryfall to their canonical `front // back` form —
+    exactly as `import_archidekt_deck` does — so a just-imported deck doesn't look
+    "changed" only because Archidekt prints a DFC front-face-only or spells a name
+    differently (accents, punctuation)."""
+    scryfall = scryfall or ScryfallClient()
     raw = _fetch_archidekt_json(extract_deck_id(url))
-    return sorted((b.value, name, qty) for b, name, qty in _iter_board_cards(raw))
+    board_cards = _iter_board_cards(raw)
+    index = scryfall.get_collection(sorted({n for _, n, _ in board_cards}))
+    rows: list[tuple[str, str, int]] = []
+    for board, name, qty in board_cards:
+        card = index.get(name)
+        if card is None:
+            try:
+                card = scryfall.get_named(name)
+            except ScryfallError:
+                card = None
+        rows.append((board.value, card.name if card else name, qty))
+    return sorted(rows)
 
 
 def import_archidekt_deck(

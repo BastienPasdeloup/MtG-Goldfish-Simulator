@@ -780,8 +780,8 @@ function renderDeck() {
   container.replaceChildren();
   const total = main.reduce((n, c) => n + c.quantity, 0);
   const approx = main.filter((c) => !c.implemented).length;
-  $("deck-summary").textContent = `${total} cards` +
-    (approx ? ` · ${approx} not yet implemented (in red)` : "");
+  $("deck-summary").textContent = `(${total} cards` +
+    (approx ? ` · ${approx} not yet implemented (in red)` : "") + ")";
 
   const order = Object.keys(groups).sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
@@ -807,7 +807,7 @@ function renderSideboard(side, cmp) {
   if (!side.length) { box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
   const n = side.reduce((s, c) => s + c.quantity, 0);
-  $("sideboard-summary").textContent = `${n} cards`;
+  $("sideboard-summary").textContent = `(${n} cards)`;
   side.slice().sort(cmp).forEach((c) => cont.append(cardRow(c)));
 }
 
@@ -815,16 +815,43 @@ function renderSideboard(side, cmp) {
 // sideboard boxes act as drop targets that MOVE the card between boards.
 let dragCardRef = null;
 
-// Persist + re-render a card moved between the maindeck and the sideboard.
-function moveCardTo(card, toBoard) {
+// Drop a card on the other list: if it has more than one copy, ask how many to
+// move (a −/+ popup at the cursor); a single copy moves straight away.
+function promptMove(card, toBoard, ev) {
+  if (!card || !state.session || card.board === toBoard) return;
+  if (card.quantity > 1) {
+    const short = card.name.split(",")[0].split(" // ")[0];
+    fcCountPopup(ev.clientX, ev.clientY, {
+      label: `Move how many ${short}? (1–${card.quantity})`,
+      max: card.quantity, button: "Move",
+      onConfirm: (n) => moveCardTo(card, toBoard, n),
+    });
+  } else {
+    moveCardTo(card, toBoard, 1);
+  }
+}
+
+// Persist + re-render `n` copies of a card moved between the maindeck and the
+// sideboard (n omitted / ≥ quantity moves every copy).
+function moveCardTo(card, toBoard, n) {
   if (!card || !state.session || card.board === toBoard) return;
   const from = card.board;
-  card.board = toBoard;
+  const moveAll = (n == null || n >= card.quantity);
+  n = moveAll ? card.quantity : Math.max(1, Math.min(n, card.quantity));
+  if (moveAll) {
+    card.board = toBoard;
+  } else {
+    card.quantity -= n;
+    const tgt = state.cards.find((c) => c.name === card.name && c.board === toBoard);
+    if (tgt) tgt.quantity += n;
+    else state.cards.push(Object.assign({}, card, { board: toBoard, quantity: n }));
+  }
   renderDeck();
   api(`/api/sessions/${state.session.id}/move-card`, {
     method: "POST",
-    body: JSON.stringify({ name: card.name, from_board: from, to_board: toBoard }),
-  }).catch(() => { card.board = from; renderDeck(); });  // revert on failure
+    body: JSON.stringify({ name: card.name, from_board: from, to_board: toBoard,
+                           quantity: moveAll ? null : n }),
+  }).catch(() => openSession(state.session.id));  // resync from server on failure
 }
 
 // Wire the decklist and sideboard boxes as drop targets (idempotent — uses
@@ -838,15 +865,16 @@ function setupDeckDrop() {
     box.ondragleave = () => box.classList.remove("drop-target");
     box.ondrop = (e) => {
       box.classList.remove("drop-target");
-      if (!dragCardRef) return;
+      const card = dragCardRef;  // capture: dragend clears it before the popup confirms
+      if (!card) return;
       e.preventDefault();
-      onDrop(dragCardRef);
+      onDrop(card, e);
     };
   };
   // Dropping on the decklist returns a card to its original non-sideboard board
   // (so a commander dragged out and back stays a commander); default mainboard.
-  target(deck, (c) => moveCardTo(c, c._origBoard && c._origBoard !== "sideboard" ? c._origBoard : "mainboard"));
-  target(sb, (c) => moveCardTo(c, "sideboard"));
+  target(deck, (c, e) => promptMove(c, c._origBoard && c._origBoard !== "sideboard" ? c._origBoard : "mainboard", e));
+  target(sb, (c, e) => promptMove(c, "sideboard", e));
 }
 
 function hoverable(node, img, meta = null) {

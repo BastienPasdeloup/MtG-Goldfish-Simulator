@@ -77,6 +77,7 @@ class MoveCardRequest(BaseModel):
     name: str
     from_board: str
     to_board: str
+    quantity: int | None = None  # None = move every copy
 
 
 class PropertiesUpdate(BaseModel):
@@ -160,9 +161,21 @@ def _fresh_card(card):
     huge) session files — CACHE-ONLY, no network (so session open/create stays
     fast). New card fetches already prefer the Beta scan over Alpha; existing
     cached Alpha scans heal when their cache entry is next re-fetched
-    (`ScryfallClient.refresh_alpha_scans`, or clearing the cache)."""
-    from ..deck.scryfall import ScryfallClient
-    return ScryfallClient()._read_cache(card.name) or card
+    (`ScryfallClient.refresh_alpha_scans`, or clearing the cache).
+
+    EXCEPTION: a card wrongly cached from an art-series printing (`art_series`
+    layout — a real card and its art card share a name, e.g. Demonic Counsel) IS
+    re-fetched once here. These are rare (a couple per deck), so this stays fast
+    and heals the image on already-imported sessions without a re-import."""
+    from ..deck.scryfall import ScryfallClient, _is_art_series
+    sc = ScryfallClient()
+    cached = sc._read_cache(card.name)
+    if cached is not None and _is_art_series(cached):
+        try:
+            cached = sc.get_named(card.name, refresh=True)
+        except Exception:  # noqa: BLE001 - best effort; keep the cached copy
+            pass
+    return cached or card
 
 
 def card_view(deck: Deck) -> list[dict]:
@@ -580,21 +593,39 @@ def move_card(session_id: str, req: MoveCardRequest) -> dict:
     """Move a card between the mainboard and the sideboard (dragged in the UI).
     Sideboard cards are 'outside the game' — kept out of the library and only
     reachable by wish effects (Ring of Ma'rûf)."""
-    from ..deck.models import DeckBoard
+    from ..deck.models import DeckBoard, DeckEntry
 
     session = _load(session_id)
     try:
         from_b, to_b = DeckBoard(req.from_board), DeckBoard(req.to_board)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Bad board: {exc}") from exc
-    moved = 0
-    for entry in session.deck.entries:
-        if entry.card.name == req.name and entry.board == from_b:
-            entry.board = to_b
-            moved += 1
-    if not moved:
+    from_entries = [e for e in session.deck.entries
+                    if e.card.name == req.name and e.board == from_b]
+    if not from_entries:
         raise HTTPException(status_code=404,
                             detail=f"{req.name!r} not found on {req.from_board}.")
+    total = sum(e.quantity for e in from_entries)
+    n = total if req.quantity is None else max(1, min(req.quantity, total))
+    if n >= total:  # move every copy — just relabel the entries' board
+        for entry in from_entries:
+            entry.board = to_b
+    else:  # partial move: take n copies off the source, add them to the target
+        remaining = n
+        card = from_entries[0].card
+        for entry in from_entries:
+            take = min(entry.quantity, remaining)
+            entry.quantity -= take
+            remaining -= take
+            if remaining == 0:
+                break
+        session.deck.entries = [e for e in session.deck.entries if e.quantity > 0]
+        merged = next((e for e in session.deck.entries
+                       if e.card.name == req.name and e.board == to_b), None)
+        if merged is not None:
+            merged.quantity += n
+        else:
+            session.deck.entries.append(DeckEntry(quantity=n, board=to_b, card=card))
     store.save(session)
     return session_payload(session)
 

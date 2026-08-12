@@ -27,6 +27,12 @@ def _safe_filename(name: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in name.lower()) + ".json"
 
 
+def _is_art_series(card: CardData) -> bool:
+    """A card wrongly cached from an art-series printing (same name as the real
+    card). Its `layout` is 'art_series' — detect so we re-fetch the real card."""
+    return getattr(card, "layout", "") == "art_series"
+
+
 def _parse_face(raw: dict) -> CardFace:
     img = (raw.get("image_uris") or {}).get("normal")
     return CardFace(
@@ -124,7 +130,8 @@ class ScryfallClient:
                 continue
             if not card.name or card.name.startswith("__id__"):
                 continue
-            if only_missing_set and getattr(card, "set", "") not in ("", "lea"):
+            if only_missing_set and getattr(card, "set", "") not in ("", "lea") \
+                    and not _is_art_series(card):
                 continue
             try:
                 self.get_named(card.name, refresh=True)
@@ -184,15 +191,26 @@ class ScryfallClient:
         Alpha (`lea`) is EXCLUDED: Alpha scans have the distinctive rounded
         corners / off-centre art, so a card whose earliest printing is Alpha uses
         its BETA (`leb`) scan instead (the next printing). Cards not in Alpha are
-        unaffected."""
+        unaffected.
+
+        Non-playable same-name printings are EXCLUDED too — an art-series card
+        (`layout:art_series`, in a `memorabilia` set) and tokens share the card's
+        name and can release on the same day, so without this filter they'd sort
+        first and we'd fetch the ART CARD instead of the real one (Demonic Counsel,
+        Shadow Prophecy)."""
         try:
             resp = self._get(client, "/cards/search", {
-                "q": f'!"{name}" game:paper -set:lea', "unique": "prints",
-                "order": "released", "dir": "asc"})
+                "q": (f'!"{name}" game:paper -set:lea '
+                      "-st:memorabilia -st:token -st:minigame -layout:art_series"),
+                "unique": "prints", "order": "released", "dir": "asc"})
             if resp.status_code == 200:
                 data = resp.json().get("data") or []
-                if data:
-                    return data[0]
+                # Belt-and-suspenders: skip any art/token printing that slipped in.
+                for raw in data:
+                    if raw.get("layout") == "art_series" or \
+                            raw.get("set_type") in ("memorabilia", "token", "minigame"):
+                        continue
+                    return raw
         except Exception:  # noqa: BLE001 - best-effort; fall back below
             pass
         return None
@@ -218,6 +236,8 @@ class ScryfallClient:
         the cache read (used to repopulate cards fetched before a schema change,
         e.g. to pick up `token_parts`)."""
         cached = None if refresh else self._read_cache(name)
+        if cached and _is_art_series(cached):
+            cached = None  # a wrongly-cached art card — re-fetch the real card
         if cached:
             return cached
         with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=20) as client:
@@ -242,7 +262,7 @@ class ScryfallClient:
         missing: list[str] = []
         for name in names:
             cached = self._read_cache(name)
-            if cached:
+            if cached and not _is_art_series(cached):
                 result[name] = cached
             else:
                 missing.append(name)
