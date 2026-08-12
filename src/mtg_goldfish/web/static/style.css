@@ -169,6 +169,12 @@ body:has(#session-view:not(.hidden)) footer.appfooter { display: none; }
 }
 .card-row .moved-badge.sb { color: #e0a54f; border-color: #e0a54f88; }
 .card-row .moved-badge.md { color: #6fb3a6; border-color: #6fb3a688; }
+/* Role tag in a decklist row (e.g. the deck's companion), MTGTop8-style. */
+.card-row .role-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .5px; padding: 0 .28rem;
+  border-radius: 3px; margin-right: .35rem; text-transform: uppercase;
+  background: rgba(92, 148, 120, .18); border: 1px solid #5c9478aa; color: #7bc0a2;
+}
 .deck-controls { position: sticky; top: 0; background: var(--panel); padding: .9rem 0 .5rem; margin-bottom: .2rem; border-bottom: 1px solid var(--border); z-index: 3; }
 /* A separator line under a box's title (Properties / Simulation / Progress /
    Games), matching the Decklist box's header rule. */
@@ -466,14 +472,6 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
   font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 4px;
   border-radius: 4px; color: #1a1205; background: var(--accent);
   border: 1px solid rgba(255,255,255,.25); box-shadow: 0 1px 2px rgba(0,0,0,.55);
-}
-.pile-img .companion-badge {
-  position: absolute; bottom: 2px; left: 2px; right: 2px; z-index: 2;
-  font-size: 8px; line-height: 1.25; font-weight: 600; text-align: center;
-  padding: 1px 3px; border-radius: 4px; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; color: #fff; text-transform: uppercase; letter-spacing: .5px;
-  background: rgba(92, 148, 120, .95); border: 1px solid rgba(255,255,255,.25);
-  box-shadow: 0 1px 2px rgba(0,0,0,.55);
 }
 /* Companion zone with no companion: striped background marking the slot unused. */
 .side-box.companion-empty {

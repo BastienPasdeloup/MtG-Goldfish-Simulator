@@ -720,7 +720,18 @@ def deck_check(session_id: str) -> dict:
         current = fetch_deck_signature(url, session.deck.format_id)
     except (MoxfieldError, MTGTop8Error, ArchidektError) as exc:
         return {"checked": False, "error": str(exc)}
-    return {"checked": True, "changed": current != deck_signature(session.deck)}
+    # Compare CONTENT, not entry layout: a source (or the import) that lists the
+    # same card on two lines (e.g. "1 Choke" + "1 Choke") must read the same as one
+    # "2 Choke" line — so aggregate both sides by (board, name) before comparing,
+    # otherwise an unchanged deck falsely reports "changed".
+    def _agg(sig) -> list:
+        totals: dict[tuple[str, str], int] = {}
+        for board, name, qty in sig:
+            totals[(board, name)] = totals.get((board, name), 0) + qty
+        return sorted((b, n, q) for (b, n), q in totals.items())
+
+    changed = _agg(current) != _agg(deck_signature(session.deck))
+    return {"checked": True, "changed": changed}
 
 
 # --------------------------------------------------------------------------

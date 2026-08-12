@@ -922,7 +922,8 @@ function hoverable(node, img, meta = null) {
 
 function cardRow(c) {
   const row = el("div", { className: "card-row" + (c.implemented ? "" : " unimpl") });
-  row.dataset.cname = c.name;  // used by updateDeckDimming (L7)
+  row.dataset.cname = c.name;   // used by updateDeckDimming (L7)
+  row.dataset.board = c.board;  // disambiguates a card that is in BOTH boards (split move)
   // Drag a deck card straight into a Fixed-config zone / the fixed hand — the
   // left decklist IS the card source (no separate picker). Carries the card name;
   // the zone/hand drop handlers add it.
@@ -941,6 +942,14 @@ function cardRow(c) {
       className: "moved-badge " + (wasSb ? "sb" : "md"),
       title: wasSb ? "moved here from the sideboard" : "moved here from the maindeck",
       textContent: wasSb ? "SB" : "MD",
+    }));
+  }
+  // The deck's companion gets a "companion" tag in the decklist (à la MTGTop8).
+  if (c.is_companion) {
+    row.append(el("span", {
+      className: "role-badge companion",
+      title: "This deck's companion",
+      textContent: "companion",
     }));
   }
 
@@ -1307,7 +1316,11 @@ function cardPlaceableInTab(c) {
 // tab (re-run on tab switch and after every hand/config change).
 function updateDeckDimming() {
   $("deck-cards").querySelectorAll(".card-row").forEach((row) => {
-    const c = state.cards.find((x) => x.name === row.dataset.cname);
+    // Match on BOTH name and board: after a partial maindeck↔sideboard move the
+    // same name exists in two rows, and a name-only lookup could grab the
+    // sideboard copy (never placeable) and wrongly grey out the maindeck row.
+    const c = state.cards.find((x) => x.name === row.dataset.cname && x.board === row.dataset.board)
+      || state.cards.find((x) => x.name === row.dataset.cname);
     row.classList.toggle("unplaceable", !!c && !cardPlaceableInTab(c));
   });
 }
@@ -4032,8 +4045,6 @@ function normalizePileItem(raw) {
     target: asName(raw?.target) || null,
     // Exiled to the ante (Contract from Below, Darkpact, Demonic Attorney).
     anted: raw?.anted === true,
-    // The deck's companion — rendered with a "companion" badge in the companion zone.
-    companion: raw?.companion === true,
   };
 }
 
@@ -4081,14 +4092,6 @@ function pile(items, edit = {}) {
       card.append(el("div", {
         className: "suspend-badge", textContent: "⧗" + item.suspend,
         title: `Suspended — ${item.suspend} time counter${item.suspend === 1 ? "" : "s"} left`,
-      }));
-    }
-    // The deck's companion (shown in the companion zone for non-commander formats).
-    if (item.companion) {
-      card.classList.add("has-exile-src");
-      card.append(el("div", {
-        className: "companion-badge", textContent: "companion",
-        title: "This deck's companion",
       }));
     }
     // Anted: exiled to the ante (leaves the game in a goldfish).
@@ -4390,13 +4393,13 @@ function renderBoard(f, edit = {}) {
       })), "command");
   };
   // The companion zone (non-commander formats): show the deck's companion (a
-  // sideboard card with the companion ability) with a badge, or a striped "unused"
-  // box if the deck has none.
+  // sideboard card with the companion ability), or a striped "unused" box if the
+  // deck has none. The "companion" tag lives in the decklist row, not on the card.
   const companionZoneBox = () => {
     const comp = (state.cards || []).find((c) => c.is_companion);
     const box = el("div", { className: "side-box companion-box" + (comp ? "" : " companion-empty") },
       el("div", { className: "zlabel", textContent: `Companion (${comp ? 1 : 0})` }));
-    if (comp) box.append(pile([{ name: comp.name, companion: true }]));
+    if (comp) box.append(pile([comp.name]));
     return box;
   };
   // Commander formats show a command zone; formats without a commander repurpose
