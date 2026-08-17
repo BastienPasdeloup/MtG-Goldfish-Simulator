@@ -965,12 +965,13 @@ function cardRow(c) {
       textContent: wasSb ? "SB" : "MD",
     }));
   }
-  // Commander (⚔) and companion (🐾) get a role icon next to the card name.
+  // Commander (⚔) and companion (🐾) get a role icon next to the card name — the
+  // SAME `.role-ico` styling (colour, size, alignment) as the main-page sublines.
   if (c.board === "commander") {
-    row.append(el("span", { className: "role-badge commander", title: "commander", textContent: COMMANDER_ICON }));
+    row.append(el("span", { className: "role-ico commander", title: "commander", textContent: COMMANDER_ICON }));
   }
   if (c.is_companion) {
-    row.append(el("span", { className: "role-badge companion", title: "This deck's companion", textContent: COMPANION_ICON }));
+    row.append(el("span", { className: "role-ico companion", title: "This deck's companion", textContent: COMPANION_ICON }));
   }
 
   const nameWrap = el("span", { className: "cname" });

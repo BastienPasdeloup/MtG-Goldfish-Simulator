@@ -169,10 +169,13 @@ body:has(#session-view:not(.hidden)) footer.appfooter { display: none; }
 }
 .card-row .moved-badge.sb { color: #e0a54f; border-color: #e0a54f88; }
 .card-row .moved-badge.md { color: #6fb3a6; border-color: #6fb3a688; }
-/* Role icon in a decklist row (commander ⚔ / companion 🐾). The paw emoji renders
-   dark, so it's brightened. */
-.card-row .role-badge { font-size: 12px; margin-right: .3rem; line-height: 1; }
-.card-row .role-badge.companion { filter: brightness(1.6); }
+/* Role icon (commander ⚔ / companion 🐾), shared by the decklist rows AND the
+   main-page sublines: a fixed-width centered column so the icons align; ⚔ is
+   muted-grey and enlarged, the paw emoji is sized down and brightened (renders
+   dark). */
+.role-ico { display: inline-block; width: 15px; text-align: center; margin-right: .35rem; line-height: 1; }
+.role-ico.commander { font-size: 1.15em; color: var(--muted); }
+.role-ico.companion { font-size: .82em; filter: brightness(1.6); }
 .deck-controls { position: sticky; top: 0; background: var(--panel); padding: .9rem 0 .5rem; margin-bottom: .2rem; border-bottom: 1px solid var(--border); z-index: 3; }
 /* A separator line under a box's title (Properties / Simulation / Progress /
    Games), matching the Decklist box's header rule. */
@@ -593,12 +596,8 @@ table.sessions-table th {
 table.sessions-table .numc { text-align: center; font-variant-numeric: tabular-nums; }
 table.sessions-table .nowrap { white-space: nowrap; }
 table.sessions-table .sub { font-size: 12px; margin-top: .1rem; }
-/* Role icon in a fixed-width column so commander/companion names line up. The width
-   is in px (NOT em) so the companion's smaller font-size doesn't narrow the column
-   and shift its name left. The paw emoji is sized down and brightened (it renders
-   dark). */
-table.sessions-table .sub .role-ico { display: inline-block; width: 15px; text-align: center; margin-right: .35rem; }
-table.sessions-table .sub .role-ico.companion { font-size: .82em; filter: brightness(1.6); }
+/* (Role icons — the shared `.role-ico` rule above — style the commander/companion
+   sublines here too, so the main page and the decklist match.) */
 table.sessions-table tbody tr.session-row { cursor: pointer; }
 table.sessions-table tbody tr.session-row:hover { background: var(--panel-2); }
 /* Per-row Delete button (same "danger" style as the deck page, compact). */
