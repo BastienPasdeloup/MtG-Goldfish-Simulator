@@ -385,6 +385,12 @@ class Card:
         from Cairo). Read by `GameState.damage_self`."""
         return False
 
+    def redirects_artifact_damage(self, state: "GameState", perm: "Permanent") -> bool:
+        """True while this permanent redirects to itself all damage that would be
+        dealt to you by artifacts (Martyrs of Korlis, while untapped). Read by
+        `GameState.damage_self(by_artifact=True)`."""
+        return False
+
     def prevents_life_loss_defeat(self, state: "GameState", perm: "Permanent") -> bool:
         """True while this permanent stops you losing the game for having 0 or less
         life (Lich: "You don't lose the game for having 0 or less life"). Read by
@@ -742,6 +748,14 @@ class Card:
         time a LAND is tapped for mana — Manabarbs ("1 damage to that player"),
         Psychic Venom ("2 damage when the enchanted land is tapped"). Fired by
         `pay_cost`. Keep effects non-branching (they run mid-payment)."""
+
+    def on_artifact_tapped_for_mana(self, state: "GameState", perm: "Permanent",
+                                    artifact: "Permanent") -> None:
+        """Broadcast to EVERY battlefield permanent (`perm` = the watcher) each time
+        an ARTIFACT is tapped for mana — Haunting Wind ("1 damage to that artifact's
+        controller"), Artifact Possession (2 damage when the enchanted artifact
+        taps). Fired by `pay_cost`. Keep effects non-branching (they run
+        mid-payment)."""
 
     def extra_land_drops(self, state: "GameState", perm: "Permanent") -> int:
         """Additional land plays per turn granted while on the battlefield

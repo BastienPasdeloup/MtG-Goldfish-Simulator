@@ -435,6 +435,11 @@ class GameState:
     left_graveyard_this_turn: bool = False  # a card left your graveyard this turn
     deaths_this_turn: int = 0  # creatures that died this turn (Scavenging Ghoul, Soul Net)
     damage_taken_this_turn: int = 0  # damage dealt to YOU this turn (Simulacrum)
+    # Damage dealt to YOU this turn BY ARTIFACTS (Reverse Polarity), and the number
+    # of "prevent the next artifact-source damage instance" shields (Circle of
+    # Protection: Artifacts). Both reset each turn.
+    artifact_damage_this_turn: int = 0
+    artifact_prevent_instances: int = 0
     # Moonmist: combat damage by creatures other than Werewolves/Wolves is
     # prevented this turn (checked in deal_combat_damage).
     prevent_nonwolf_combat_damage: bool = False
@@ -580,6 +585,8 @@ class GameState:
             left_graveyard_this_turn=self.left_graveyard_this_turn,
             deaths_this_turn=self.deaths_this_turn,
             damage_taken_this_turn=self.damage_taken_this_turn,
+            artifact_damage_this_turn=self.artifact_damage_this_turn,
+            artifact_prevent_instances=self.artifact_prevent_instances,
             game_result=self.game_result,
             game_result_reason=self.game_result_reason,
             prevent_nonwolf_combat_damage=self.prevent_nonwolf_combat_damage,
@@ -783,6 +790,8 @@ class GameState:
         self.left_graveyard_this_turn = False
         self.deaths_this_turn = 0
         self.damage_taken_this_turn = 0
+        self.artifact_damage_this_turn = 0
+        self.artifact_prevent_instances = 0
         self.prevent_nonwolf_combat_damage = False
         self.prevent_all_combat_damage = False
         self.prevent_shields = []
@@ -968,12 +977,30 @@ class GameState:
         self.check_life_totals()
         return dealt
 
-    def damage_self(self, amount: int, colors: tuple = ()) -> int:
+    def damage_self(self, amount: int, colors: tuple = (), by_artifact: bool = False) -> int:
         """Deal `amount` damage to YOU, applying prevention shields (Circle of
         Protection — colour-matched; Conservator — any). `colors` are the source's
-        colours. Card code that pings you (Ankh, Copper Tablet, Cursed Land, Dingus
-        Egg...) should call this instead of `life -= n` so prevention can apply.
-        Returns the damage actually taken."""
+        colours. `by_artifact` marks damage from an ARTIFACT source (Mana Vault,
+        Ankh, Copper Tablet, an artifact creature...) — it may be redirected to a
+        Martyrs of Korlis, prevented by a Circle of Protection: Artifacts shield, and
+        is tallied for Reverse Polarity. Card code that pings you should call this
+        instead of `life -= n` so prevention/redirection can apply. Returns the
+        damage actually taken (0 if fully redirected/prevented)."""
+        # Martyrs of Korlis: while untapped, artifact damage to you is dealt to it.
+        if by_artifact and amount > 0:
+            martyr = next((p for p in self.battlefield
+                           if not p.tapped and p.impl.redirects_artifact_damage(self, p)), None)
+            if martyr is not None:
+                self.emit(f"Martyrs of Korlis: {amount} artifact damage redirected to it")
+                self.damage_permanent(martyr, amount)
+                self.check_deaths()
+                return 0
+        # Circle of Protection: Artifacts — each shield prevents ONE whole artifact
+        # damage instance.
+        if by_artifact and amount > 0 and self.artifact_prevent_instances > 0:
+            self.artifact_prevent_instances -= 1
+            self.emit(f"Circle of Protection: Artifacts — prevent {amount} artifact damage")
+            return 0
         colset = set(colors)
         remaining = amount
         for shield in list(self.prevent_shields):
@@ -1005,6 +1032,8 @@ class GameState:
         if remaining > 0:
             self.life -= remaining
             self.damage_taken_this_turn += remaining
+            if by_artifact:
+                self.artifact_damage_this_turn += remaining
             # "Whenever you're dealt damage ..." (Living Artifact) — fire on every
             # battlefield permanent with the actual amount taken.
             for p in list(self.battlefield):

@@ -1932,3 +1932,56 @@ def test_damping_field_untap_artifact_limit():
     state = _state([])
     df = state.put_on_battlefield(card("Damping Field"))
     assert df.impl.untap_artifact_limit(state, df) == 1
+
+
+def test_martyrs_redirects_artifact_damage():
+    state = _state([])
+    m = state.put_on_battlefield(card("Martyrs of Korlis"))
+    life = state.life
+    taken = state.damage_self(3, by_artifact=True)
+    assert taken == 0 and state.life == life and m.damage == 3  # redirected while untapped
+    m.tapped = True
+    state.damage_self(2, by_artifact=True)
+    assert state.life == life - 2  # tapped -> no redirect
+    # non-artifact damage is never redirected
+    m.tapped = False
+    state.damage_self(1)
+    assert state.life == life - 3
+
+
+def test_reverse_polarity_gains_twice_artifact_damage():
+    from mtg_goldfish.cards import build_card
+    state = _state([])
+    state.damage_self(3, by_artifact=True)
+    life = state.life
+    build_card(card("Reverse Polarity")).on_resolve(state)
+    assert state.life == life + 6
+
+
+def test_cop_artifacts_prevents_one_instance():
+    state = _state([])
+    state.artifact_prevent_instances = 1
+    life = state.life
+    taken = state.damage_self(5, by_artifact=True)
+    assert taken == 0 and state.life == life and state.artifact_prevent_instances == 0
+    taken = state.damage_self(5, by_artifact=True)  # no shield left
+    assert taken == 5 and state.life == life - 5
+
+
+def test_haunting_wind_pings_on_artifact_tap():
+    from mtg_goldfish.engine.actions import pay_cost
+    from mtg_goldfish.engine.mana import ManaCost
+    state = _state([])
+    state.put_on_battlefield(card("Haunting Wind"))
+    state.put_on_battlefield(card("Sol Ring"))  # the only mana source
+    life = state.life
+    ok = pay_cost(state, ManaCost(generic=1))
+    assert ok and state.life == life - 1  # tapping the artifact pinged you 1
+
+
+def test_tetravus_enters_as_flier_and_splits():
+    state = _state([])
+    perm = state.put_on_battlefield(card("Tetravus"))
+    assert perm.counters.get("+1/+1") == 3 and state.effective_power(perm) == 4
+    branches = perm.impl.on_phase(state, perm, __import__("mtg_goldfish.engine.phases", fromlist=["Phase"]).Phase.UPKEEP)
+    assert branches and len(branches) >= 2  # nothing + splits

@@ -28,7 +28,7 @@ class MishrasWarMachine(Card):
         def fn(st, opt):
             if opt == "take":
                 live = st.find_permanent(perm.uid)
-                dealt = st.damage_self(3)
+                dealt = st.damage_self(3, by_artifact=True)
                 if live is not None:
                     live.tapped = True
                 st.emit(f"Mishra's War Machine: take {dealt} damage and tap ({st.life})")

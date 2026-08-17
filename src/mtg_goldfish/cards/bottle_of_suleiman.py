@@ -38,7 +38,7 @@ class BottleOfSuleiman(Card):
                     tok.extra_keywords.add("flying")
                     s.emit("Bottle of Suleiman: won the flip — 5/5 flying Djinn")
                 else:
-                    dealt = s.damage_self(5)
+                    dealt = s.damage_self(5, by_artifact=True)
                     s.emit(f"Bottle of Suleiman: lost the flip — {dealt} damage to you")
                 return None
             return st.settle(branch_over(st, ["heads", "tails"], fn))

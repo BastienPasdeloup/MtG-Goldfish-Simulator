@@ -17,4 +17,4 @@ class DingusEgg(Card):
     def on_other_leave(self, state, perm, left, to, reason):
         if left.is_land and to == "graveyard":
             state.emit(f"Dingus Egg: {left.name} died — deals 2 damage to you")
-            state.damage_self(2)
+            state.damage_self(2, by_artifact=True)

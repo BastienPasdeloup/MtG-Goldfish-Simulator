@@ -35,7 +35,7 @@ class ArmageddonClock(Card):
         elif phase == Phase.DRAW:
             n = p.counters.get("doom", 0)
             if n > 0:
-                dealt = state.damage_self(n)
+                dealt = state.damage_self(n, by_artifact=True)
                 state.emit(f"Armageddon Clock: {dealt} damage to you ({state.life})")
         return None
 

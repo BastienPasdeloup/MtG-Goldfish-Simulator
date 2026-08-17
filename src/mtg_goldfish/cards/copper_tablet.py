@@ -15,5 +15,5 @@ class CopperTablet(Card):
 
     def on_phase(self, state, perm, phase):
         state.emit("Copper Tablet: deals 1 damage to you")
-        state.damage_self(1)
+        state.damage_self(1, by_artifact=True)
         return None

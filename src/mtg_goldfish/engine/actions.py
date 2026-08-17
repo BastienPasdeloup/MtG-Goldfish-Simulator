@@ -151,6 +151,9 @@ def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0,
         if perm.is_land:  # broadcast: Manabarbs / Psychic Venom watch land taps
             for watcher in list(state.battlefield):
                 watcher.impl.on_land_tapped_for_mana(state, watcher, perm, color)
+        if perm.is_artifact:  # broadcast: Haunting Wind / Artifact Possession
+            for watcher in list(state.battlefield):
+                watcher.impl.on_artifact_tapped_for_mana(state, watcher, perm)
         taps.append(f"{perm.name}→{color}")
     if taps:
         state.emit(f"tap for mana: {', '.join(taps)}  pool={_pool_str(state.mana_pool)}")

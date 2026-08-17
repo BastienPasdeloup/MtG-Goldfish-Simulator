@@ -16,4 +16,4 @@ class AnkhOfMishra(Card):
     def on_other_etb(self, state, perm, entering):
         if entering.is_land:
             state.emit(f"Ankh of Mishra: {entering.name} entered — deals 2 damage to you")
-            state.damage_self(2)
+            state.damage_self(2, by_artifact=True)

@@ -41,7 +41,7 @@ class ManaVault(Card):
             return None
         if phase == Phase.DRAW:
             if p.tapped:
-                dealt = state.damage_self(1)
+                dealt = state.damage_self(1, by_artifact=True)
                 state.emit(f"Mana Vault: {dealt} damage to you (still tapped)")
             return None
         # UPKEEP: may pay {4} to untap (only meaningful while tapped)
