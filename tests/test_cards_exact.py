@@ -1836,3 +1836,66 @@ def test_replay_shows_altered_pt_and_color():
     g = GameState()
     g.put_on_battlefield(card("Psychic Frog"))
     assert "power" not in g.snapshot()["battlefield"][0]
+
+
+# ---- Antiquities set ------------------------------------------------------
+def test_triskelion_enters_and_pings():
+    state = _state([])
+    perm = state.put_on_battlefield(card("Triskelion"))
+    assert perm.counters.get("+1/+1") == 3
+    assert state.effective_power(perm) == 4 and state.effective_toughness(perm) == 4
+    acts = [a for a in legal_actions(state) if a.label.startswith("Triskelion: remove")]
+    opp = next(a for a in acts if "opponent" in a.label)
+    before = state.opponent_life
+    opp.apply(state)
+    assert state.opponent_life == before - 1
+    assert state.permanents_named("Triskelion")[0].counters.get("+1/+1") == 2
+
+
+def test_atog_sacrifices_artifact_for_pump():
+    state = _state([])
+    state.put_on_battlefield(card("Atog"))
+    state.put_on_battlefield(card("Yotian Soldier"))  # a spare artifact to eat
+    acts = [a for a in legal_actions(state) if a.label.startswith("Atog:")]
+    assert acts
+    acts[0].apply(state)
+    atog = state.permanents_named("Atog")[0]
+    assert state.effective_power(atog) == 3 and state.effective_toughness(atog) == 4
+    assert not state.has_permanent_named("Yotian Soldier")
+
+
+def test_ashnods_altar_sacrifice_for_mana():
+    state = _state([])
+    state.put_on_battlefield(card("Ashnod's Altar"))
+    state.put_on_battlefield(card("Yotian Soldier"))
+    before = state.mana_pool.total()
+    acts = [a for a in legal_actions(state) if a.label.startswith("Ashnod's Altar:")]
+    assert acts
+    acts[0].apply(state)
+    assert state.mana_pool.total() - before == 2
+
+
+def test_su_chi_death_makes_mana():
+    state = _state([])
+    perm = state.put_on_battlefield(card("Su-Chi"))
+    before = state.mana_pool.total()
+    perm.impl.on_leave(state, perm)
+    assert state.mana_pool.total() - before == 4
+
+
+def test_onulet_death_gains_life():
+    state = _state([])
+    perm = state.put_on_battlefield(card("Onulet"))
+    before = state.life
+    perm.impl.on_leave(state, perm)
+    assert state.life == before + 2
+
+
+def test_priest_of_yawgmoth_mana_from_mv():
+    state = _state([])
+    state.put_on_battlefield(card("Priest of Yawgmoth"))
+    state.put_on_battlefield(card("Su-Chi"))  # mana value 4
+    before = state.mana_pool.amounts.get("B", 0)
+    act = next(a for a in legal_actions(state) if a.label.startswith("Priest of Yawgmoth:"))
+    act.apply(state)
+    assert state.mana_pool.amounts.get("B", 0) - before == 4
