@@ -379,7 +379,7 @@ function renderSessionList() {
       const active = key === h;
       th.append(el("span", { className: "sortv" + (active ? " active" : ""),
         textContent: active && dir === -1 ? "▴" : "▾" }));
-      th.title = "sort by " + h.toLowerCase();
+      th.title = "Sort by " + h.toLowerCase();
       th.onclick = () => { state.sessionsSort = { key: h, dir: key === h ? -dir : 1 }; renderSessionList(); };
     }
     return th;
@@ -407,7 +407,7 @@ function renderSessionList() {
     for (const c of (s.companions || [])) fmtCell.append(roleSub(COMPANION_ICON, "companion", c));
     const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
     delBtn.onclick = (e) => { e.stopPropagation(); deleteSessionRow(s.id, s.name); };
-    return el("tr", { className: "session-row", title: "open this session",
+    return el("tr", { className: "session-row", title: "Open this session",
                       onclick: () => openSession(s.id) },
       el("td", {}, el("b", { textContent: s.name })),
       fmtCell,
@@ -621,7 +621,7 @@ async function openRunsModal() {
         el("button", {
           className: "danger",
           textContent: "Delete",
-          title: "remove this run from the session",
+          title: "Remove this run from the session",
           onclick: async (e) => {
             e.stopPropagation();
             try { await api(`/api/sessions/${state.session.id}/results/${r.id}`, { method: "DELETE" }); }
@@ -637,7 +637,7 @@ async function openRunsModal() {
         el("td", {},
           el("span", { className: "big", textContent: `${((st.success_rate || 0) * 100).toFixed(1)}%` }),
           el("div", { className: "pp", textContent: `${st.successes || 0}/${gr}` })),
-        el("td", { title: "games completed / games asked",
+        el("td", { title: "Games completed / games asked",
                    textContent: `${gr}/${cfg.num_games ?? "?"}` }),
         handCell,
         el("td", { textContent: String(mulligansShown) }),
@@ -968,10 +968,10 @@ function cardRow(c) {
   // Commander (⚔) and companion (🐾) get a role icon next to the card name — the
   // SAME `.role-ico` styling (colour, size, alignment) as the main-page sublines.
   if (c.board === "commander") {
-    row.append(el("span", { className: "role-ico commander", title: "commander", textContent: COMMANDER_ICON }));
+    row.append(el("span", { className: "role-ico commander", title: "Commander", textContent: COMMANDER_ICON }));
   }
   if (c.is_companion) {
-    row.append(el("span", { className: "role-ico companion", title: "This deck's companion", textContent: COMPANION_ICON }));
+    row.append(el("span", { className: "role-ico companion", title: "Companion", textContent: COMPANION_ICON }));
   }
 
   const nameWrap = el("span", { className: "cname" });
@@ -1191,7 +1191,7 @@ function propRow(p, i) {
         label.append(el("span", {
           className: "confidence conf-" + c,
           textContent: c + " confidence",
-          title: "the model's confidence that this code matches your English",
+          title: "The model's confidence that this code matches your English",
         }));
       }
     };
@@ -2845,7 +2845,7 @@ function buildMenu(items, cancelUp = () => {}, sort = true) {
     if (it.kwrow) {
       const k = it.kwrow;
       const chk = el("span", { className: "ctx-check", textContent: k.checked() ? "✓" : "" });
-      const eot = el("button", { className: "ctx-eot" + (k.eot() ? " on" : ""), title: "until end of turn", textContent: "EOT" });
+      const eot = el("button", { className: "ctx-eot" + (k.eot() ? " on" : ""), title: "Until end of turn", textContent: "EOT" });
       const parts = [chk, el("span", { className: "ctx-label", textContent: k.label })];
       // A keyword that carries a value (ward N, rampage N, annihilator N…) shows
       // an INLINE −/+ stepper on its own row; plain keywords show none.
@@ -3052,10 +3052,10 @@ function renderFixedBuilder() {
   for (let i = 0; i < slots; i++) {
     const name = state.fixedHand[i];
     if (!name) {
-      minis.append(el("div", { className: "mini back", title: "random card — added when the game starts" }));
+      minis.append(el("div", { className: "mini back", title: "Random card — added when the game starts" }));
       continue;
     }
-    const m = el("div", { className: "mini", title: "click to remove" });
+    const m = el("div", { className: "mini", title: "Click to remove" });
     const img = state.imageMap[name];
     if (img) m.append(el("img", { src: img, alt: name, loading: "lazy" }));
     else m.append(el("div", { className: "fallback", textContent: name }));
@@ -3357,7 +3357,7 @@ function runsTable(runs) {
           className: "sortv" + (active ? " active" : ""),
           textContent: active && dir === -1 ? "▴" : "▾",
         }));
-        th.title = "sort by " + h.toLowerCase();
+        th.title = "Sort by " + h.toLowerCase();
         th.onclick = () => {
           state.runsSort = { key: h, dir: key === h ? -dir : 1 };
           renderRunsTable();
@@ -3388,12 +3388,12 @@ function runsTable(runs) {
     // The timeout ⏱ marker now lives in the Time column, not the Result cell.
     if (!run.running && run.timed_out) title += " — timed out before the search completed";
 
-    const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "hover to see the opening hand" });
+    const handIcon = el("span", { className: "hand-icon", textContent: "✋", title: "Hover to see the opening hand" });
     hoverGrid(handIcon, run.hand || []);
 
     const treeCell = (run.tree || run.tree_gz || run.has_tree)
       ? (() => {
-          const b = el("span", { className: "icon-btn", textContent: "🌳", title: "open the explored-states tree in a new tab" });
+          const b = el("span", { className: "icon-btn", textContent: "🌳", title: "Open the explored-states tree in a new tab" });
           b.onclick = (e) => { e.stopPropagation(); openTree(run, i); };
           return b;
         })()
@@ -3407,7 +3407,7 @@ function runsTable(runs) {
     if (run.running) {
       // Skip this game — abandon its search (counts as a failure), move on.
       const skip = el("button", { className: "danger skip-btn", textContent: "Skip",
-        title: "abandon this game and move to the next (counts as a failure)" });
+        title: "Abandon this game and move to the next (counts as a failure)" });
       skip.onclick = (e) => {
         e.stopPropagation();
         skip.disabled = true; skip.textContent = "skipping…";
@@ -3436,19 +3436,19 @@ function runsTable(runs) {
     } else {
       timeCell.textContent = fmtSecs(run.elapsed_s);
       if (run.timed_out) {
-        timeCell.append(el("span", { className: "muted", title: "timed out before the search completed", textContent: " ⏱" }));
+        timeCell.append(el("span", { className: "muted", title: "Timed out before the search completed", textContent: " ⏱" }));
       }
     }
     tr.append(
       resultCell,
       el("td", { className: "cc" }, handIcon),
-      el("td", { className: "numc", title: "steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
+      el("td", { className: "numc", title: "Steps in the winning line", textContent: canReplay ? String(run.frames.length) : "—" }),
       el("td", { className: "numc", textContent: num(run.branches_explored) }),
       el("td", { className: "numc", textContent: num(run.branches_considered) }),
       timeCell);
     if (anyTree) tr.append(el("td", { className: "cc" }, treeCell));  // Tree column only when saved
     if (canReplay) {
-      tr.title = "click to replay the winning line below";
+      tr.title = "Click to replay the winning line below";
       tr.onclick = () => { highlightGame(i, true); openBoard(i); };
     }
     tbody.append(tr);
@@ -3501,7 +3501,7 @@ function hoverGrid(node, names, backs = 0) {
         }),
         // Card backs for the random-padding slots of a fixed hand.
         ...Array.from({ length: backs }, () =>
-          el("div", { className: "gback", title: "random card (padding)" })),
+          el("div", { className: "gback", title: "Random card (padding)" })),
       );
     }
     g.style.display = "grid";
@@ -3959,14 +3959,14 @@ function tile(name, opts = {}) {
     t.append(face);
   } else if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
   else t.append(el("div", { className: "fallback", textContent: name }));
-  if (opts.commander) t.append(el("div", { className: "badge cmd-badge", title: "commander", textContent: COMMANDER_ICON }));
-  if (opts.copy) t.append(el("div", { className: "badge copy", title: "a copy", textContent: "copy" }));
+  if (opts.commander) t.append(el("div", { className: "badge cmd-badge", title: "Commander", textContent: COMMANDER_ICON }));
+  if (opts.copy) t.append(el("div", { className: "badge copy", title: "A copy", textContent: "copy" }));
   // Variable P/T (a characteristic-defining ability, e.g. Barrowgoyf's */*):
   // the printed card gives no number, so the current values are always shown.
   if (!opts.token && opts.power != null && opts.toughness != null) {
     t.append(el("div", {
       className: "badge pt",
-      title: `current power/toughness: ${opts.power}/${opts.toughness}`,
+      title: `Current power/toughness: ${opts.power}/${opts.toughness}`,
       textContent: `${opts.power}/${opts.toughness}`,
     }));
   }
@@ -3974,7 +3974,7 @@ function tile(name, opts = {}) {
   if (!opts.token && opts.recolored) {
     const cols = opts.colors || [];
     const pips = el("div", { className: "badge colors",
-      title: "colours: " + (cols.join("") || "colorless") });
+      title: "Colours: " + (cols.join("") || "colorless") });
     (cols.length ? cols : ["C"]).forEach((c) =>
       pips.append(el("span", { className: "cpip c-" + c })));
     t.append(pips);
@@ -4003,7 +4003,7 @@ function tile(name, opts = {}) {
     if (opts.deadpoolFrom) {
       row.append(el("div", {
         className: "badge ctr deadpool",
-        title: `text box exchanged with ${opts.deadpoolFrom}`,
+        title: `Text box exchanged with ${opts.deadpoolFrom}`,
         textContent: `↔ ${opts.deadpoolFrom.split(",")[0].split(" // ")[0]}`,
       }));
     }
@@ -4011,7 +4011,7 @@ function tile(name, opts = {}) {
     if (opts.chosen) {
       row.append(el("div", {
         className: "badge ctr chosen",
-        title: `enters as: ${opts.chosen}`,
+        title: `Enters as: ${opts.chosen}`,
         textContent: opts.chosen,
       }));
     }
@@ -4019,7 +4019,7 @@ function tile(name, opts = {}) {
     for (const kw of granted) {
       row.append(el("div", {
         className: "badge kw",
-        title: `has ${kw} (granted until end of turn)`,
+        title: `Has ${kw} (granted until end of turn)`,
         textContent: KW_SHORT[kw] || kw,
       }));
     }
@@ -4111,7 +4111,7 @@ function pile(items, edit = {}) {
     // Card backs keep an informative tooltip; a real card shows NO name tooltip
     // (just the zoom on hover).
     if (isRestBack) card.title = `${raw.count} more shuffled card${raw.count === 1 ? "" : "s"}`;
-    else if (isUnknown) card.title = raw.count > 1 ? `${raw.count} unknown cards` : "unknown card (a random card at this depth)";
+    else if (isUnknown) card.title = raw.count > 1 ? `${raw.count} unknown cards` : "Unknown card (a random card at this depth)";
     if (isRestBack) card.append(el("div", { className: "back-count", textContent: String(raw.count) }));
     // A fused run shows just the number; a lone unknown shows nothing.
     else if (isUnknown) { if (raw.count > 1) card.append(el("div", { className: "back-count-run", textContent: String(raw.count) })); }
@@ -4146,7 +4146,7 @@ function pile(items, edit = {}) {
       card.classList.add("has-exile-src");
       card.append(el("div", {
         className: "target-badge", textContent: "→ " + item.target,
-        title: `targets ${item.target}`,
+        title: `Targets ${item.target}`,
       }));
     }
     if (edit.onMenu) {
