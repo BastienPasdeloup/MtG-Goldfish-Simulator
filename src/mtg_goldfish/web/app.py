@@ -335,6 +335,12 @@ def deck_tokens(deck: Deck) -> list[dict]:
                 spec = {"name": tp.get("name") or "Token",
                         "type_line": tp.get("type_line") or "Token",
                         "power": None, "toughness": None, "colors": [], "image": None}
+            # A "copy" effect ("create a token that's a copy of X") appears in
+            # Scryfall's all_parts as a generic "Copy" placeholder token — skip it
+            # from the default list; the "Add copy…" menu option (pick which card to
+            # copy) covers it.
+            if (spec["name"] or "").strip().lower() == "copy":
+                continue
             key = (spec["name"], spec["power"], spec["toughness"], tuple(spec["colors"]))
             seen.setdefault(key, spec)
 
