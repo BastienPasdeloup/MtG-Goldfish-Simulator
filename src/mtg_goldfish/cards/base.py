@@ -700,6 +700,12 @@ class Card:
         untap step takes the min across all such permanents)."""
         return None
 
+    def untap_artifact_limit(self, state: "GameState", perm: "Permanent") -> int | None:
+        """Max number of ARTIFACTS their controller may untap during the untap step,
+        while this permanent is in play (Damping Field / Static Orb: 1). None = no
+        limit (the untap step takes the min across all such permanents)."""
+        return None
+
     def artifact_mana_grant(self, state: "GameState", perm: "Permanent") -> "ManaAbility | None":
         """A mana ability GRANTED to each untapped artifact you control while this
         permanent is in play — "Tap an untapped artifact you control: Add {U}"

@@ -1899,3 +1899,36 @@ def test_priest_of_yawgmoth_mana_from_mv():
     act = next(a for a in legal_actions(state) if a.label.startswith("Priest of Yawgmoth:"))
     act.apply(state)
     assert state.mana_pool.amounts.get("B", 0) - before == 4
+
+
+def test_primal_clay_enters_as_chosen_body():
+    state = _state([])
+    perm = state.put_on_battlefield(card("Primal Clay"))
+    branches = perm.impl.enter_choices(state, perm)
+    assert branches and len(branches) == 3
+    pts = set()
+    for b in branches:
+        pc = b.permanents_named("Primal Clay")[0]
+        pts.add((b.effective_power(pc), b.effective_toughness(pc)))
+    assert (3, 3) in pts and (2, 2) in pts and (1, 6) in pts
+
+
+def test_tawnos_weaponry_buff_tied_to_tapped():
+    state = _state([])
+    state.put_on_battlefield(card("Tawnos's Weaponry"))
+    state.put_on_battlefield(card("Yotian Soldier"))  # 1/4 artifact creature
+    state.mana_pool.add("C", 5)
+    act = next(a for a in legal_actions(state) if a.label.startswith("Tawnos's Weaponry:"))
+    act.apply(state)
+    weap = state.permanents_named("Tawnos's Weaponry")[0]
+    tgt = state.permanents_named("Yotian Soldier")[0]
+    assert weap.tapped
+    assert state.effective_power(tgt) == 2 and state.effective_toughness(tgt) == 5
+    weap.tapped = False  # untapping ends the buff
+    assert state.effective_power(tgt) == 1 and state.effective_toughness(tgt) == 4
+
+
+def test_damping_field_untap_artifact_limit():
+    state = _state([])
+    df = state.put_on_battlefield(card("Damping Field"))
+    assert df.impl.untap_artifact_limit(state, df) == 1

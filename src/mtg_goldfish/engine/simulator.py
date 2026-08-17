@@ -371,7 +371,7 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
         # Untap restrictions (Winter Orb: ≤1 land while untapped; Winter Moon:
         # ≤1 nonbasic land). Limits are the min across all such permanents, read
         # BEFORE anything untaps (so Winter Orb's own tapped state still counts).
-        land_limit = nonbasic_limit = creature_limit = None
+        land_limit = nonbasic_limit = creature_limit = artifact_limit = None
         for p in state.battlefield:
             ll = p.impl.untap_land_limit(state, p)
             if ll is not None:
@@ -382,7 +382,10 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             cl = p.impl.untap_creature_limit(state, p)
             if cl is not None:
                 creature_limit = cl if creature_limit is None else min(creature_limit, cl)
-        lands_up = nonbasic_up = creatures_up = 0
+            al = p.impl.untap_artifact_limit(state, p)
+            if al is not None:
+                artifact_limit = al if artifact_limit is None else min(artifact_limit, al)
+        lands_up = nonbasic_up = creatures_up = artifacts_up = 0
         for perm in state.battlefield:
             perm.summoning_sick = False
             # Basalt Monolith & co. don't untap during the untap step.
@@ -392,12 +395,19 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
             # creatures with power 3+ don't untap).
             if any(o.impl.prevents_untap(state, o, perm) for o in state.battlefield):
                 continue
+            # Damping Field / Static Orb: untap at most N artifacts (checked first,
+            # since an artifact may also be a creature/land).
+            if perm.is_artifact and perm.tapped and artifact_limit is not None \
+                    and artifacts_up >= artifact_limit:
+                continue
             # Smoke: untap at most N creatures.
             if perm.is_creature_now and perm.tapped and creature_limit is not None:
                 if creatures_up >= creature_limit:
                     continue
                 perm.tapped = False
                 creatures_up += 1
+                if perm.is_artifact:
+                    artifacts_up += 1
                 continue
             if perm.is_land and perm.tapped and (land_limit is not None or nonbasic_limit is not None):
                 is_basic = "basic" in perm.type_line.lower()
@@ -409,7 +419,11 @@ def _apply_step_entry(state: GameState) -> list[GameState] | None:
                 lands_up += 1
                 if not is_basic:
                     nonbasic_up += 1
+                if perm.is_artifact:
+                    artifacts_up += 1
             else:
+                if perm.tapped and perm.is_artifact:
+                    artifacts_up += 1
                 perm.tapped = False
         state.mana_pool.clear()
     elif state.phase == Phase.UPKEEP:
