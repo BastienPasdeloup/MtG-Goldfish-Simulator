@@ -4447,10 +4447,16 @@ function renderBoard(f, edit = {}) {
       stack.append(el("div", { className: "cmd-companion", title: `${comp.name} — companion` },
         pile([comp.name], ed ? { addDrag: true } : {})));
     }
-    stack.append(el("div", { className: "cmd-commanders" }, pile(cmdZone, {
-      dragZone: ed ? "command" : null,
-      onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
-    })));
+    // Render the commander pile UNLESS it's empty AND a companion is shown: an empty
+    // pile still reserves a card's height and (via the -83px overlap + z-index) would
+    // cover all but the companion's top strip — so once the commander is moved into
+    // play the companion stands alone and stays fully hoverable/draggable.
+    if (cmdZone.length || !showComp) {
+      stack.append(el("div", { className: "cmd-commanders" }, pile(cmdZone, {
+        dragZone: ed ? "command" : null,
+        onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
+      })));
+    }
     box.append(stack);
     return box;
   };
