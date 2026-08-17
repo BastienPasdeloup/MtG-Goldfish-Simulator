@@ -83,6 +83,10 @@ CURRENT total ("opponent at N or less", "opponent is dead") -> state.opponent_li
 state.opponent_lost() (a rules- and effect-based check, broader than life — PREFER \
 it over "opponent_life <= 0" for a game-loss property). "you lose the game" / \
 "you deck out" -> state.you_lost(). "the game is over / decided" -> state.game_over().
+- Companion (a card with the companion ability): "a companion is in hand" -> \
+state.companion_in_hand(); "a companion is on the battlefield / in the graveyard" -> \
+state.companions_in("battlefield") >= 1 / state.companions_in("graveyard") >= 1. A \
+card object also has `.is_companion` (e.g. any(c.is_companion for c in state.hand)).
 - Commander leaving play / the command zone: "the commander leaves play / dies / \
 is exiled" -> commander_left_play(...); "the commander leaves play AND returns \
 to the command zone" (or just "returns to the command zone") -> \

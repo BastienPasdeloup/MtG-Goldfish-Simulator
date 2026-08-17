@@ -206,7 +206,14 @@ Raw objects (full flexibility — inspect any state detail directly):
       .attached_to (host uid or None), .uid
   state.hand / state.graveyard / state.exile / state.library -> lists of cards
       (each with .name, .cmc, .type_line, .is_land, .is_creature, .colors,
-       .is_double_faced, .faces, .oracle_text)
+       .is_double_faced, .faces, .oracle_text, .is_companion)
+
+Companion (a card with the companion ability — starts OUTSIDE the game):
+  state.companion_in_hand() -> bool       # a companion is in your hand
+  state.companions_in(zone: str) -> int   # companions in "hand" / "graveyard" /
+      # "exile" / "library" / "battlefield"
+    # "a companion is in hand"        -> state.companion_in_hand()
+    # "a companion is on the battlefield" -> state.companions_in("battlefield") >= 1
 
 Creature stats (on the battlefield):
   state.total_power() -> int

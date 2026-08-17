@@ -965,13 +965,12 @@ function cardRow(c) {
       textContent: wasSb ? "SB" : "MD",
     }));
   }
-  // The deck's companion gets an animal-icon tag in the decklist (à la MTGTop8).
+  // Commander (⚔) and companion (🐾) get a role icon next to the card name.
+  if (c.board === "commander") {
+    row.append(el("span", { className: "role-badge commander", title: "commander", textContent: COMMANDER_ICON }));
+  }
   if (c.is_companion) {
-    row.append(el("span", {
-      className: "role-badge companion",
-      title: "This deck's companion",
-      textContent: COMPANION_ICON,
-    }));
+    row.append(el("span", { className: "role-badge companion", title: "This deck's companion", textContent: COMPANION_ICON }));
   }
 
   const nameWrap = el("span", { className: "cname" });
@@ -1419,7 +1418,9 @@ function fcFaceIsPermanent(face) {
 // placement), just like an aura with no host.
 function fcCanPlace(name, zone) {
   if (zone === "battlefield") return true;
-  if (zone === "command") return fcIsCommander(name);
+  // The command zone holds commanders AND (for a commander deck) the companion —
+  // so a placed companion can be dragged back here (returning it "outside").
+  if (zone === "command") return fcIsCommander(name) || !!fcCardMeta(name).is_companion;
   return ["hand", "graveyard", "exile", "library"].includes(zone);
 }
 
@@ -3957,7 +3958,7 @@ function tile(name, opts = {}) {
     t.append(face);
   } else if (img) t.append(el("img", { src: img, alt: name, loading: "lazy" }));
   else t.append(el("div", { className: "fallback", textContent: name }));
-  if (opts.commander) t.append(el("div", { className: "badge", textContent: "CMD" }));
+  if (opts.commander) t.append(el("div", { className: "badge cmd-badge", title: "commander", textContent: COMMANDER_ICON }));
   if (opts.copy) t.append(el("div", { className: "badge copy", title: "a copy", textContent: "copy" }));
   // Variable P/T (a characteristic-defining ability, e.g. Barrowgoyf's */*):
   // the printed card gives no number, so the current values are always shown.

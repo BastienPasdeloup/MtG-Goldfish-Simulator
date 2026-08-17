@@ -1805,6 +1805,20 @@ class GameState:
     def battlefield_names(self) -> list[str]:
         return [p.name for p in self.battlefield]
 
+    def companions_in(self, zone: str = "hand") -> int:
+        """How many companions (cards with the companion ability) are in a zone —
+        "hand", "graveyard", "exile", "library", or "battlefield"."""
+        cards = {
+            "hand": self.hand, "graveyard": self.graveyard, "exile": self.exile,
+            "library": self.library,
+            "battlefield": [p.card for p in self.battlefield],
+        }.get(zone, [])
+        return sum(1 for c in cards if getattr(c, "is_companion", False))
+
+    def companion_in_hand(self) -> bool:
+        """Whether a companion (a card with the companion ability) is in your hand."""
+        return self.companions_in("hand") > 0
+
     def _creatures(self) -> list[Permanent]:
         return [p for p in self.battlefield if p.is_creature_now]
 
