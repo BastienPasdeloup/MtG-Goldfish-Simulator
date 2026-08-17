@@ -396,15 +396,15 @@ function renderSessionList() {
 
   const rows = sorted.map((s) => {
     const fmtCell = el("td", {}, el("div", { textContent: formatName(s.format_id) }));
-    // Commander / companion subline(s) — only for decks that have them.
-    for (const c of s.commanders) {
-      const name = hoverable(el("span", { textContent: COMMANDER_ICON + " " + c.name }), c.image);
-      fmtCell.append(el("div", { className: "muted sub" }, name));
-    }
-    for (const c of (s.companions || [])) {
-      const name = hoverable(el("span", { textContent: COMPANION_ICON + " " + c.name }), c.image);
-      fmtCell.append(el("div", { className: "muted sub" }, name));
-    }
+    // Commander / companion subline(s) — only for decks that have them. The icon
+    // sits in a fixed-width column so the names line up (the paw emoji is wider than
+    // the ⚔ glyph, so it's also sized down via CSS).
+    const roleSub = (icon, roleClass, c) =>
+      el("div", { className: "muted sub" },
+        el("span", { className: "role-ico " + roleClass, textContent: icon }),
+        hoverable(el("span", { textContent: c.name }), c.image));
+    for (const c of s.commanders) fmtCell.append(roleSub(COMMANDER_ICON, "commander", c));
+    for (const c of (s.companions || [])) fmtCell.append(roleSub(COMPANION_ICON, "companion", c));
     const delBtn = el("button", { className: "danger row-del", textContent: "Delete" });
     delBtn.onclick = (e) => { e.stopPropagation(); deleteSessionRow(s.id, s.name); };
     return el("tr", { className: "session-row", title: "open this session",
@@ -4434,17 +4434,18 @@ function renderBoard(f, edit = {}) {
       : (f.command_zone || []).filter((n) => !bfNames.has(n));
     const box = dz(el("div", { className: "side-box" },
       el("div", { className: "zlabel", textContent: `Command zone (${cmdZone.length})` })), "command");
-    // A commander deck may ALSO have a companion: it sits BEHIND the commander(s)
-    // here (a display reminder — drag it into play from the sideboard box below,
-    // not from here); it disappears once placed in the editor.
+    // A commander deck may ALSO have a companion: it stacks in the command zone
+    // BEHIND the commander(s) — peeking at the top like a second commander in the
+    // pile. It's a real pile card (hoverable, and draggable into a game area in the
+    // editor); it leaves the zone once placed.
     const comp = (state.cards || []).find((c) => c.is_companion);
     const showComp = comp && !(ed && fcUsage(comp.name) >= comp.quantity);
     const stack = el("div", { className: "cmd-stack" });
     if (showComp) {
-      stack.append(el("div", { className: "companion-behind", title: `${comp.name} — companion` },
-        pile([comp.name])));
+      stack.append(el("div", { className: "cmd-companion", title: `${comp.name} — companion` },
+        pile([comp.name], ed ? { addDrag: true } : {})));
     }
-    stack.append(el("div", { className: "cmd-front" }, pile(cmdZone, {
+    stack.append(el("div", { className: "cmd-commanders" }, pile(cmdZone, {
       dragZone: ed ? "command" : null,
       onMenu: ed && edit.onCommandMenu ? (idx, name, ev) => edit.onCommandMenu(idx, name, ev) : null,
     })));

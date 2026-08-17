@@ -475,15 +475,13 @@ img.ms { height: 15px; width: 15px; display: inline-block; }
     45deg, rgba(255,255,255,.02), rgba(255,255,255,.02) 6px,
     rgba(255,255,255,.05) 6px, rgba(255,255,255,.05) 12px);
 }
-/* Command zone of a commander deck that ALSO has a companion: the companion sits
-   BEHIND the commander(s) — offset up/right, dimmed, a display-only reminder. */
-.cmd-stack { position: relative; display: inline-block; }
-.cmd-stack .cmd-front { position: relative; z-index: 1; }
-.cmd-stack .companion-behind {
-  position: absolute; top: -13px; left: 20px; z-index: 0;
-  transform: scale(.82); transform-origin: top left;
-  opacity: .85; filter: brightness(.68); pointer-events: none;
-}
+/* Command zone of a commander deck that ALSO has a companion: the companion stacks
+   BEHIND the commander(s) — peeking at the top like a second commander in the pile
+   (hoverable + draggable), just slightly dimmed to mark it as the companion. */
+.cmd-stack { display: flex; flex-direction: column; }
+.cmd-stack .cmd-companion { position: relative; z-index: 0; filter: brightness(.9); }
+.cmd-stack .cmd-commanders { position: relative; z-index: 1; }
+.cmd-stack .cmd-companion + .cmd-commanders { margin-top: -83px; } /* overlap like a pile */
 .pile-img:hover { z-index: 5; outline: 2px solid var(--accent); }
 .pile-empty { color: var(--muted); font-size: 12px; }
 /* Library card backs: an "unknown card" pinned at a depth (a run of N fuses to
@@ -591,6 +589,10 @@ table.sessions-table th {
 table.sessions-table .numc { text-align: center; font-variant-numeric: tabular-nums; }
 table.sessions-table .nowrap { white-space: nowrap; }
 table.sessions-table .sub { font-size: 12px; margin-top: .1rem; }
+/* Role icon in a fixed-width column so commander/companion names line up. The paw
+   emoji renders wider than the ⚔ glyph, so it's sized down to match. */
+table.sessions-table .sub .role-ico { display: inline-block; width: 1.2em; text-align: center; margin-right: .35rem; }
+table.sessions-table .sub .role-ico.companion { font-size: .82em; }
 table.sessions-table tbody tr.session-row { cursor: pointer; }
 table.sessions-table tbody tr.session-row:hover { background: var(--panel-2); }
 /* Per-row Delete button (same "danger" style as the deck page, compact). */
