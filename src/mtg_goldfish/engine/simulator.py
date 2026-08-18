@@ -1317,6 +1317,10 @@ def _build_fixed_variant(base_state: GameState, fixed: dict, seed: int) -> GameS
     for sym, n in (fixed.get("mana_pool") or {}).items():
         if n:
             variant.mana_pool.add(sym, int(n))
+    for code, cols in (fixed.get("mana_restricted") or {}).items():
+        for sym, n in (cols or {}).items():
+            if n:
+                variant.mana_pool.add_restricted(sym, int(n), code)
     variant.turn = max(1, int(fixed.get("turn", 1)))
     try:
         variant.phase = Phase(fixed.get("phase", "precombat_main"))

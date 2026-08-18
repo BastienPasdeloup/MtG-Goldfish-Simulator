@@ -2038,6 +2038,10 @@ class GameState:
             "commander_cast": {n: c for n, c in self.commander_cast_count.items() if c},
             "stack": [stack_item_view(c) for c in self.stack],
             "mana_pool": {k: v for k, v in self.mana_pool.amounts.items() if v},
+            # Restricted mana ({restriction_code: {colour: n}}) — shown with a badge.
+            "mana_restricted": {code: {c: n for c, n in cols.items() if n}
+                                for code, cols in self.mana_pool.restricted.items()
+                                if any(cols.values())},
             "battlefield": [self._perm_view(p) for p in self.battlefield],
             "counters": {
                 "spells": self.spells_cast_this_turn,

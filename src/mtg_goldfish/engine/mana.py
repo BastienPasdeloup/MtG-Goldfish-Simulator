@@ -15,6 +15,25 @@ COLORS = ("W", "U", "B", "R", "G")
 COLORLESS = "C"
 ALL_PIPS = COLORS + (COLORLESS,)
 
+# Restricted mana: mana that may be spent only for certain purposes. A restriction
+# is a single-letter code (shown as a badge on the mana symbol) mapped to the set
+# of payment "purposes" it is allowed for and a human tooltip.
+#   "A" = artifact-only (Mishra's Workshop, Powerstone): cast artifact spells.
+RESTRICTION_LABELS = {
+    "A": "Can be spent only to cast artifact spells",
+}
+# Which payment purposes each restriction allows. `pay(..., allow=<purposes>)` is
+# called with the current purpose; a restricted chunk is usable iff its code's
+# allowed-purpose set intersects `allow`.
+RESTRICTION_PURPOSES = {
+    "A": frozenset({"artifact_spell"}),
+}
+
+
+def usable_restrictions(allow: frozenset) -> frozenset:
+    """The restriction CODES whose allowed purposes intersect `allow`."""
+    return frozenset(code for code, ps in RESTRICTION_PURPOSES.items() if ps & allow)
+
 _SYMBOL_RE = re.compile(r"\{([^}]+)\}")
 
 
@@ -82,6 +101,9 @@ class ManaAbility:
     amount: int = 1
     choices: tuple[str, ...] = (COLORLESS,)
     life_cost: int = 0
+    #: Restriction code on the mana this ability produces ("" = unrestricted;
+    #: "A" = artifact-only, e.g. Mishra's Workshop / a Powerstone token).
+    restriction: str = ""
 
     @property
     def is_fixed(self) -> bool:
@@ -90,48 +112,96 @@ class ManaAbility:
 
 @dataclass
 class ManaPool:
-    """Available mana, by colour. Colourless is stored under 'C'."""
+    """Available mana, by colour (colourless under 'C'). `restricted` holds mana
+    that may be spent only for certain purposes, keyed by restriction code then
+    colour: e.g. {"A": {"C": 3}} = 3 artifact-only colourless. Restricted mana is
+    always spent BEFORE unrestricted (use-it-or-lose-it), and only when the payment
+    allows its restriction."""
 
     amounts: dict[str, int] = field(default_factory=lambda: {p: 0 for p in ALL_PIPS})
+    restricted: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def copy(self) -> "ManaPool":
-        return ManaPool(amounts=dict(self.amounts))
+        return ManaPool(amounts=dict(self.amounts),
+                        restricted={k: dict(v) for k, v in self.restricted.items()})
 
     def add(self, color: str, n: int = 1) -> None:
         color = color.upper()
         self.amounts[color] = self.amounts.get(color, 0) + n
 
+    def add_restricted(self, color: str, n: int, restriction: str) -> None:
+        if not restriction:
+            self.add(color, n)
+            return
+        cols = self.restricted.setdefault(restriction, {})
+        cols[color.upper()] = cols.get(color.upper(), 0) + n
+
+    def restricted_total(self) -> int:
+        return sum(n for cols in self.restricted.values() for n in cols.values())
+
+    def available(self, color: str, *, allow: frozenset = frozenset()) -> int:
+        """Mana of `color` spendable for a payment with these purposes: unrestricted
+        plus restricted mana whose restriction permits one of `allow`."""
+        codes = usable_restrictions(allow)
+        return self.amounts.get(color, 0) + sum(
+            cols.get(color, 0) for code, cols in self.restricted.items() if code in codes)
+
     def total(self) -> int:
-        return sum(self.amounts.values())
+        return sum(self.amounts.values()) + self.restricted_total()
 
     def clear(self) -> None:
         for k in list(self.amounts):
             self.amounts[k] = 0
+        self.restricted.clear()
 
-    def can_pay(self, cost: ManaCost) -> bool:
-        return self._pay(cost, commit=False)
+    def can_pay(self, cost: ManaCost, *, allow: frozenset = frozenset()) -> bool:
+        return self._pay(cost, commit=False, allow=allow)
 
-    def pay(self, cost: ManaCost) -> bool:
-        """Spend the cost if possible; returns True on success."""
-        return self._pay(cost, commit=True)
+    def pay(self, cost: ManaCost, *, allow: frozenset = frozenset()) -> bool:
+        """Spend the cost if possible; returns True on success. `allow` is the set
+        of payment purposes this spend is for (e.g. {"artifact_spell"}); restricted
+        mana whose restriction permits one of those purposes may be used."""
+        return self._pay(cost, commit=True, allow=allow)
 
-    def _pay(self, cost: ManaCost, *, commit: bool) -> bool:
-        avail = dict(self.amounts)
-        # 1) Satisfy coloured pips from their exact colour.
+    def _pay(self, cost: ManaCost, *, commit: bool, allow: frozenset = frozenset()) -> bool:
+        codes = usable_restrictions(allow)
+        unrestricted = dict(self.amounts)
+        # Working copies of the restricted chunks we may draw from this payment.
+        usable = {code: dict(cols) for code, cols in self.restricted.items() if code in codes}
+
+        def avail(color: str) -> int:
+            return unrestricted.get(color, 0) + sum(c.get(color, 0) for c in usable.values())
+
+        def take(color: str, n: int) -> None:
+            # Spend restricted (allowed) mana of this colour first, then unrestricted.
+            for cols in usable.values():
+                if n <= 0:
+                    break
+                t = min(cols.get(color, 0), n)
+                if t:
+                    cols[color] -= t
+                    n -= t
+            if n > 0:
+                unrestricted[color] = unrestricted.get(color, 0) - n
+
         for color, need in cost.pips:
-            if avail.get(color, 0) < need:
+            if avail(color) < need:
                 return False
-            avail[color] -= need
-        # 2) Satisfy generic from any remaining mana (spend colourless first).
+            take(color, need)
         remaining_generic = cost.generic
         for color in (COLORLESS, *COLORS):
             if remaining_generic <= 0:
                 break
-            take = min(avail.get(color, 0), remaining_generic)
-            avail[color] -= take
-            remaining_generic -= take
+            t = min(avail(color), remaining_generic)
+            take(color, t)
+            remaining_generic -= t
         if remaining_generic > 0:
             return False
         if commit:
-            self.amounts = avail
+            self.amounts = unrestricted
+            for code in codes:
+                if code in self.restricted:
+                    self.restricted[code] = {c: n for c, n in usable[code].items() if n}
+                    if not self.restricted[code]:
+                        del self.restricted[code]
         return True

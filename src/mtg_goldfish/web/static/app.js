@@ -37,6 +37,9 @@ function newFixedConfig() {
     library: [], // explicit top of the library (top first); rest random
     life: 20, opponent_life: 20, storm_count: 0, energy: 0, turn: 1, phase: "precombat_main",
     mana_pool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+    // Restricted mana in the pool: {restriction_code: {colour: n}} (Mishra's
+    // Workshop / Powerstone artifact-only mana).
+    mana_restricted: {},
     // Commander tax: times each commander has already been cast (tax = {2}×count).
     commander_cast: {},
     // Commanders removed from every area (shuffled into the library at game start).
@@ -1990,6 +1993,7 @@ function fcFrame() {
     turn: fc.turn, phase: fc.phase, desc: "",
     life: fc.life, opponent_life: fc.opponent_life, library,
     counters: { storm: fc.storm_count }, mana_pool: fc.mana_pool, energy: fc.energy || 0,
+    mana_restricted: fc.mana_restricted || {},
   };
 }
 
@@ -2006,6 +2010,15 @@ function fcSet(field, value) {
 function fcSetMana(sym, value) {
   value = parseInt(value, 10);
   state.fixedConfig.mana_pool[sym] = Math.max(0, isNaN(value) ? 0 : value);
+  renderConfigBuilder();
+}
+// Set restricted mana of `code` (e.g. "A") and colour `sym` in the pool.
+function fcSetRestrictedMana(code, sym, value) {
+  value = Math.max(0, parseInt(value, 10) || 0);
+  const r = state.fixedConfig.mana_restricted || (state.fixedConfig.mana_restricted = {});
+  const cols = r[code] || (r[code] = {});
+  if (value) cols[sym] = value; else delete cols[sym];
+  if (!Object.keys(cols).length) delete r[code];
   renderConfigBuilder();
 }
 function fcSetTurn(value) {
@@ -2973,6 +2986,8 @@ function renderConfigBuilder() {
       onPickPhase: fcSetPhase,
       onSet: fcSet,
       onSetMana: fcSetMana,
+      onSetRestrictedMana: fcSetRestrictedMana,
+      manaRestrictions: (state.deckFlags && state.deckFlags.mana_restrictions) || [],
       commanderTax,
       onSetTax: fcSetTax,
     })));
@@ -4236,10 +4251,29 @@ function pile(items, edit = {}) {
   return wrap;
 }
 
-function poolPips(pool) {
+// Restricted-mana restriction codes → tooltip (mirror engine.mana.RESTRICTION_LABELS).
+const RESTRICTION_LABELS = {
+  A: "Can be spent only to cast artifact spells",
+};
+
+// A restricted-mana symbol: the standard mana symbol with a small badge carrying
+// the restriction's letter; hovering the badge details the restriction.
+function restrictedManaPip(color, code) {
+  const wrap = el("span", { className: "pip-restricted" });
+  wrap.append(el("img", { className: "ms", alt: color, loading: "lazy",
+    src: `https://svgs.scryfall.io/card-symbols/${color}.svg` }));
+  wrap.append(el("span", { className: "mana-restrict-badge", textContent: code,
+    title: RESTRICTION_LABELS[code] || `Restricted mana (${code})` }));
+  return wrap;
+}
+
+function poolPips(pool, restricted) {
   const span = el("span", { className: "pool-pips" });
   for (const [c, n] of Object.entries(pool || {}))
     for (let k = 0; k < n; k++) span.append(el("span", { className: "pip " + c, textContent: c }));
+  for (const [code, cols] of Object.entries(restricted || {}))
+    for (const [c, n] of Object.entries(cols || {}))
+      for (let k = 0; k < n; k++) span.append(restrictedManaPip(c, code));
   if (!span.childNodes.length) span.append(el("span", { className: "muted", textContent: "—" }));
   return span;
 }
@@ -4376,9 +4410,20 @@ function renderBoard(f, edit = {}) {
         el("img", { className: "ms", alt: sym, loading: "lazy", src: `https://svgs.scryfall.io/card-symbols/${sym}.svg` }),
         numField((f.mana_pool || {})[sym] || 0, (v) => edit.onSetMana(sym, v), 0)));
     });
+    // Restricted mana: one colourless field per restriction the deck can produce
+    // (Mishra's Workshop / Powerstone → "A"). The symbol carries the letter badge.
+    (edit.manaRestrictions || []).forEach((code) => {
+      const cur = ((f.mana_restricted || {})[code] || {}).C || 0;
+      const sym = el("span", { className: "pip-restricted" },
+        el("img", { className: "ms", alt: "C", loading: "lazy", src: "https://svgs.scryfall.io/card-symbols/C.svg" }),
+        el("span", { className: "mana-restrict-badge", textContent: code,
+          title: RESTRICTION_LABELS[code] || `Restricted mana (${code})` }));
+      wrap.append(el("span", { className: "fc-mana-edit-cell" }, sym,
+        numField(cur, (v) => edit.onSetRestrictedMana(code, "C", v), 0)));
+    });
     pools.append(wrap);
   } else {
-    pools.append(el("span", {}, el("span", { className: "k", textContent: "pool " }), poolPips(f.mana_pool)));
+    pools.append(el("span", {}, el("span", { className: "k", textContent: "pool " }), poolPips(f.mana_pool, f.mana_restricted)));
   }
   // A third header row for other pool-like quantities (energy, ...), shown only
   // when the deck uses them.

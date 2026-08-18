@@ -108,6 +108,9 @@ class FixedConfig(BaseModel):
     opponent_life: int = 20
     # Mana currently in the pool, by colour symbol: W/U/B/R/G/C.
     mana_pool: dict[str, int] = Field(default_factory=dict)
+    # Restricted mana in the pool, by restriction code then colour, e.g.
+    # {"A": {"C": 3}} = 3 artifact-only colourless (Mishra's Workshop / Powerstone).
+    mana_restricted: dict[str, dict[str, int]] = Field(default_factory=dict)
     storm_count: int = 0
     energy: int = 0
     turn: int = 1

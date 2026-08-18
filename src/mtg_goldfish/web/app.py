@@ -245,6 +245,7 @@ def deck_flags(deck: Deck) -> dict:
     import re as _re
 
     storm = energy = False
+    restrictions: set[str] = set()
     for e in deck.entries:
         text = e.card.oracle_text or ""
         # The Storm keyword appears as its own (reminder-texted) line; a plain
@@ -254,9 +255,11 @@ def deck_flags(deck: Deck) -> dict:
             storm = True
         if not energy and "{E}" in text:
             energy = True
-        if storm and energy:
-            break
-    return {"storm": storm, "energy": energy}
+        # Restricted-mana producers (Mishra's Workshop / Powerstone) declare their
+        # restriction codes on the card impl — used to offer editor fields.
+        restrictions |= set(build_card(e.card).produced_mana_restrictions)
+    return {"storm": storm, "energy": energy,
+            "mana_restrictions": sorted(restrictions)}
 
 
 _TOKEN_LIST_CACHE: dict[tuple, list[dict]] = {}

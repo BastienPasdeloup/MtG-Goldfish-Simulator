@@ -1985,3 +1985,37 @@ def test_tetravus_enters_as_flier_and_splits():
     assert perm.counters.get("+1/+1") == 3 and state.effective_power(perm) == 4
     branches = perm.impl.on_phase(state, perm, __import__("mtg_goldfish.engine.phases", fromlist=["Phase"]).Phase.UPKEEP)
     assert branches and len(branches) >= 2  # nothing + splits
+
+
+def test_mishras_workshop_mana_is_artifact_only():
+    from mtg_goldfish.engine.actions import can_afford
+    from mtg_goldfish.engine.mana import ManaCost
+    state = _state([])
+    state.put_on_battlefield(card("Mishra's Workshop"))
+    cost = ManaCost(generic=3)
+    assert can_afford(state, cost, allow=frozenset({"artifact_spell"}))  # artifact spell OK
+    assert not can_afford(state, cost)                                    # nonartifact / ability: no
+
+
+def test_restricted_pool_spent_first_and_only_when_allowed():
+    from mtg_goldfish.engine.mana import ManaPool, ManaCost
+    p = ManaPool()
+    p.add_restricted("C", 3, "A")
+    p.add("C", 2)  # 2 unrestricted
+    assert p.total() == 5
+    allow = frozenset({"artifact_spell"})
+    assert not p.can_pay(ManaCost(generic=4))              # only 2 unrestricted usable
+    assert p.pay(ManaCost(generic=4), allow=allow)          # 3 restricted + 1 unrestricted
+    assert p.restricted_total() == 0 and p.amounts.get("C") == 1  # restricted spent first
+
+
+def test_fixed_config_restricted_mana_applied():
+    from mtg_goldfish.engine.game_state import new_game_from_deck
+    from mtg_goldfish.engine.simulator import _build_fixed_variant
+    from mtg_goldfish.engine.mana import ManaCost
+    base = new_game_from_deck(Deck(name="t", format_id="legacy", entries=[
+        DeckEntry(quantity=1, board=DeckBoard.MAINBOARD, card=card("Island"))]))
+    v = _build_fixed_variant(base, {"mana_restricted": {"A": {"C": 3}}}, seed=1)
+    assert v.mana_pool.restricted_total() == 3
+    assert v.mana_pool.can_pay(ManaCost(generic=3), allow=frozenset({"artifact_spell"}))
+    assert not v.mana_pool.can_pay(ManaCost(generic=3))

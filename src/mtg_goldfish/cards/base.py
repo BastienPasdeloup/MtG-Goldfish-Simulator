@@ -162,6 +162,10 @@ class Card:
     #: "fires every phase" behaviour — see phase_stack_items). Cards that must
     #: react to several phases leave this None and gate inside on_phase.
     trigger_phase: ClassVar = None
+    #: Restriction codes for the RESTRICTED mana this card can produce (Mishra's
+    #: Workshop / a Powerstone token: {"A"}). Lets the fixed-config editor offer a
+    #: field to preset that mana. "" restrictions (unrestricted) are not listed.
+    produced_mana_restrictions: ClassVar[frozenset] = frozenset()
 
     def __init__(self, data: CardData) -> None:
         self.data = data

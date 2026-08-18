@@ -78,12 +78,18 @@ def plan_payment(
     cost: ManaCost,
     sources: list[tuple[Permanent, ManaAbility]],
     base_pool: ManaPool,
+    *,
+    allow: frozenset = frozenset(),
 ) -> list[tuple[int, str]] | None:
     """Decide which sources to tap (and for which colour) to pay `cost`.
 
     Returns a list of (source_index, colour) or None if unaffordable. Greedy:
     cover coloured pips with the least-flexible, lowest-life-cost sources
-    first, then top up generic. At most one ability per permanent."""
+    first, then top up generic. At most one ability per permanent. `allow` is the
+    payment-purpose set: a restricted source (Mishra's Workshop) is usable only if
+    its restriction permits one of those purposes."""
+    from .mana import usable_restrictions
+    codes = usable_restrictions(allow)
     pool = base_pool.copy()
     used_perms: set[int] = set()
     plan: list[tuple[int, str]] = []
@@ -91,21 +97,23 @@ def plan_payment(
     def candidates(pred) -> list[int]:
         return [
             i for i, (perm, ab) in enumerate(sources)
-            if perm.uid not in used_perms and pred(ab)
+            if perm.uid not in used_perms
+            and (not ab.restriction or ab.restriction in codes)
+            and pred(ab)
         ]
 
     for color, need in cost.pip_map.items():
-        while pool.amounts.get(color, 0) < need:
+        while pool.available(color, allow=allow) < need:
             cands = candidates(lambda ab: color in ab.choices)
             if not cands:
                 return None
             cands.sort(key=lambda i: (sources[i][1].life_cost, len(sources[i][1].choices)))
             i = cands[0]
             used_perms.add(sources[i][0].uid)
-            pool.add(color, sources[i][1].amount)
+            pool.add_restricted(color, sources[i][1].amount, sources[i][1].restriction)
             plan.append((i, color))
 
-    while not pool.can_pay(cost):
+    while not pool.can_pay(cost, allow=allow):
         cands = candidates(lambda ab: True)
         if not cands:
             return None
@@ -119,7 +127,7 @@ def plan_payment(
         used_perms.add(sources[i][0].uid)
         ability = sources[i][1]
         color = "C" if "C" in ability.choices else ability.choices[0]
-        pool.add(color, ability.amount)
+        pool.add_restricted(color, ability.amount, ability.restriction)
         plan.append((i, color))
 
     return plan
@@ -127,24 +135,29 @@ def plan_payment(
 
 def _pool_str(pool: ManaPool) -> str:
     parts = [f"{n}{c}" for c, n in pool.amounts.items() if n]
+    parts += [f"{n}{c}@{code}" for code, cols in pool.restricted.items()
+              for c, n in cols.items() if n]
     return "{" + " ".join(parts) + "}" if parts else "{empty}"
 
 
 def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0,
-             exclude_uids: set[int] | None = None) -> bool:
+             exclude_uids: set[int] | None = None,
+             allow: frozenset = frozenset()) -> bool:
     """Tap sources and spend `cost` (plus optional life). False if unaffordable.
-    `exclude_uids` omits permanents from the payment (see available_mana_sources)."""
+    `exclude_uids` omits permanents from the payment (see available_mana_sources).
+    `allow` is the payment-purpose set (e.g. {"artifact_spell"}) enabling restricted
+    mana (Mishra's Workshop) — empty means only unrestricted mana may be used."""
     if extra_life and state.life <= extra_life:
         return False
     sources = available_mana_sources(state, exclude_uids)
-    plan = plan_payment(cost, sources, state.mana_pool)
+    plan = plan_payment(cost, sources, state.mana_pool, allow=allow)
     if plan is None:
         return False
     taps: list[str] = []
     for idx, color in plan:
         perm, ability = sources[idx]
         perm.tapped = True
-        state.mana_pool.add(color, ability.amount)
+        state.mana_pool.add_restricted(color, ability.amount, ability.restriction)
         if ability.life_cost:
             state.life -= ability.life_cost
         perm.impl.on_tap_for_mana(state, perm, color)  # e.g. pain-land damage
@@ -157,18 +170,19 @@ def pay_cost(state: GameState, cost: ManaCost, extra_life: int = 0,
         taps.append(f"{perm.name}→{color}")
     if taps:
         state.emit(f"tap for mana: {', '.join(taps)}  pool={_pool_str(state.mana_pool)}")
-    ok = state.mana_pool.pay(cost)
+    ok = state.mana_pool.pay(cost, allow=allow)
     if extra_life:
         state.life -= extra_life
     return ok
 
 
 def can_afford(state: GameState, cost: ManaCost, extra_life: int = 0,
-               exclude_uids: set[int] | None = None) -> bool:
+               exclude_uids: set[int] | None = None,
+               allow: frozenset = frozenset()) -> bool:
     if extra_life and state.life <= extra_life:
         return False
     return plan_payment(
-        cost, available_mana_sources(state, exclude_uids), state.mana_pool
+        cost, available_mana_sources(state, exclude_uids), state.mana_pool, allow=allow
     ) is not None
 
 
@@ -316,9 +330,16 @@ def begin_cast(
     generic part (Kappa Cannoneer, Ironheart). `target` names what the spell
     targets, so the replay's stack shows "→ target"."""
     zone = state.hand if zone is None else zone
-    pay = (pay_cost_with_improvise if improvise
-           else pay_cost_with_convoke if convoke else pay_cost)
-    if not pay(state, cost, extra_life=extra_life):
+    # Casting an ARTIFACT spell may use artifact-only restricted mana (Mishra's
+    # Workshop, a Powerstone token); other spells and all abilities may not.
+    allow = frozenset({"artifact_spell"}) if getattr(card, "is_artifact", False) else frozenset()
+    if improvise:
+        ok = pay_cost_with_improvise(state, cost, extra_life=extra_life)
+    elif convoke:
+        ok = pay_cost_with_convoke(state, cost, extra_life=extra_life)
+    else:
+        ok = pay_cost(state, cost, extra_life=extra_life, allow=allow)
+    if not ok:
         return False
     zone.remove(card)
     state.stack.append(card)
