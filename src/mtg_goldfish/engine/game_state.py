@@ -882,6 +882,8 @@ class GameState:
     def queue_phase_triggers(self, phase) -> None:
         abilities: list[StackAbility] = []
         for perm in list(self.battlefield):
+            if perm.becomes and perm.becomes.get("lose_abilities"):
+                continue  # Titania's Song: no triggered abilities either
             abilities.extend(perm.impl.phase_stack_items(self, perm, phase))
         self.push_triggered_abilities(abilities)
 

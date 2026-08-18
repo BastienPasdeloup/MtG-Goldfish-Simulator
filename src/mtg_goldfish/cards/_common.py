@@ -38,12 +38,17 @@ def mv(card: CardData) -> int:
     return int(card.cmc)
 
 
-def artifact_ability_cost(state: "GameState", cost: ManaCost) -> ManaCost:
+def artifact_ability_cost(state: "GameState", cost: ManaCost,
+                          perm: "Permanent | None" = None) -> ManaCost:
     """Apply 'activated abilities of artifacts you control cost {N} less to
-    activate' (Forensic Gadgeteer), reducing the GENERIC part but never taking
-    the total below one mana. Artifact activated abilities compute their mana
-    cost through this so the reduction is honoured wherever it applies."""
+    activate' (Forensic Gadgeteer — global) PLUS, when `perm` is the artifact whose
+    ability this is, any per-host discount from Auras enchanting it (Power Artifact:
+    {2} off, never below one total mana). Artifact activated abilities compute their
+    mana cost through this so the reduction is honoured wherever it applies."""
     disc = sum(p.impl.artifact_ability_discount for p in state.battlefield)
+    if perm is not None:
+        disc += sum(a.impl.enchanted_ability_discount(state, a, perm)
+                    for a in state.battlefield if a.attached_to == perm.uid)
     if disc <= 0:
         return cost
     total = cost.generic + sum(n for _, n in cost.pips)

@@ -35,7 +35,7 @@ class InventorsFair(Card):
         from ..engine.actions import can_afford, pay_cost
         from ._common import artifact_ability_cost
 
-        cost = artifact_ability_cost(state, ManaCost(generic=4))
+        cost = artifact_ability_cost(state, ManaCost(generic=4), perm)
         if perm.tapped or self._artifact_count(state) < 3 or not can_afford(state, cost):
             return []
 

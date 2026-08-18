@@ -2019,3 +2019,41 @@ def test_fixed_config_restricted_mana_applied():
     assert v.mana_pool.restricted_total() == 3
     assert v.mana_pool.can_pay(ManaCost(generic=3), allow=frozenset({"artifact_spell"}))
     assert not v.mana_pool.can_pay(ManaCost(generic=3))
+
+
+def test_power_artifact_discounts_enchanted_artifact_ability():
+    from mtg_goldfish.cards._common import artifact_ability_cost
+    from mtg_goldfish.engine.mana import ManaCost
+    state = _state([])
+    basalt = state.put_on_battlefield(card("Basalt Monolith"))
+    aura = state.put_on_battlefield(card("Power Artifact"))
+    aura.attached_to = basalt.uid
+    assert artifact_ability_cost(state, ManaCost(generic=3), basalt).generic == 1  # {3} -> {1}
+    aura.attached_to = None
+    assert artifact_ability_cost(state, ManaCost(generic=3), basalt).generic == 3
+
+
+def test_titanias_song_animates_and_strips_abilities():
+    from mtg_goldfish.engine.actions import available_mana_sources
+    state = _state([])
+    state.put_on_battlefield(card("Sol Ring"))  # mv 1, taps for {C}{C}
+    assert any(p.name == "Sol Ring" for p, _ in available_mana_sources(state))
+    state.put_on_battlefield(card("Titania's Song"))
+    sol = state.permanents_named("Sol Ring")[0]
+    assert sol.is_creature_now and state.effective_power(sol) == 1 and state.effective_toughness(sol) == 1
+    assert not any(p.name == "Sol Ring" for p, _ in available_mana_sources(state))  # abilities gone
+
+
+def test_tawnos_coffin_blinks_a_creature():
+    state = _state([])
+    coffin = state.put_on_battlefield(card("Tawnos's Coffin"))
+    state.put_on_battlefield(card("Yotian Soldier"))
+    state.mana_pool.add("C", 5)
+    act = next(a for a in legal_actions(state) if a.label.startswith("Tawnos's Coffin:"))
+    act.apply(state)
+    assert not state.has_permanent_named("Yotian Soldier")            # exiled
+    c = state.permanents_named("Tawnos's Coffin")[0]
+    assert c.tapped and len(c.exiled_with) == 1
+    c.impl.on_leave(state, c)                                         # returns it tapped
+    got = state.permanents_named("Yotian Soldier")
+    assert got and got[0].tapped

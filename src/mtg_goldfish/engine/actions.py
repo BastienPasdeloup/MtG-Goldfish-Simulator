@@ -41,6 +41,9 @@ def available_mana_sources(
     for perm in state.battlefield:
         if perm.tapped or perm.uid in exclude_uids:
             continue
+        # Titania's Song etc.: an artifact animated to lose all abilities makes no mana.
+        if perm.becomes and perm.becomes.get("lose_abilities"):
+            continue
         if perm.is_creature_now and perm.summoning_sick and not state.has_keyword(perm, "Haste"):
             continue
         # Auras like Wild Growth add mana whenever the host is tapped for mana.
@@ -720,6 +723,8 @@ def legal_actions(state: GameState, *, sorcery_speed_ok: bool = True) -> list[Ac
 
     # --- activated abilities on the battlefield (impls check tapped/sick) ---
     for perm in list(state.battlefield):
+        if perm.becomes and perm.becomes.get("lose_abilities"):
+            continue  # Titania's Song: no activated abilities
         actions.extend(perm.impl.battlefield_actions(state, perm))
 
     # --- free casts ("cast without paying its mana cost", World War Hulk I) ---

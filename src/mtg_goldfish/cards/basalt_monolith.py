@@ -28,7 +28,7 @@ class BasaltMonolith(Card):
 
         if not perm.tapped:
             return []  # "{3}: Untap" is only meaningful while it is tapped
-        cost = artifact_ability_cost(state, ManaCost(generic=3))
+        cost = artifact_ability_cost(state, ManaCost(generic=3), perm)
         # It is tapped, so it can't help pay its own untap cost anyway.
         if not can_afford(state, cost):
             return []

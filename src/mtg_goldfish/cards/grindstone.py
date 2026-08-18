@@ -20,7 +20,7 @@ class Grindstone(Card):
     def battlefield_actions(self, state, perm):
         from ..engine.actions import can_afford, pay_cost
 
-        cost = artifact_ability_cost(state, ManaCost(generic=3))
+        cost = artifact_ability_cost(state, ManaCost(generic=3), perm)
         if perm.tapped or not can_afford(state, cost):
             return []
 

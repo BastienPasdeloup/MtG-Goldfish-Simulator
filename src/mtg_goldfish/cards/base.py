@@ -395,6 +395,13 @@ class Card:
         `GameState.damage_self(by_artifact=True)`."""
         return False
 
+    def enchanted_ability_discount(self, state: "GameState", aura: "Permanent",
+                                   host: "Permanent") -> int:
+        """How much {generic} THIS Aura shaves off the activated-ability costs of the
+        artifact it enchants (Power Artifact: 2, never below one total mana). Summed
+        per-host by `_common.artifact_ability_cost(state, cost, perm=host)`."""
+        return 0
+
     def prevents_life_loss_defeat(self, state: "GameState", perm: "Permanent") -> bool:
         """True while this permanent stops you losing the game for having 0 or less
         life (Lich: "You don't lose the game for having 0 or less life"). Read by

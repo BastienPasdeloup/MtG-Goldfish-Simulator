@@ -47,7 +47,7 @@ class EngineeredExplosives(Card):
     def battlefield_actions(self, state, perm):
         from ..engine.actions import can_afford, pay_cost
 
-        cost = artifact_ability_cost(state, ManaCost(generic=2))
+        cost = artifact_ability_cost(state, ManaCost(generic=2), perm)
         if not can_afford(state, cost):
             return []
 
